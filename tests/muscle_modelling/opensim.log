@@ -1219,3 +1219,138 @@
 [2025-05-06 16:38:10.842] [warning] Coordinate.setValue:  coordinate wrist_dev_r is locked. Unable to change its value.
 [2025-05-06 16:38:11.505] [warning] Coordinate.setValue:  coordinate wrist_flex_l is locked. Unable to change its value.
 [2025-05-06 16:38:11.511] [warning] Coordinate.setValue:  coordinate wrist_dev_l is locked. Unable to change its value.
+[2025-05-06 18:34:33.742] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:35:43.300] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:36:21.943] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:36:57.289] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:38:02.099] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:38:50.260] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:39:04.054] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:39:38.407] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:40:15.095] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:41:08.734] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:41:24.483] [info] 'simple_muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:43:10.210] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:43:18.700] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:43:40.578] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:43:51.107] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:44:37.445] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 18:44:51.472] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:02:27.473] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:02:46.413] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:02:55.159] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:03:14.435] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:03:25.232] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:03:32.822] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:03:45.661] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:04:28.317] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:04:40.936] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:04:57.636] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:05:23.417] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:05:41.380] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:06:01.939] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:06:16.705] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:10:52.788] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:11:06.093] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:21:05.511] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:21:16.032] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:21:23.555] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:22:24.222] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:24:43.557] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:25:05.396] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:25:35.086] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:25:54.588] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:28:23.609] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:28:44.887] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:29:35.056] [info] 'muscle' Parameter update for the damped-model: ActiveForceLengthCurve minimum value was 0.1 but is now 0.0.
+[2025-05-06 19:32:02.125] [info] Updating Model file from 40000 to latest format...
+[2025-05-06 19:32:02.170] [info] Loaded model 009 from file c:\Git\msk_modelling_python\tests\muscle_modelling\osim_model.osim
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\r_pelvis.vtp'.
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\l_pelvis.vtp'.
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\sacrum.vtp'.
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\r_femur.vtp'.
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\r_tibia.vtp'.
+[2025-05-06 19:32:02.171] [warning] Couldn't find file 'Raja\r_fibula.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\r_patella.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\r_talus.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\r_foot.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\r_bofoot.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\l_femur.vtp'.
+[2025-05-06 19:32:02.172] [warning] Couldn't find file 'Raja\l_tibia.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\l_fibula.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\l_patella.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\l_talus.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\l_foot.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\l_bofoot.vtp'.
+[2025-05-06 19:32:02.173] [warning] Couldn't find file 'Raja\hat_spine.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\hat_jaw.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\hat_skull.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\hat_ribs_scap.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\humerus_rv.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\ulna_rv.vtp'.
+[2025-05-06 19:32:02.174] [warning] Couldn't find file 'Raja\radius_rv.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\pisiform_rvs.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\lunate_rvs.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\scaphoid_rvs.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\triquetrum_rvs.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\hamate_rvs.vtp'.
+[2025-05-06 19:32:02.175] [warning] Couldn't find file 'Raja\capitate_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\trapezoid_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\trapezium_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\metacarpal2_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\index_proximal_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\index_medial_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'Raja\index_distal_rvs.vtp'.
+[2025-05-06 19:32:02.176] [warning] Couldn't find file 'metacarpal3_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'Raja\middle_proximal_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'middle_medial_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'Raja\middle_distal_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'Raja\metacarpal4_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'Raja\ring_proximal_rvs.vtp'.
+[2025-05-06 19:32:02.177] [warning] Couldn't find file 'Raja\ring_medial_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\ring_distal_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\metacarpal5_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\little_proximal_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\little_medial_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\little_distal_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\metacarpal1_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\thumb_proximal_rvs.vtp'.
+[2025-05-06 19:32:02.178] [warning] Couldn't find file 'Raja\thumb_distal_rvs.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\humerus_lv.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\ulna_lv.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\radius_lv.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\pisiform_lvs.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\lunate_lvs.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\scaphoid_lvs.vtp'.
+[2025-05-06 19:32:02.179] [warning] Couldn't find file 'Raja\triquetrum_lvs.vtp'.
+[2025-05-06 19:32:02.180] [warning] Couldn't find file 'Raja\hamate_lvs.vtp'.
+[2025-05-06 19:32:02.180] [warning] Couldn't find file 'Raja\capitate_lvs.vtp'.
+[2025-05-06 19:32:02.180] [warning] Couldn't find file 'Raja\trapezoid_lvs.vtp'.
+[2025-05-06 19:32:02.180] [warning] Couldn't find file 'Raja\trapezium_lvs.vtp'.
+[2025-05-06 19:32:02.180] [warning] Couldn't find file 'Raja\metacarpal2_lvs.vtp'.
+[2025-05-06 19:32:02.181] [warning] Couldn't find file 'Raja\index_proximal_lvs.vtp'.
+[2025-05-06 19:32:02.181] [warning] Couldn't find file 'Raja\index_medial_lvs.vtp'.
+[2025-05-06 19:32:02.181] [warning] Couldn't find file 'Raja\index_distal_lvs.vtp'.
+[2025-05-06 19:32:02.181] [warning] Couldn't find file 'Raja\metacarpal3_lvs.vtp'.
+[2025-05-06 19:32:02.182] [warning] Couldn't find file 'Raja\middle_proximal_lvs.vtp'.
+[2025-05-06 19:32:02.182] [warning] Couldn't find file 'Raja\middle_medial_lvs.vtp'.
+[2025-05-06 19:32:02.182] [warning] Couldn't find file 'Raja\middle_distal_lvs.vtp'.
+[2025-05-06 19:32:02.182] [warning] Couldn't find file 'Raja\metacarpal4_lvs.vtp'.
+[2025-05-06 19:32:02.182] [warning] Couldn't find file 'Raja\ring_proximal_lvs.vtp'.
+[2025-05-06 19:32:02.183] [warning] Couldn't find file 'Raja\ring_medial_lvs.vtp'.
+[2025-05-06 19:32:02.183] [warning] Couldn't find file 'Raja\ring_distal_lvs.vtp'.
+[2025-05-06 19:32:02.183] [warning] Couldn't find file 'Raja\metacarpal5_lvs.vtp'.
+[2025-05-06 19:32:02.183] [warning] Couldn't find file 'Raja\little_proximal_lvs.vtp'.
+[2025-05-06 19:32:02.183] [warning] Couldn't find file 'Raja\little_medial_lvs.vtp'.
+[2025-05-06 19:32:02.184] [warning] Couldn't find file 'Raja\little_distal_lvs.vtp'.
+[2025-05-06 19:32:02.184] [warning] Couldn't find file 'Raja\metacarpal1_lvs.vtp'.
+[2025-05-06 19:32:02.184] [warning] Couldn't find file 'Raja\thumb_proximal_lvs.vtp'.
+[2025-05-06 19:32:02.184] [warning] Couldn't find file 'Raja\thumb_distal_lvs.vtp'.
+[2025-05-06 19:32:02.711] [warning] Coordinate.setValue:  coordinate subtalar_angle_r is locked. Unable to change its value.
+[2025-05-06 19:32:02.713] [warning] Coordinate.setValue:  coordinate mtp_angle_r is locked. Unable to change its value.
+[2025-05-06 19:32:02.991] [warning] Coordinate.setValue:  coordinate subtalar_angle_l is locked. Unable to change its value.
+[2025-05-06 19:32:02.993] [warning] Coordinate.setValue:  coordinate mtp_angle_l is locked. Unable to change its value.
+[2025-05-06 19:32:03.411] [warning] Coordinate.setValue:  coordinate wrist_flex_r is locked. Unable to change its value.
+[2025-05-06 19:32:03.413] [warning] Coordinate.setValue:  coordinate wrist_dev_r is locked. Unable to change its value.
+[2025-05-06 19:32:03.650] [warning] Coordinate.setValue:  coordinate wrist_flex_l is locked. Unable to change its value.
+[2025-05-06 19:32:03.653] [warning] Coordinate.setValue:  coordinate wrist_dev_l is locked. Unable to change its value.
