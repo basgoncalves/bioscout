@@ -45,13 +45,13 @@ except:
     print('No project loaded.')
 
 SUBJECTS_PATH = os.path.join(SIMULATIONS_PATH,PROJECT["subjects"][0])
-SUBJECT = json.load(open(SETTINGS["subjects"]))
+SUBJECTS = os.listdir(SUBJECTS_PATH)[0]
     
-# Replace sujects
-breakpoint()
+    
 # save json settings
 json.dump(SETTINGS, open(SETTINGS_PATH, 'w'), indent=4)
 
+breakpoint()
 def create_subject_settings(subject_path):
     
     subject_info = json.load(open(subject_path + '/settings.json'))
