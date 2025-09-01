@@ -70,4 +70,4 @@ def run(osim_version='4.5'):
         print(f"Error changing directory: {e}")
 
 if __name__ == "__main__":
-    run()
+    run(osim_version='4.4')
