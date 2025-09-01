@@ -14,7 +14,6 @@ import matplotlib.cm as cm
 import tkinter as tk
 import customtkinter as ctk
 
-
 try:
     import opensim as osim
 except:
@@ -202,7 +201,7 @@ class Session:
 
 class Model:
     def __init__(self, model_path):
-        self.osim_object = msk.osim.Model(model_path)
+        self.osim_object = osim.Model(model_path)
         self.path = model_path
         self.xml = ET.parse(model_path)
         self.version = self.xml.getroot().get('Version') 
@@ -475,7 +474,7 @@ class osimTools:
         The model with the changed marker locations is saved as a new model.
         '''
         # Load the OpenSim model
-        model1 = msk.osim.Model(model_path1)
+        model1 = osim.Model(model_path1)
         model1_version = model1.version
         model1_xml = model1.xml
         model1 = model1.osim_object
@@ -1251,7 +1250,7 @@ class XMLTools:
                 return None
             else:
                 try:
-                    model = msk.osim.Model(osimModelFile)
+                    model = osim.Model(osimModelFile)
                     coordinate_set = model.getCoordinateSet()
                     muscles = model.getMuscles()
                 except Exception as e:
