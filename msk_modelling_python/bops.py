@@ -25,7 +25,6 @@ import math
 try:
     import opensim as osim
 except:
-    print('OpenSim not installed.')
     osim = None
 
 # define Global variables

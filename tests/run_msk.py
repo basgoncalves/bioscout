@@ -1,12 +1,6 @@
 import os
 import sys
 import subprocess
-
-
-
-
-
-
 import msk_modelling_python as msk
 msk.bops.greet()
 
@@ -19,9 +13,7 @@ SESSION = 'session1'
 TASK = 'sprint_1'
 TASK_FOLDER = msk.os.path.join(SIMULATION_DIR, SUBJECT, SESSION, TASK)
 
-Trial = msk.bops.Trial(TASK_FOLDER)
-# Trial.write_to_json()
-
+# Trial = msk.bops.Trial(TASK_FOLDER)
 # Trial.run_ik()
 
 

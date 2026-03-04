@@ -3,6 +3,9 @@
 A Python package for musculoskeletal modelling.
 
 **Author:** Basilio Goncalves, PhD, University of Vienna, 2024
+https://ufind.univie.ac.at/de/person.html?id=1004543
+https://github.com/basgoncalves
+
 
 ---
 
@@ -26,15 +29,19 @@ A Python package for musculoskeletal modelling.
 ---
 
 
-### Pip installation
+### Pip installation (works for python 3.8)
+(for later versions try [OpenSim using Conda](https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python))
 
 #### Create a Virtual Environment**
 ```sh
+cd <your project folder>
 python -m venv msk
 ```
 Note: replace 'msk' if you want a different name
 
-
+```
+.\msk\Scripts\activate
+```
 #### Install uv package manager
 ```
 pip install uv
@@ -79,9 +86,7 @@ msk.install_opensim.run()
 
 3. **Run OpenSim Setup from Installation Folder**  
     See [OpenSim Scripting in Python](https://simtk-confluence.stanford.edu:8443/display/OpenSim/Scripting+in+Python)
-     ```sh
-     .\msk\Scripts\activate
-     ```
+
      ```sh
      cd 'C:\OpenSim 4.5\sdk\Python'
      ```
@@ -128,9 +133,6 @@ msk.install_opensim.run()
      ```python
      import msk_modelling_python as msk
 
-     # test msk
-     msk.bops.Platypus().happy()
-
      # export c3d
      c3d_file_path = r'path\to\your\file.c3d'
      msk.bops.export_c3d(c3d_file_path)
@@ -174,34 +176,9 @@ This package includes a combination of other packages and custom functions to ma
      Batch Opensim Processing Software  
      Package with functions and classes to use Opensim, CEINMS, stats, and others for easier processing.
 
-3. **workflow** ⭐ NEW!
-     Workflow Pipeline System inspired by [n8n](https://github.com/n8n-io/n8n)  
-     Create and execute automated processing pipelines with a simple, intuitive API.
-     
-     ```python
-     from msk_modelling_python.workflow import Pipeline, WorkflowNode
-     
-     # Create a pipeline
-     pipeline = Pipeline("OpenSim Analysis", "IK -> ID -> SO -> JRA")
-     
-     # Add nodes
-     ik_node = WorkflowNode("IK", run_ik_function, {"model": "path/to/model.osim"})
-     id_node = WorkflowNode("ID", run_id_function)
-     
-     pipeline.add_node(ik_node, is_start=True)
-     pipeline.add_node(id_node)
-     pipeline.connect("IK", "ID")
-     
-     # Execute
-     results = pipeline.execute()
-     ```
-     
-     See [WORKFLOW_README.md](msk_modelling_python/WORKFLOW_README.md) for detailed documentation.
+3. **__main__** 
+    
 
-4. **ui**
-     Functions to create user interface.
-
-5. **osim commands**
 ---
 
 ## Examples
@@ -241,9 +218,11 @@ Goncalves, B. A. M. et al. -2023- Gait Posture 106, S68
 
 Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
+## Version updates 0.2.1
+
+- include openSim function with functions to improve opensim management
+
 ## Version updates 0.3.0
 
-- fix import bops
-- testing the inclusion of opensim (v.4.5)
-- classes should be working
+- include ceinms and other plotting utils
 

@@ -5,6 +5,7 @@ try:
     from src import *
     from utils import *
     import install_opensim
+    import workflow
     
 except:
     # import for package development
@@ -13,6 +14,7 @@ except:
     from .classes import *
     from .utils import *
     from . import install_opensim
+    from . import workflow
 
 __version__ = "0.0.20"
 

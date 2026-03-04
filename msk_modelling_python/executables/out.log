@@ -1,0 +1,228 @@
+
++-+-+-+-+-+-+
+|C|E|I|N|M|S|
++-+-+-+-+-+-+-+-+-+-+
+|C|a|l|i|b|r|a|t|e|d|
++-+-+-+-+-+-+-+-+-+-+-+-+
+|E|M|G|-|I|n|f|o|r|m|e|d|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|N|e|u|r|o|m|u|s|c|u|l|o|s|k|e|l|e|t|a|l|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|T|o|o|l|b|o|x|
++-+-+-+-+-+-+-+
+
+CEINMScalibrate version 0.21.0
+Copyright (C) Apr 29 2020
+Claudio Pizzolato, Monica Reggiani, Massimo Sartori, David Lloyd
+Software developers: Claudio Pizzolato, Monica Reggiani
+readNMSmodelCfg
+boost::filesystem::canonical: No such file or directory: "C:\Users\Bas\Downloads\ceinms-nn\calibratedSubject.xml"Reading subject file: C:\Users\Bas\Downloads\ceinms-nn\uncalibratedSubject.xml .
+Contact model  not found
+Calibration configuration
+ - Algorithm
+ -- Simulated Annealing
+ --- noEpsilon 4
+ --- NS 15
+ --- NT 5
+ --- maxNoEval 200000
+ --- rt 0.3
+ --- T 200000
+ --- epsilon 1e-05
+ - NMSmodel
+ - CalibrationSteps
+ -- Step
+ Objective Function: TorqueErrorNormalised
+ - Targets Type: Torque
+ - Targets: all 
+ - Weight: 1
+ - Exponent: 1
+ Objective Function: Penalty
+ - Targets Type: Normalised Fibre Length
+ - Targets: all 
+ - Weight: 100
+ - Exponent: 2
+ - Range: 0.6, 1.4
+ - Trials
+ -- C:\Users\Bas\Downloads\ceinms-nn\.\trials.xml
+
+
+Reading subject file: C:\Users\Bas\Downloads\ceinms-nn\uncalibratedSubject.xml .
+activeForceLength
+passiveForceLength
+forceVelocity
+tendonForceStrain
+Assuming addbrev_r pennation angle in radians: 0.114781
+Assuming addlong_r pennation angle in radians: 0.13777
+Assuming addmagDist_r pennation angle in radians: 0.194705
+Assuming addmagIsch_r pennation angle in radians: 0.168044
+Assuming addmagMid_r pennation angle in radians: 0.207308
+Assuming addmagProx_r pennation angle in radians: 0.311483
+Assuming bflh_r pennation angle in radians: 0.175918
+Assuming bfsh_r pennation angle in radians: 0.264223
+Assuming edl_r pennation angle in radians: 0.218258
+Assuming ehl_r pennation angle in radians: 0.197268
+Assuming fdl_r pennation angle in radians: 0.224839
+Assuming fhl_r pennation angle in radians: 0.258026
+Assuming gaslat_r pennation angle in radians: 0.210227
+Reading tendonForceStrain of MTU gaslat_r
+Assuming gasmed_r pennation angle in radians: 0.165682
+Reading tendonForceStrain of MTU gasmed_r
+Assuming glmax1_r pennation angle in radians: 0.354012
+Assuming glmax2_r pennation angle in radians: 0.367382
+Assuming glmax3_r pennation angle in radians: 0.382416
+Assuming glmed1_r pennation angle in radians: 0.316556
+Assuming glmed2_r pennation angle in radians: 0.316556
+Assuming glmed3_r pennation angle in radians: 0.316556
+Assuming glmin1_r pennation angle in radians: 0.174533
+Assuming glmin2_r pennation angle in radians: 0
+Assuming glmin3_r pennation angle in radians: 0.0174533
+Assuming grac_r pennation angle in radians: 0.172002
+Assuming iliacus_r pennation angle in radians: 0.279914
+Assuming perbrev_r pennation angle in radians: 0.205236
+Assuming perlong_r pennation angle in radians: 0.247952
+Assuming psoas_r pennation angle in radians: 0.215525
+Assuming recfem_r pennation angle in radians: 0.217015
+Assuming sart_r pennation angle in radians: 0.0261354
+Assuming semimem_r pennation angle in radians: 0.254561
+Assuming semiten_r pennation angle in radians: 0.241295
+Assuming soleus_r pennation angle in radians: 0.381429
+Reading tendonForceStrain of MTU soleus_r
+Assuming tfl_r pennation angle in radians: 0.0523599
+Assuming tibant_r pennation angle in radians: 0.195183
+Assuming tibpost_r pennation angle in radians: 0.226489
+Assuming vasint_r pennation angle in radians: 0.0630997
+Assuming vaslat_r pennation angle in radians: 0.252867
+Assuming vasmed_r pennation angle in radians: 0.422223
+Assuming addbrev_l pennation angle in radians: 0.114781
+Assuming addlong_l pennation angle in radians: 0.13777
+Assuming addmagDist_l pennation angle in radians: 0.194705
+Assuming addmagIsch_l pennation angle in radians: 0.168044
+Assuming addmagMid_l pennation angle in radians: 0.168044
+Assuming addmagProx_l pennation angle in radians: 0.207308
+Assuming bflh_l pennation angle in radians: 0.175918
+Assuming bfsh_l pennation angle in radians: 0.264223
+Assuming edl_l pennation angle in radians: 0.218258
+Assuming ehl_l pennation angle in radians: 0.197268
+Assuming fdl_l pennation angle in radians: 0.224839
+Assuming fhl_l pennation angle in radians: 0.258026
+Assuming gaslat_l pennation angle in radians: 0.210227
+Reading tendonForceStrain of MTU gaslat_l
+Assuming gasmed_l pennation angle in radians: 0.165682
+Reading tendonForceStrain of MTU gasmed_l
+Assuming glmax1_l pennation angle in radians: 0.354012
+Assuming glmax2_l pennation angle in radians: 0.367382
+Assuming glmax3_l pennation angle in radians: 0.382416
+Assuming glmed1_l pennation angle in radians: 0.316556
+Assuming glmed2_l pennation angle in radians: 0.316556
+Assuming glmed3_l pennation angle in radians: 0.316556
+Assuming glmin1_l pennation angle in radians: 0.174533
+Assuming glmin2_l pennation angle in radians: 0
+Assuming glmin3_l pennation angle in radians: 0.0174533
+Assuming grac_l pennation angle in radians: 0.172002
+Assuming iliacus_l pennation angle in radians: 0.279914
+Assuming perbrev_l pennation angle in radians: 0.205236
+Assuming perlong_l pennation angle in radians: 0.247952
+Assuming psoas_l pennation angle in radians: 0.215525
+Assuming recfem_l pennation angle in radians: 0.217015
+Assuming sart_l pennation angle in radians: 0.0261354
+Assuming semimem_l pennation angle in radians: 0.254561
+Assuming semiten_l pennation angle in radians: 0.241295
+Assuming soleus_l pennation angle in radians: 0.381429
+Reading tendonForceStrain of MTU soleus_l
+Assuming tfl_l pennation angle in radians: 0.0523599
+Assuming tibant_l pennation angle in radians: 0.195183
+Assuming tibpost_l pennation angle in radians: 0.226489
+Assuming vasint_l pennation angle in radians: 0.0630997
+Assuming vaslat_l pennation angle in radians: 0.252867
+Assuming vasmed_l pennation angle in radians: 0.422223
+Assuming piri_r pennation angle in radians: 0.174533
+Found OpenSim model associated to the subject: C:\Users\Bas\Downloads\ceinms-nn\009_Rajagopal2015_FAI.osim
+
+EMG: Reading emg file...C:/Users/Bas/Downloads/ceinms-nn/./emg.mot
+Muscle excitations to muscle mapping:
+addbrev_r -> addbrev_r
+addlong_r -> addlong_r
+addmagDist_r -> addmagDist_r
+addmagIsch_r -> addmagIsch_r
+addmagMid_r -> addmagMid_r
+addmagProx_r -> addmagProx_r
+bflh_r -> bflh_r
+bfsh_r -> bfsh_r
+edl_r -> edl_r
+ehl_r -> ehl_r
+fdl_r -> fdl_r
+fhl_r -> fhl_r
+gaslat_r -> gaslat_r
+gasmed_r -> gasmed_r
+glmax1_r -> glmax1_r
+glmax2_r -> glmax2_r
+glmax3_r -> glmax3_r
+glmed1_r -> glmed1_r
+glmed2_r -> glmed2_r
+glmed3_r -> glmed3_r
+glmin1_r -> glmin1_r
+glmin2_r -> glmin2_r
+glmin3_r -> glmin3_r
+grac_r -> grac_r
+iliacus_r -> iliacus_r
+perbrev_r -> perbrev_r
+perlong_r -> perlong_r
+psoas_r -> psoas_r
+recfem_r -> recfem_r
+sart_r -> sart_r
+semimem_r -> semimem_r
+semiten_r -> semiten_r
+soleus_r -> soleus_r
+tfl_r -> tfl_r
+tibant_r -> tibant_r
+tibpost_r -> tibpost_r
+vasint_r -> vasint_r
+vaslat_r -> vaslat_r
+vasmed_r -> vasmed_r
+addbrev_l -> addbrev_l
+addlong_l -> addlong_l
+addmagDist_l -> addmagDist_l
+addmagIsch_l -> addmagIsch_l
+addmagMid_l -> addmagMid_l
+addmagProx_l -> addmagProx_l
+bflh_l -> bflh_l
+bfsh_l -> bfsh_l
+edl_l -> edl_l
+ehl_l -> ehl_l
+fdl_l -> fdl_l
+fhl_l -> fhl_l
+gaslat_l -> gaslat_l
+gasmed_l -> gasmed_l
+glmax1_l -> glmax1_l
+glmax2_l -> glmax2_l
+glmax3_l -> glmax3_l
+glmed1_l -> glmed1_l
+glmed2_l -> glmed2_l
+glmed3_l -> glmed3_l
+glmin1_l -> glmin1_l
+glmin2_l -> glmin2_l
+glmin3_l -> glmin3_l
+grac_l -> grac_l
+iliacus_l -> iliacus_l
+perbrev_l -> perbrev_l
+perlong_l -> perlong_l
+psoas_l -> psoas_l
+recfem_l -> recfem_l
+sart_l -> sart_l
+semimem_l -> semimem_l
+semiten_l -> semiten_l
+soleus_l -> soleus_l
+tfl_l -> tfl_l
+tibant_l -> tibant_l
+tibpost_l -> tibpost_l
+vasint_l -> vasint_l
+vaslat_l -> vaslat_l
+vasmed_l -> vasmed_l
+piri_r -> piri_r
+
+externalTorque DONE
+
+EMG: EMG DONE
+
+LmtMa: lmtMa DONE
+Cropping trial: 2.075, 2.547

@@ -16,20 +16,16 @@ except:
     from . import install_opensim
     from . import workflow
 
-__version__ = "0.0.20"
+
+__version__ = "0.3.0"
 
 if __name__ == "__main__":
     bops.greet()
     bops.about()
+    try:
+        import opensim as osim
+        print("OpenSim is installed and imported successfully.")
+    except ImportError:
+        print("OpenSim is not installed. Attempting to install OpenSim...")
+        install_opensim.run(osim_version="4.4")
     
-    if False:
-        data = bops.read.c3d()
-        print(data)
-    
-    if False:
-        data_json = bops.read.json()
-        print(data_json)
-    
-    if False:
-        data_mot = bops.read.mot()
-        print(data_mot)
