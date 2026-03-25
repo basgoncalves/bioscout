@@ -31,6 +31,7 @@ https://github.com/basgoncalves
 
 ### Pip installation (works for python 3.8)
 (for later versions try [OpenSim using Conda](https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python))
+https://pypi.org/project/msk-modelling-python/0.0.13/ 
 
 #### Create a Virtual Environment**
 ```sh
