@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<ceinms xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:noNamespaceSchemaLocation="ceinmsSetup.xsd">
-   <subjectFile>D:\FASHIoN\ElaboratedData\611\Session_2\ceinms\uncalibrated\uncalibrated.xml</subjectFile>
-   <inputDataFile>D:\FASHIoN\ElaboratedData\611\Session_2\ceinms\trials\Walk5.xml</inputDataFile>
-   <executionFile>D:\FASHIoN\ElaboratedData\611\Session_2\ceinms\execution\Cfg\executionCfg.xml</executionFile>
-   <excitationGeneratorFile>D:\FASHIoN\ElaboratedData\611\Session_2\ceinms\excitationGenerators\excitationGenerator16to34_r.xml</excitationGeneratorFile>
-   <outputDirectory>D:\FASHIoN\ElaboratedData\611\Session_2\ceinms\execution\simulations\Walk5</outputDirectory>
-</ceinms>

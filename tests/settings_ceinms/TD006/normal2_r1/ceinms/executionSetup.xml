@@ -1,8 +1,0 @@
-<?xml version="1.0" ?>
-<ceinms>
-   <subjectFile>.\calibratedSubject.xml</subjectFile>
-   <inputDataFile>.\trial.xml</inputDataFile>
-   <executionFile>.\executionCfg.xml</executionFile>
-   <excitationGeneratorFile>.\excitationGenerator.xml</excitationGeneratorFile>
-   <outputDirectory>.\execution</outputDirectory>
-</ceinms>

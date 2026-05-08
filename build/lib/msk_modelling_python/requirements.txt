@@ -1,7 +1,0 @@
-numpy
-pandas
-scipy
-matplotlib
-twine
-pipreqs
-build

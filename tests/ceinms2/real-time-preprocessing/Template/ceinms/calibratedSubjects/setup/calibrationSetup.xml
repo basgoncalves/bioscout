@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<ceinmsCalibration>
-   <subjectFile>C:/Users/s5012409/Documents/CEINMS/FAS-321/Session_1/ceinms/uncalibrated/uncalibrated.xml</subjectFile>
-   <excitationGeneratorFile>C:/Users/s5012409/Documents/CEINMS/FAS-321/Session_1/ceinms/excitationGenerators/excitationGenerator14to34_r.xml</excitationGeneratorFile>
-   <calibrationFile>C:/Users/s5012409/Documents/CEINMS/FAS-321/Session_1/template/calibrationFileR.xml</calibrationFile>
-   <outputSubjectFile>C:/Users/s5012409/Documents/CEINMS/FAS-321/Session_1/ceinms/calibratedSubjects/setup</outputSubjectFile>
-</ceinmsCalibration>

@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<contactModel xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="contactModel.xsd">
-   <fromOpenSim>
-    <joints>hip_r knee_r ankle_r hip_l knee_l ankle_l</joints>
-   </fromOpenSim>
-</contactModel>

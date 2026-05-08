@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<ceinms xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:noNamespaceSchemaLocation="ceinmsSetup.xsd">
-   <subjectFile>..\..\calibration\calibratedSubject.xml</subjectFile>
-   <inputDataFile>..\..\trials\Run_baseline1.xml</inputDataFile>
-   <executionFile>..\Cfg\executionCfg.xml</executionFile>
-   <excitationGeneratorFile>..\..\excitationGenerators\excitationGenerator.xml</excitationGeneratorFile>
-   <outputDirectory>..\simulations\Run_baseline1</outputDirectory>
-</ceinms>
