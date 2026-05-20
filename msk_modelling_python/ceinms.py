@@ -23,8 +23,11 @@ import subprocess
 import time
 import numpy as np
 import xml.etree.ElementTree as ET
-import opensim as osim
-import utils
+try:
+    import opensim as osim
+except ImportError:
+    osim = None
+from . import utils
 import matplotlib.pyplot as plt
 import pandas as pd
 

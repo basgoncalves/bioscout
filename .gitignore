@@ -1,5 +1,6 @@
 dist/
 __pycache__/
+.vscode/
 *.pyc
 *.pyo
 *.pyd
@@ -7,3 +8,6 @@ __pycache__/
 *.so
 *.egg
 *.egg-info/
+tests/
+test_env/
+build/

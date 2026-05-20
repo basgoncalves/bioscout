@@ -2,12 +2,11 @@ import os
 import subprocess
 from xml.etree import ElementTree as ET
 import time
-import utils
-from utils import load_any_data_file
+from . import utils
+from .utils import load_any_data_file
 import matplotlib.pyplot as plt
-import openSim
-import ceinms
-import exportC3D
+from . import openSim
+from . import ceinms
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score
 

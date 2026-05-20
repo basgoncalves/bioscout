@@ -1,9 +1,9 @@
 import os
 from xml.etree import ElementTree as ET
 import time
-import utils
-import openSim
-import ceinms
+from . import utils
+from . import openSim
+from . import ceinms
 
 SUBJECTS_TO_ANALYSE =  ['Athlete_03','Athlete_03_MRI_Katya', 'Athlete_03_Lernagopal','Athlete_03_Lernagopal_optimised']  # ,'Athlete_03_MRI_Katya','Athlete_03_Lernagopal'
 SESSIONS_TO_ANALYSE = ['25_03_31'] 
