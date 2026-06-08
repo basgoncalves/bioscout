@@ -1,0 +1,3 @@
+# Application logs directory
+# Log files are created here automatically when the application runs
+# Each session creates a timestamped log file: app_YYYYMMDD_HHMMSS.log

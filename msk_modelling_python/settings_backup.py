@@ -1,0 +1,259 @@
+"""
+Unified Settings Module
+"""
+
+import os
+from pathlib import Path
+
+MODULE_PATH = Path(__file__).parent
+LOG_DIR = MODULE_PATH / "logs"
+MODELS_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Models'
+SESSION_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P012b'
+SETUP_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\setup_files'
+PROJECT_NAME = 'squatting_fais'
+
+# ============================================================================
+# LEGACY PROJECT CONFIGURATION
+# ============================================================================
+
+# Model parameters
+marker_weights = {'pelvis': 10.0, 'femur_r': 1.0, 'tibia_r': 1.0, 'talus_r': 1.0,
+                  'calcn_r': 2.0, 'toes_r': 2.0, 'femur_l': 1.0, 'tibia_l': 1.0,
+                  'talus_l': 1.0, 'calcn_l': 2.0, 'toes_l': 2.0}
+
+DOFs = ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation',
+        'hip_flexion_l', 'hip_flexion_r', 'hip_adduction_l', 'hip_adduction_r',
+        'hip_rotation_l', 'hip_rotation_r', 'knee_angle_l', 'knee_angle_r',
+        'knee_adduction_l', 'knee_adduction_r', 'ankle_angle_l', 'ankle_angle_r']
+
+EMG_muscle_mapping = {
+    # Left Leg Muscles
+    'EMG_Channels_EMG01_vast_lat_l': ['vaslat_l', 'vasmed_l'],
+    'EMG_Channels_EMG03_rect_fem_l': ['recfem_l', 'sart_l', 'tfl_l'],
+    'EMG_Channels_EMG05_bic_fem_l': ['bflh_l', 'bfsh_l', 'semimem_l', 'semiten_l'],
+    'EMG_Channels_EMG07_glut_l': ['glmax1_l', 'glmax2_l', 'glmax3_l'],
+    'EMG_Channels_EMG09_gast_med_l': [],
+
+    # Right Leg Muscles
+    'EMG_Channels_EMG02_vast_lat_r': ['vaslat_r', 'vasmed_r'],
+    'EMG_Channels_EMG04_rect_fem_r': ['recfem_r', 'sart_r', 'tfl_r'],
+    'EMG_Channels_EMG06_bic_fem_r': ['bflh_r', 'bfsh_r', 'semimem_r', 'semiten_r'],
+    'EMG_Channels_EMG08_glut_r': ['glmax1_r', 'glmax2_r', 'glmax3_r'],
+    'EMG_Channels_EMG10_gast_med_r': []
+}
+
+DOFs_moments = {}
+Muscle_Groups = {}
+JCF_Groups = {}
+plot = {}
+model_config = {}
+
+# ============================================================================
+# C3D EXPORT DEFAULTS - USED BY GUI BATCH EXPORT
+# ============================================================================
+BATCH_C3D_EMG_LABEL_DEFAULT = "Voltage"
+BATCH_C3D_EMG_LOWPASS_DEFAULT = "500"
+BATCH_C3D_EMG_HIGHPASS_DEFAULT = "10"
+BATCH_C3D_EMG_NOTCH_DEFAULT = "50"
+emg_string_list = ["EMG", "Voltage", "muscle"]
+
+# ============================================================================
+# BATCH SETTINGS
+# ============================================================================
+class BatchSettings:
+    """Unified batch processing settings for motion capture session analysis."""
+
+    # SESSION CONFIGURATION
+    session_folder = SESSION_DIR
+    setup_files_folder = SETUP_DIR
+    generic_model = os.path.join(MODELS_DIR, 'Catelli-V4.0_pyCGM_pelvis.osim')
+    markerset = os.path.join(SETUP_DIR, "markers.xml")
+    static_trial_name = 'Static_01'
+
+    # OUTPUT DIRECTORY CONFIGURATION
+    auto_create_dirs = True
+
+    # C3D EXPORT SETTINGS
+    emg_label_default = "Voltage"
+    emg_lowpass_default = "500"
+    emg_highpass_default = "10"
+    emg_notch_default = "50"
+    emg_string_list = ["EMG", "Voltage", "muscle"]
+
+    # UI Layout settings
+    c3d_file_col_weight = 3
+    c3d_settings_col_weight = 7
+    c3d_emg_channels_height = 40
+    c3d_markers_height = 40
+
+    # ANALYSIS PIPELINE - OPENSIM
+    enable_c3d_export = True
+    enable_scale_model = True
+    enable_muscle_scaling = False
+    muscle_force_factor = 3  # Scale MVIF (e.g., 1.5 = 50% increase)
+    enable_inverse_kinematics = True
+    enable_inverse_dynamics = True
+    enable_static_optimization = False
+    enable_muscle_analysis = False
+
+    # ANALYSIS PIPELINE - CEINMS (Calibration and Execution)
+    enable_ceinms_calibration = False
+    enable_ceinms_execution = False
+    calibration_trial_names = ['sprint_01', 'cmj_02']  # Trial names for calibration
+
+    # CEINMS Calibration Parameters
+    ceinms_calibration_type = 'hybrid'  # 'ceinms' or 'hybrid'
+    ceinms_learning_rate = 0.02
+    ceinms_max_iterations = 1000
+    ceinms_early_stopping_patience = 20
+    ceinms_early_stopping_min_improvement = 0.1
+    ceinms_num_synergies = 4
+    ceinms_tendon_type = 'elastic'  # 'elastic' or 'rigid'
+
+    replace_existing = False
+
+    @property
+    def results_dir(self) -> Path:
+        """Results directory (same as session folder)."""
+        return Path(self.session_folder)
+
+
+# ============================================================================
+# UI SETTINGS
+# ============================================================================
+class UISettings:
+    """User interface appearance and layout configuration."""
+
+    FONT_SIZE_SMALL = 10
+    FONT_SIZE_NORMAL = 12
+    FONT_SIZE_LARGE = 14
+    FONT_SIZE_TITLE = 16
+    FONT_FAMILY = "Segoe UI"
+
+    PRIMARY_COLOR = "#2E86AB"
+    SECONDARY_COLOR = "#A23B72"
+    ACCENT_COLOR = "#F18F01"
+    BACKGROUND_COLOR = "#F4F4F4"
+    TEXT_COLOR = "#1A1A1A"
+    ERROR_COLOR = "#C1121F"
+
+    PADDING_SMALL = 5
+    PADDING_NORMAL = 10
+    PADDING_LARGE = 15
+
+    BUTTON_HEIGHT = 35
+    FRAME_HEIGHT = 200
+    WINDOW_WIDTH = 1200
+    WINDOW_HEIGHT = 800
+
+    sidebar_weight = 1
+    content_weight = 3
+
+
+# ============================================================================
+# RECORDING SETTINGS
+# ============================================================================
+class RecordingSettings:
+    """Configuration for video recording during motion capture sessions."""
+
+    enabled = False
+    frame_rate = 30
+    resolution = "1920x1080"
+    codec = "H264"
+    bitrate = "5000k"
+
+    auto_name = True
+    output_format = "mp4"
+
+
+# ============================================================================
+# INPUTS - TRIAL-LEVEL FILE CONFIGURATION
+# ============================================================================
+class Inputs:
+    """Configuration for trial-level file names and relative paths."""
+
+    def __init__(self, parentdir=None):
+        """Initialize default trial inputs."""
+        self._parentdir = parentdir
+
+        # Model files
+        self.setup_dir = ''
+        self.model_dir = ''
+
+        # Timing
+        self.start_time = '0.0000'
+        self.end_time = '1.0000'
+
+        # Input data files
+        self.c3d = 'c3dfile.c3d'
+        self.emg = 'emg.mot'
+        self.emg_filtered_normalised = 'emg_filtered_normalised.mot'
+        self.grf_mot = 'grf.mot'
+        self.markerset = 'markers.xml'
+        self.markers = 'marker_experimental.trc'
+        self.events = 'events.csv'
+
+        # OpenSim setup files
+        self.setup_ik = 'setup_IK.xml'
+        self.setup_grf = 'GRF.xml'
+        self.setup_id = 'setup_ID.xml'
+        self.setup_ma = 'setup_MA.xml'
+        self.actuators_so = 'actuators_so.xml'
+        self.setup_so = 'setup_SO.xml'
+        self.jra_forces = 'SO_StaticOptimization_force.sto'
+        self.setup_jra = 'setup_JRA.xml'
+
+        # CEINMS files
+        self.ceinms_excitations = self.emg_filtered_normalised
+        self.ceinms_uncalibrated_model = os.path.join('..', 'subjectUncalibrated.xml')
+        self.ceinms_calibrated_model = os.path.join('..', 'subjectCalibrated.xml')
+        self.ceinms_calibration_cfg = os.path.join('..', 'calibrationCfg.xml')
+        self.ceinms_calibration_setup = os.path.join('..', 'calibrationSetup.xml')
+        self.ceinms_input_data = 'inputData.xml'
+        self.ceinms_excitation_generator = os.path.join('..', 'excitationGenerator.xml')
+        self.ceinms_optimise_setup = 'ceinms_setup_optimise.xml'
+        self.ceinms_optimise_cfg = 'ceinms_cfg_optimise.xml'
+
+        # CEINMS parameters
+        self.alpha = '10'
+        self.beta = '1'
+        self.gamma = '1000'
+
+        # CEINMS execution files
+        self.ceinms_exe_cfg = 'ceinms_cfg.xml'
+        self.ceinms_exe_setup = 'ceinms_setup.xml'
+
+        # OpenSim output files
+        self.ik = 'joint_angles.mot'
+        self.model_markers = '_ik_model_marker_locations.sto'
+        self.id = 'inverse_dynamics.sto'
+        self.ma = 'muscleAnalysis'
+        self.so_forces = 'SO_StaticOptimization_force.sto'
+        self.so_activations = 'SO_StaticOptimization_activation.sto'
+        self.jra = 'Analyse_JRA_ReactionLoads_SO.sto'
+
+        # CEINMS output directories
+        self.ceinms_calibration_dir = os.path.join('..', 'calibrationOutput')
+        self.ceinms_optimisation_dir = 'Optimised'
+        self.ceinms_exe_dir = 'Execution'
+
+        # Dynamic CEINMS output paths
+        self.ceinms_muscle_forces = os.path.join(
+            f'{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}',
+            'MuscleForces.sto'
+        )
+        self.ceinms_activations = os.path.join(
+            f'{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}',
+            'Activations.sto'
+        )
+        self.jra_ceinms = 'Analyse_JRA_ReactionLoads_CEINMS.sto'
+
+    def to_dict(self):
+        """Return all attributes as a dictionary."""
+        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+
+
+# ============================================================================
+# BACKWARD COMPATIBILITY
+# ============================================================================
+Config = BatchSettings

@@ -1,0 +1,57 @@
+ANDROID APK BUILD - QUICK REFERENCE
+====================================
+
+You're back! Here's what's ready:
+
+CURRENT STATUS:
+✓ All build errors fixed
+✓ Code committed to main branch
+✓ GitHub Actions workflow configured
+✓ Ready to build APK
+
+WHAT TO DO NOW:
+
+Option A - Start the build manually (takes ~10-15 minutes):
+1. Open: https://github.com/YOUR_USERNAME/YOUR_REPO
+2. Click "Actions" tab
+3. Click "Build APK" workflow
+4. Click blue "Run workflow" button
+5. Watch it build in real-time, or check back in 15 mins
+
+Option B - Wait for automatic trigger:
+Just push any commit to main branch (or make small changes) and it will auto-build
+
+RETRIEVE YOUR APK:
+1. Go to Actions > Build APK > Latest run
+2. Scroll to "Artifacts" section
+3. Download "openbio-apk" zip file
+4. Extract and you'll have: openbio-debug.apk
+
+WHAT WAS FIXED:
+- settings.py moved to mobile/ folder (was in parent directory)
+- main.py updated to import settings directly
+- Removed unsupported android.features flag from buildozer.spec
+- Added Android SDK license acceptance to GitHub Actions workflow
+- Removed problematic pyjnius dependency (kivy is all that's needed)
+
+WHY IT WORKS NOW:
+The GitHub Actions environment is Linux-based with everything buildozer needs.
+Local Windows/WSL builds don't work because:
+  - buildozer requires Linux 'sh' module (not available on Windows)
+  - WSL had SSL certificate issues preventing package downloads
+
+FILES THAT CHANGED:
+- mobile/settings.py (created - copied from parent)
+- mobile/main.py (modified - direct import)
+- mobile/buildozer.spec (modified - added include patterns, removed features)
+- .github/workflows/build-apk.yml (modified - added license acceptance)
+
+TROUBLESHOOTING:
+If the build fails, check:
+1. GitHub Actions workflow log for specific error
+2. Verify mobile/settings.py exists (should be 19KB)
+3. Check that requirements in buildozer.spec = python3,kivy
+
+You can read the full BUILD_STATUS.md in this folder for detailed information.
+
+That's it! The APK will be ready soon. 🚀

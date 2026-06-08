@@ -11,3 +11,7 @@ __pycache__/
 tests/
 test_env/
 build/
+example_data/
+app/
+torch_cpu.dll
+torch_cpu.zip

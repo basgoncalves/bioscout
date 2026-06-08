@@ -1,0 +1,184 @@
+================================================================================
+BATCH MODE - QUICK REFERENCE
+Powerlifting Model Analysis App
+================================================================================
+
+BASIC COMMANDS
+==============
+python __main__.py                          # Run GUI (normal mode)
+python __main__.py --batch settings.xml     # Run batch analysis
+python __main__.py -b settings.xml          # Shorthand
+python __main__.py --help                   # Show help
+
+OPTIONS
+=======
+--batch FILE, -b FILE      Run batch mode with settings file
+--verbose, -v              Enable debug logging
+--quiet, -q                Suppress output (errors only)
+--help, -h                 Show help message
+
+FILES TO USE
+============
+batch_settings_template.xml  - Complete reference with all options
+batch_settings_example.xml   - Working example (ready to use!)
+BATCH_MODE_GUIDE.md          - Full documentation
+BATCH_MODE_QUICK_REFERENCE   - This file
+
+QUICK START (Copy-Paste Ready)
+==============================
+1. Copy the example file:
+   copy batch_settings_example.xml my_analysis.xml
+
+2. Edit my_analysis.xml:
+   - Change settingsXML path to your trial_settings.xml
+   - Change markers if needed
+   - Adjust analysis parameters
+
+3. Run:
+   python __main__.py --batch my_analysis.xml
+
+4. Check results:
+   - Log: code/tests/app/logs/batch_*.log
+   - Results: <trial_directory>/
+
+MINIMAL SETTINGS FILE
+=====================
+<?xml version="1.0" encoding="utf-8"?>
+<BatchSettings>
+    <mode>analysis</mode>
+    <Session>
+        <settingsXML>C:\path\to\trial_settings.xml</settingsXML>
+    </Session>
+    <Analysis>
+        <trials>trial_name</trials>
+        <left_foot_markers>LHEE,LMT1,LMT2,LMT5</left_foot_markers>
+        <right_foot_markers>RHEE,RMT1,RMT2,RMT5</right_foot_markers>
+        <methods>SO,CEINMS</methods>
+    </Analysis>
+    <Processing>
+        <clean_markers>true</clean_markers>
+        <clean_grf>true</clean_grf>
+    </Processing>
+</BatchSettings>
+
+EXAMPLE ANALYSIS PARAMETERS
+===========================
+Method                      | Purpose
+--------------------------- | ---------
+<methods>SO</methods>        | Static Optimization only
+<methods>CEINMS</methods>    | EMG-informed only
+<methods>SO,CEINMS</methods> | Run both & compare (default)
+
+Processing
+----------
+<clean_markers>true</clean_markers>    # Remove NaN rows (RECOMMENDED)
+<clean_grf>true</clean_grf>            # Remove NaN rows
+<log_level>debug</log_level>           # debug|info|warning|error
+
+WORKFLOW
+========
+1. Export C3D file through GUI
+   → Creates trial_settings.xml
+
+2. Create batch_settings.xml
+   → Point to trial_settings.xml
+
+3. Run batch analysis
+   → python __main__.py --batch batch_settings.xml
+
+4. Check logs and results
+   → code/tests/app/logs/batch_*.log
+   → <trial_directory>/results/
+
+OUTPUT FILES
+============
+File                       | Description
+---------------------------|----------------------------------
+joint_angles.mot           | IK results (joint angles)
+id_results.sto             | Inverse Dynamics (moments)
+SO_muscle_forces.sto       | Static Optimization forces
+SO_activations.sto         | SO activations
+CEINMS_muscle_forces.sto   | CEINMS forces
+CEINMS_activations.sto     | CEINMS activations
+plots/                     | Generated figures
+report.pdf                 | Analysis summary report
+
+LOG OUTPUT
+==========
+Real-time console output + saved to:
+code/tests/app/logs/batch_YYYYMMDD_HHMMSS.log
+
+Example:
+  2026-05-22 18:00:00 - INFO - Batch Processing Started
+  2026-05-22 18:00:05 - INFO - ✓ Batch settings loaded
+  2026-05-22 18:00:15 - INFO - Analyzing trial: run_baseline1
+  2026-05-22 18:00:45 - INFO - ✓ Trial analysis completed
+  2026-05-22 18:00:45 - INFO - Batch Mode Completed
+
+TROUBLESHOOTING
+===============
+Issue                              | Solution
+-----------------------------------|---------------------------------
+"Settings file not found"          | Check file path is correct
+"Trial settings file not found"    | Run C3D export first (GUI)
+Analysis fails silently            | Check logs with --verbose flag
+No output files generated          | Check log for errors
+Markers not being used             | Verify marker names match data
+
+COMMAND EXAMPLES
+================
+# Standard analysis with example data
+python __main__.py --batch batch_settings_example.xml
+
+# With debug output
+python __main__.py -b my_settings.xml --verbose
+
+# Quiet mode (errors only)
+python __main__.py -b my_settings.xml --quiet
+
+# Show all options
+python __main__.py --help
+
+INTEGRATION EXAMPLES
+====================
+Python script:
+  import subprocess
+  subprocess.run(["python", "__main__.py", "--batch", "settings.xml"])
+
+Batch script (.bat):
+  python __main__.py --batch batch_settings.xml
+
+Bash script (.sh):
+  #!/bin/bash
+  python __main__.py --batch batch_settings.xml
+
+BEST PRACTICES
+==============
+1. Always enable clean_markers and clean_grf (removes NaN rows)
+2. Test with verbose mode first: --verbose
+3. Keep separate settings files for different configurations
+4. Archive settings files with results
+5. Check logs for warnings even if analysis completes
+6. Use relative paths when possible for portability
+
+FILES IN THIS RELEASE
+=====================
+batch_settings_template.xml     - Complete settings reference
+batch_settings_example.xml      - Working example
+batch_runner.py                 - Batch processing engine
+__main__.py                     - Modified to support batch mode
+BATCH_MODE_GUIDE.md             - Full documentation
+BATCH_MODE_QUICK_REFERENCE.txt  - This file
+
+DOCUMENTATION
+==============
+See code/tests/app/documentation/BATCH_MODE_GUIDE.md for:
+  - Complete configuration reference
+  - All available options and parameters
+  - Advanced examples
+  - Troubleshooting tips
+  - Integration examples
+
+================================================================================
+For more information, see BATCH_MODE_GUIDE.md
+================================================================================

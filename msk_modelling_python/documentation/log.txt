@@ -1,0 +1,158 @@
+28.05.2026_10:45:14:226: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_10:45:14:226: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_10:45:39:962: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_10:45:39:962: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_10:53:18:508: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_10:53:18:509: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_10:55:19:828: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_10:55:19:828: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_11:03:24:021: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_11:03:24:026: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_11:33:16:644: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_11:33:16:650: Found start time: 0.0
+28.05.2026_11:33:16:650: Found end time: 5.315
+28.05.2026_11:33:16:650: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_11:33:16:650:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_11:33:16:650:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_11:33:16:650: Saved updated trial_settings.xml
+28.05.2026_11:33:16:650: Updated self.time_range to [0.0, 5.315]
+28.05.2026_11:33:16:650: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_11:33:16:650: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_11:37:02:744: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_11:37:02:746: Found start time: 0.0
+28.05.2026_11:37:02:747: Found end time: 5.315
+28.05.2026_11:37:02:747: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_11:37:02:747:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_11:37:02:747:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_11:37:02:748: Saved updated trial_settings.xml
+28.05.2026_11:37:02:748: Updated self.time_range to [0.0, 5.315]
+28.05.2026_11:37:02:750: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_11:37:02:750: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_11:51:34:690: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_11:51:34:694: Found start time: 0.0
+28.05.2026_11:51:34:694: Found end time: 5.315
+28.05.2026_11:51:34:694: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_11:51:34:694:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_11:51:34:694:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_11:51:34:694: Saved updated trial_settings.xml
+28.05.2026_11:51:34:694: Updated self.time_range to [0.0, 5.315]
+28.05.2026_11:51:34:694: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_11:51:34:698: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_11:56:22:675: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_11:56:22:678: Found start time: 0.0
+28.05.2026_11:56:22:678: Found end time: 5.315
+28.05.2026_11:56:22:678: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_11:56:22:679:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_11:56:22:679:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_11:56:22:679: Saved updated trial_settings.xml
+28.05.2026_11:56:22:679: Updated self.time_range to [0.0, 5.315]
+28.05.2026_11:56:22:681: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_11:56:22:682: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_12:00:55:064: DEBUG: run_ik() called, replace=True
+28.05.2026_12:00:55:066: DEBUG: Changed to directory: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_12:00:55:068: DEBUG: Settings loaded
+28.05.2026_12:00:55:068: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_12:00:55:071: Found start time: 0.0
+28.05.2026_12:00:55:071: Found end time: 5.315
+28.05.2026_12:00:55:074: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_12:00:55:074:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_12:00:55:074:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_12:00:55:074: Saved updated trial_settings.xml
+28.05.2026_12:00:55:074: Updated self.time_range to [0.0, 5.315]
+28.05.2026_12:00:55:074: DEBUG: Time range synced, time_range=[0.0, 5.315]
+28.05.2026_12:00:55:074: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_12:00:55:074: DEBUG: Motion data cleaned
+28.05.2026_12:00:55:074: DEBUG: setup_ik exists: True, replace: False
+28.05.2026_12:00:55:074: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_12:01:45:181: DEBUG: run_ik() called with osim_modelPath=None, setup_xml=None, resultsDir=None
+28.05.2026_12:01:55:592: DEBUG: resultsDir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01, original_cwd=C:\Git\app
+28.05.2026_12:01:55:593: Changed working directory to: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_12:02:17:175: Inverse Kinematics calculation completed. Results saved to C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_13:17:15:949: DEBUG: run_ik() called, replace=True
+28.05.2026_13:17:15:954: DEBUG: Changed to directory: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_13:17:15:962: DEBUG: Settings loaded
+28.05.2026_13:17:15:965: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_13:17:15:973: Found start time: 0.0
+28.05.2026_13:17:15:973: Found end time: 5.315
+28.05.2026_13:17:15:977: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_13:17:15:977:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_13:17:15:977:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_13:17:15:979: Saved updated trial_settings.xml
+28.05.2026_13:17:15:979: Updated self.time_range to [0.0, 5.315]
+28.05.2026_13:17:15:979: DEBUG: Time range synced, time_range=[0.0, 5.315]
+28.05.2026_13:17:15:979: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_13:17:15:979: DEBUG: Motion data cleaned
+28.05.2026_13:17:15:979: DEBUG: setup_ik exists: True, replace: False
+28.05.2026_13:17:15:979: Inverse Kinematics output already exists: joint_angles.mot
+28.05.2026_14:49:16:847: DEBUG: run_ik() called, replace=True
+28.05.2026_14:49:16:848: DEBUG: Changed to directory: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:49:16:849: DEBUG: Settings loaded
+28.05.2026_14:49:16:849: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\events.csv
+28.05.2026_14:49:16:869: Found start time: 0.0
+28.05.2026_14:49:16:870: Found end time: 5.315
+28.05.2026_14:49:16:870: Updating trial_settings.xml with time range: [0.0, 5.315]
+28.05.2026_14:49:16:871:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_14:49:16:873:   Updated end_time: 5.3150 ? 5.3150
+28.05.2026_14:49:16:878: Saved updated trial_settings.xml
+28.05.2026_14:49:16:879: Updated self.time_range to [0.0, 5.315]
+28.05.2026_14:49:16:881: DEBUG: Time range synced, time_range=[0.0, 5.315]
+28.05.2026_14:49:16:882: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_14:49:16:882: DEBUG: Motion data cleaned
+28.05.2026_14:49:16:883: DEBUG: setup_ik exists: True, replace: True
+28.05.2026_14:49:16:883: DEBUG: Creating IK setup file
+28.05.2026_14:49:20:692: DEBUG: IK setup file created
+28.05.2026_14:49:20:694: DEBUG: ik file exists: False, replace: True
+28.05.2026_14:49:20:697: DEBUG: About to call openSim.run_ik()
+28.05.2026_14:49:20:698: DEBUG: Calling openSim.run_ik() with model_dir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\Models\P02_scaled.osim, setup_ik=setup_IK.xml, path=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:49:20:700: DEBUG: run_ik() called with osim_modelPath=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\Models\P02_scaled.osim, setup_xml=setup_IK.xml, resultsDir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:49:20:701: DEBUG: resultsDir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01, original_cwd=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:49:20:703: Changed working directory to: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:50:04:568: Inverse Kinematics calculation completed. Results saved to C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:50:04:601: DEBUG: openSim.run_ik() completed
+28.05.2026_14:50:04:629: [Success] Inverse Kinematics completed. Results: joint_angles.mot
+28.05.2026_14:50:15:568: [Success] Marker location comparison completed: _ik_model_marker_locations.sto vs marker_experimental.trc
+28.05.2026_14:50:15:569: [Success] IK results plotted and saved in C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01
+28.05.2026_14:50:15:571: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_14:50:20:261: [Success] Inverse Dynamics completed. Results: inverse_dynamics.sto
+28.05.2026_14:50:21:001: [Error] during ID plotting: Format 'sto' is not supported (supported formats: eps, jpeg, jpg, pdf, pgf, png, ps, raw, rgba, svg, svgz, tif, tiff, webp)
+28.05.2026_14:50:21:042: DEBUG: run_ik() called, replace=True
+28.05.2026_14:50:21:043: DEBUG: Changed to directory: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:50:21:043: DEBUG: Settings loaded
+28.05.2026_14:50:21:045: Reading events.csv from C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02\events.csv
+28.05.2026_14:50:21:062: Found start time: 0.0
+28.05.2026_14:50:21:063: Found end time: 5.085
+28.05.2026_14:50:21:065: Updating trial_settings.xml with time range: [0.0, 5.085]
+28.05.2026_14:50:21:065:   Updated start_time: 0.0000 ? 0.0000
+28.05.2026_14:50:21:065:   Updated end_time: 5.0850 ? 5.0850
+28.05.2026_14:50:21:068: Saved updated trial_settings.xml
+28.05.2026_14:50:21:068: Updated self.time_range to [0.0, 5.085]
+28.05.2026_14:50:21:069: DEBUG: Time range synced, time_range=[0.0, 5.085]
+28.05.2026_14:50:21:070: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_14:50:21:071: DEBUG: Motion data cleaned
+28.05.2026_14:50:21:071: DEBUG: setup_ik exists: True, replace: True
+28.05.2026_14:50:21:072: DEBUG: Creating IK setup file
+28.05.2026_14:50:22:950: DEBUG: IK setup file created
+28.05.2026_14:50:22:951: DEBUG: ik file exists: False, replace: True
+28.05.2026_14:50:22:951: DEBUG: About to call openSim.run_ik()
+28.05.2026_14:50:22:953: DEBUG: Calling openSim.run_ik() with model_dir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\Models\P02_scaled.osim, setup_ik=setup_IK.xml, path=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:50:22:955: DEBUG: run_ik() called with osim_modelPath=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\Models\P02_scaled.osim, setup_xml=setup_IK.xml, resultsDir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:50:22:957: DEBUG: resultsDir=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02, original_cwd=C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:50:22:959: Changed working directory to: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:51:07:049: Inverse Kinematics calculation completed. Results saved to C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:51:07:083: DEBUG: openSim.run_ik() completed
+28.05.2026_14:51:07:083: [Success] Inverse Kinematics completed. Results: joint_angles.mot
+28.05.2026_14:51:22:254: [Success] Marker location comparison completed: _ik_model_marker_locations.sto vs marker_experimental.trc
+28.05.2026_14:51:22:257: [Success] IK results plotted and saved in C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02
+28.05.2026_14:51:22:264: Warning: Could not clean NaN data: No module named 'parent_utils'
+28.05.2026_14:51:26:937: [Success] Inverse Dynamics completed. Results: inverse_dynamics.sto
+28.05.2026_14:51:27:482: [Error] during ID plotting: Format 'sto' is not supported (supported formats: eps, jpeg, jpg, pdf, pgf, png, ps, raw, rgba, svg, svgz, tif, tiff, webp)
+28.05.2026_15:10:38:157: [Success] Static Optimization completed. Results are saved in:
+28.05.2026_15:10:38:158:  - Forces: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\SO_StaticOptimization_force.sto
+28.05.2026_15:10:38:158:  - Activations: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_01\SO_StaticOptimization_activation.sto
+28.05.2026_15:10:38:623: [Error] during SO plotting: 'NoneType' object is not subscriptable
+28.05.2026_15:18:39:516: [Success] Muscle Analysis completed. Results are saved in muscleAnalysis
+28.05.2026_15:24:23:481: [Success] Static Optimization completed. Results are saved in:
+28.05.2026_15:24:23:482:  - Forces: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02\SO_StaticOptimization_force.sto
+28.05.2026_15:24:23:482:  - Activations: C:\Git\research_documents\Uvienna\Teaching\BD2II - Biomechanical Motion Analysis in Practice\2026S\MoCap\P02\cmj_02\SO_StaticOptimization_activation.sto
+28.05.2026_15:24:23:665: [Error] during SO plotting: 'NoneType' object is not subscriptable
+28.05.2026_15:27:21:064: [Success] Muscle Analysis completed. Results are saved in muscleAnalysis

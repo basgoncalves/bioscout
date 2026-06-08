@@ -1,0 +1,232 @@
+================================================================================
+POWERLIFTING MODEL ANALYSIS APP - QUICK REFERENCE
+================================================================================
+
+LAUNCH THE APP
+==============
+From the app directory, run:
+  python run.py
+
+Or directly:
+  python __main__.py
+
+(Dependencies will be installed automatically on first run)
+
+
+FILE LOCATIONS
+==============
+• Main executable:     __main__.py
+• Launch script:       run.py (recommended)
+• GUI code:            gui/main_window.py
+• Configuration:       config/default_config.yaml
+• Analysis engine:     core/analysis_runner.py
+• Logs:               logs/ folder
+
+
+6 MAIN TABS
+===========
+1. EMG Processing    - Filter, normalize, export EMG signals
+2. Analysis         - Run trial or session-level analyses (MAIN TAB)
+3. Batch           - Batch processing queue (beta)
+4. Results         - View analysis results
+5. Configuration   - Project settings
+6. Logs            - Application logs
+
+
+QUICK WORKFLOW: IK VALIDATION
+=============================
+1. Launch: python run.py
+2. Click Browse → Select trial directory
+3. Check "Reload Files" (see detected files)
+4. Check box: "Inverse Kinematics"
+5. Click "▶ Run Pipeline"
+6. Monitor output log
+7. Results saved to trial directory
+
+
+QUICK WORKFLOW: FULL ANALYSIS
+=============================
+1. Launch: python run.py
+2. Click Browse → Select trial directory
+3. Select analysis steps:
+   ☑ Inverse Kinematics
+   ☑ Inverse Dynamics
+   ☑ Static Optimization
+4. Click "Save Settings" (optional - saves to XML)
+5. Click "▶ Run Pipeline"
+6. Watch progress bar and log
+
+
+QUICK WORKFLOW: BATCH SESSION
+=============================
+1. Launch: python run.py
+2. Click Browse → Select session directory (parent of trials)
+3. Select "Entire Session" radio button
+4. Select your analysis steps
+5. Click "▶ Run Pipeline"
+6. App processes all trial subdirectories automatically
+
+
+ANALYSIS STEPS AVAILABLE
+========================
+Core (OpenSim):
+  • Inverse Kinematics (IK)
+  • Inverse Dynamics (ID)
+  • Static Optimization (SO)
+
+Extended:
+  • Muscle Analysis
+  • Joint Reaction Analysis
+
+EMG:
+  • EMG Normalization
+  • Scale EMG
+
+CEINMS:
+  • CEINMS Calibration
+  • CEINMS Execution
+
+
+SETTINGS MANAGEMENT
+===================
+Save Settings:     Green button - saves to trial_settings.xml
+Edit Settings:     Opens in text editor
+Load Config:       Automatic - loads trial_settings.xml if exists
+Reload Files:      Updates input file detection
+
+
+INPUT FILES DETECTED
+====================
+The app automatically finds:
+  • *.c3d              (motion capture data)
+  • *marker*.trc       (marker positions)
+  • *emg*.mot          (EMG signals)
+  • *grf*.mot          (ground reaction forces)
+  • *.csv              (events)
+  • *.osim             (OpenSim model - searches up 2 parent dirs)
+
+
+VALIDATION TEST
+===============
+To verify everything is working:
+  python test_gui_launch.py
+
+Expected: "All tests passed"
+
+
+DOCUMENTATION
+==============
+• README_LATEST.md       - Full user guide
+• IMPROVEMENTS.md        - Feature documentation
+• VERIFICATION.md        - Technical verification report
+• QUICK_REFERENCE.txt    - This file
+
+
+CONFIGURATION
+==============
+Global settings:      config/default_config.yaml
+Per-trial settings:   trial_directory/trial_settings.xml
+Application logs:     logs/app.log
+
+
+DEPENDENCIES
+============
+Main requirements:
+  • customtkinter      (Modern GUI)
+  • opensim            (Biomechanics - selected by user)
+  • pyyaml             (Configuration)
+  • numpy, scipy       (Scientific computing)
+
+Installed via:
+  • run.py (automatic)
+  • pip install -r requirements.txt (manual)
+
+
+TROUBLESHOOTING
+===============
+App won't start:
+  → python test_gui_launch.py
+  → Check logs/ folder for error details
+
+No input files found:
+  → Check file naming matches patterns
+  → Use "Reload Files" button
+
+Analysis is slow:
+  → Normal! 10-30 mins per trial
+  → Session analysis: multiply by # of trials
+
+Settings won't save:
+  → Check trial directory is writable
+  → Ensure trial_directory/trial_settings.xml path exists
+
+
+FILE STRUCTURE
+==============
+powerlifing_model_clean/code/tests/app/
+├── __main__.py                 # Entry point
+├── run.py                      # Launch script
+├── run.bat                     # Windows launcher
+├── test_gui_launch.py          # Validation script
+├── requirements.txt            # Dependencies
+├── QUICK_REFERENCE.txt         # This file
+├── README_LATEST.md            # Full user guide
+├── IMPROVEMENTS.md             # Feature docs
+├── VERIFICATION.md             # Technical report
+│
+├── config/
+│   ├── config_manager.py       # YAML configuration
+│   └── default_config.yaml     # Default settings
+│
+├── core/
+│   └── analysis_runner.py      # Analysis executor
+│
+├── gui/
+│   ├── main_window.py          # Main window
+│   ├── styles.py               # Theme/colors
+│   └── widgets/
+│       ├── emg_processing.py       # EMG tools (NEW)
+│       ├── analysis_control_v2.py  # Main analysis (MAIN)
+│       ├── batch_processor.py
+│       ├── results_viewer.py
+│       ├── configuration.py
+│       └── logs.py
+│
+├── utils/
+│   ├── logger.py               # Logging
+│   └── dependency_installer.py # Package manager
+│
+└── logs/                        # Application logs (created at runtime)
+
+
+STATUS
+======
+✅ All components implemented
+✅ All imports working
+✅ All files present
+✅ Configuration system ready
+✅ GUI framework complete
+✅ EMG Processing tab added
+✅ Analysis Control tab complete
+✅ Documentation comprehensive
+
+Ready for testing! 🚀
+
+
+NEXT STEPS
+==========
+1. Launch:     python run.py
+2. Test with:  Your biomechanics trial data
+3. Feedback:   Report any issues you find
+4. Enhance:    Request additional features
+
+
+SUPPORT
+=======
+Check these files for help:
+  • README_LATEST.md (user guide)
+  • VERIFICATION.md (technical details)
+  • logs/app.log (error details)
+  • test_gui_launch.py (system check)
+
+================================================================================

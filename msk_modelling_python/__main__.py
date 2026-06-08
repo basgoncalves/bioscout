@@ -1,200 +1,269 @@
+#!/usr/bin/env python3
+"""
+Biomechanical Analysis - Batch Processing Pipeline
+
+Uses utils.Analyse per trial so all file paths come from settings.Inputs
+rather than being hardcoded here.
+"""
+
+import sys
 import os
-from xml.etree import ElementTree as ET
-import time
-from . import utils
-from . import openSim
-from . import ceinms
+import argparse
+import traceback
+from pathlib import Path
 
-SUBJECTS_TO_ANALYSE =  ['Athlete_03','Athlete_03_MRI_Katya', 'Athlete_03_Lernagopal','Athlete_03_Lernagopal_optimised']  # ,'Athlete_03_MRI_Katya','Athlete_03_Lernagopal'
-SESSIONS_TO_ANALYSE = ['25_03_31'] 
-TRIALS_TO_ANALYSE =  ['Walking_03','Squat_35kg_01', 'Squat_35kg_02', 'Squat_bw_01', 'Squat_bw_02'] #Walking_02 Squat_bw_02 Squat_35kg_01
-CEINMS_CALIBRATION_TRIALS = ['Walking_02'] 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-class Execute:
-    ''' Logics for which analyses to execute '''
-    def __init__(self):
-        
-        self.replace = True
+from settings import BatchSettings, CEINMSSettings
+from utils.model_scaler import ModelScaler
+from utils.helpers import setup_logging
+import utils
 
-        self.INCREASE_MUSCLE_FORCE = False
-        self.SCALE_FACTOR = 3
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+parser = argparse.ArgumentParser(description="Biomechanical Analysis - Batch Processing")
+parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file")
+args = parser.parse_args()
 
-        self.IK = False
-        self.ID = False
-        self.MA = False
-        self.SO = False
-        self.JRA = False
-        
-        self.EMG_NORMALISE = False
-        self.SCALE_EMG = False
-        self.EMG_SCALE_FACTOR = 0.7
-        
-        self.CREATE_CEINMS_FILES = False
-        self.CREATE_CEINMS_MODEL = False
-        
-        self.CEINMS_CALIBRATION = False
-        self.CEINMS_CALIBRATION_PLOTS = False
-        
-        self.CEINMS_OPTIMISATION = False
-        self.CEINMS_EXE = False
-        self.CEINMS_EXE_LOOP = False
-        
-        self.JRA_CEINMS = False
-        
-        self.CREATE_PLOTS = False
-        
-        self.PLOT_IK = False
-        self.PLOT_ID = False
-        self.PLOT_MA = False
-        self.PLOT_SO = False
-        self.PLOT_JRA = False
-        self.PLOT_EMG = False
-          
-        self.push_trial_to_git = False
-        self.push_subject_to_git = True
+log_dir = Path(__file__).parent / "logs"
+log_dir.mkdir(exist_ok=True)
+logger = setup_logging(log_dir)
 
-def run_all_step(analyse: utils.Analyse):
 
-    # Run IK
-    if Execute().IK:
-        analyse.run_ik()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _trial_subdir(c3d_path: Path) -> str:
+    """Return the trial subdirectory (a folder named after the trial stem)."""
+    name = c3d_path.stem
+    parent = c3d_path.parent
+    subdir = parent if parent.name == name else parent / name
+    return str(subdir)
 
-    # Run ID
-    if Execute().ID: 
-        analyse.run_id()
 
-    # Run muscle analysis
-    if Execute().MA: 
-        analyse.run_ma()
+def _run_step(trial: 'utils.Analyse', step_name: str, method_name: str) -> bool:
+    """Call trial.<method_name>() and log the outcome. Returns True on success."""
+    logger.info(f"    {step_name}...")
+    try:
+        getattr(trial, method_name)()
+        logger.info(f"    [OK] {step_name}")
+        return True
+    except Exception as e:
+        logger.error(f"    [ERROR] {step_name}: {e}")
+        logger.debug(traceback.format_exc())
+        return False
 
-    # Run Static Optimization
-    if Execute().SO:
-        analyse.run_so()
 
-    # Run Joint Reaction Analysis
-    if Execute().JRA:
-        analyse.run_jra()
-        
-    # Normalise EMG data
-    if Execute().EMG_NORMALISE:
+def _should_skip(trial_name: str, config) -> bool:
+    """Return True if this trial matches any entry in BatchSettings.trials_to_skip."""
+    skip_list = getattr(config, 'trials_to_skip', []) or []
+    return any(s in trial_name for s in skip_list)
 
-        utils.print_to_log(f'Normalising EMG data for: {analyse.subject} / {analyse.trial}')
-        emg_normalise_list = []
 
-        for name in TRIALS_TO_ANALYSE:
+# ---------------------------------------------------------------------------
+# Main batch function
+# ---------------------------------------------------------------------------
+def run_batch_mode(settings_path: str) -> bool:
+    try:
+        if not os.path.exists(settings_path):
+            logger.error(f"Settings file not found: {settings_path}")
+            return False
 
-            abs_path_emg = str(analyse.emg)
-            if os.path.exists(abs_path_emg):
-                emg_normalise_list.append(abs_path_emg)
-            else:
-                print(f"EMG file not found: {abs_path_emg}")
+        config = BatchSettings
+        session_dir = Path(config.session_folder)
 
-        openSim.run_emg_normalise(target_emg_path=str(analyse.emg), 
-                    normalise_emg_list=emg_normalise_list)
+        logger.info("=" * 70)
+        logger.info("Biomechanical Analysis - Batch Processing")
+        logger.info(f"Session folder : {session_dir}")
+        logger.info("=" * 70)
 
-        utils.print_to_log(f'EMG data normalised. Results are saved in {analyse.emg}')
+        # ------------------------------------------------------------------ #
+        # DISCOVERY
+        # ------------------------------------------------------------------ #
+        # Only look at C3D files directly in the session folder (not in trial subdirs,
+        # which may contain copies created by the export step).
+        c3d_files = sorted(session_dir.glob("*.c3d"))
+        if not c3d_files:
+            logger.warning("No C3D files found — aborting")
+            return False
+        logger.info(f"Found {len(c3d_files)} C3D file(s)")
 
-    if Execute().SCALE_EMG:
-        analyse.scale_emg(scale_factor=Execute().EMG_SCALE_FACTOR)
-        
-    # Create CEINMS setup files
-    if Execute().CREATE_CEINMS_FILES:
+        subject_name = session_dir.name
 
-        # # in case model is different for CEINMS  and SO
-        # if analyse.model_dir.__contains__('_increased_3.00.osim'):
-        #     new_model_name = analyse.model_dir.replace('_increased_3.00.osim', f'.osim')
-        #     analyse.update_model(new_model_name)
+        # ------------------------------------------------------------------ #
+        # PHASE 1: C3D EXPORT  (all trials — must happen before scaling)
+        # ------------------------------------------------------------------ #
+        # Build trial objects early so we can reuse them in later phases
+        trial_objects: list = []
+        for c3d_file in c3d_files:
+            trial_subdir = _trial_subdir(c3d_file)
+            os.makedirs(trial_subdir, exist_ok=True)
+            trial = utils.Analyse(trial_subdir)
+            trial.c3d = str(c3d_file.resolve())
+            trial_objects.append(trial)
 
-        analyse.create_ceinms_model()
+        if config.enable_c3d_export:
+            logger.info("=" * 70)
+            logger.info("C3D EXPORT  (all trials)")
+            logger.info("=" * 70)
+            for trial in trial_objects:
+                if _should_skip(trial.trial, config):
+                    logger.info(f"  Skipping {trial.trial} (in trials_to_skip)")
+                    continue
+                logger.info(f"  {trial.trial}")
+                _run_step(trial, "C3D export", "export_c3d")
+                _run_step(trial, "EMG filter", "run_emg_filter")
 
-        analyse.create_ceinms_input_data()
-        
-        analyse.create_ceinms_calibration_cfg(calibration_trial_names=CEINMS_CALIBRATION_TRIALS)
+        # ------------------------------------------------------------------ #
+        # PHASE 2: MODEL SCALING  (once per session, uses static TRC)
+        # ------------------------------------------------------------------ #
+        active_model = os.path.join(
+            os.path.dirname(config.generic_model), f"{subject_name}.osim")
+        if not os.path.exists(active_model):
+            active_model = config.generic_model
 
-        analyse.create_ceinms_calibration_setup()
+        if config.enable_scale_model:
+            logger.info("-" * 70)
+            logger.info("MODEL SCALING")
+            logger.info("-" * 70)
+            try:
+                statics = [f for f in c3d_files if config.static_trial_name in f.stem]
+                if not statics:
+                    raise RuntimeError(
+                        f"Static trial '{config.static_trial_name}' not found")
 
-        analyse.create_excitation_generator()
+                static_subdir = _trial_subdir(statics[0])
+                trc_file = os.path.join(static_subdir, "marker_experimental.trc")
+                if not os.path.isfile(trc_file):
+                    raise RuntimeError(f"Static TRC not found: {trc_file}")
 
-        analyse.create_ceinms_exe_cfg()
+                scaler = ModelScaler(
+                    template_model_path=config.generic_model,
+                    trc_file=trc_file,
+                    destination_dir=static_subdir,
+                    output_model_dir=os.path.dirname(config.generic_model),
+                )
+                scaler.output_model_filename = f"{subject_name}.osim"
+                active_model, _ = scaler.run_scale(
+                    marker_weights=getattr(config, 'marker_weights', None),
+                    markerset_path=config.markerset,
+                )
+                logger.info(f"[OK] Scaled model: {active_model}")
+            except Exception as e:
+                logger.error(f"[CRITICAL] Model scaling failed: {e}")
+                raise
 
-        analyse.create_ceinms_exe_setup()
-                
-    # CEINMS calibration and optimization
-    if Execute().CEINMS_CALIBRATION and analyse.trial in CEINMS_CALIBRATION_TRIALS:
-        
-        try:        
-            analyse.run_ceinms_calibration()
-        
-        except Exception as e:
-            print(f"Error during CEINMS calibration: {e}")
-            utils.print_to_log(f'Error during CEINMS calibration: {e}')
+        # Set scaled model on all trial objects now that it's known, and persist to
+        # each trial's settings XML so that load_settings() inside run_ik/run_id/etc.
+        # picks up the correct path rather than the stale default.
+        for trial in trial_objects:
+            trial.update_trial_attribute('model_dir', active_model)
 
-    # CEINMS optimisation
-    if Execute().CEINMS_OPTIMISATION:
-        try:
-            analyse.run_ceinms_optimise()
-        except Exception as e:
-            utils.print_to_log(f'Error during CEINMS optimisation: {e}')
+        # ------------------------------------------------------------------ #
+        # PHASE 3: PER-TRIAL ANALYSIS  — IK, ID, SO, MA
+        # ------------------------------------------------------------------ #
+        logger.info("=" * 70)
+        logger.info("PER-TRIAL ANALYSIS")
+        logger.info("=" * 70)
 
-    if Execute().CEINMS_EXE:
-        try:
-           analyse.run_ceinms_exe()
-        except Exception as e:
-            utils.print_to_log(f'Error during CEINMS executable run: {e}')
+        for trial in trial_objects:
+            trial_name = trial.trial
+            logger.info("-" * 70)
+            logger.info(f"Trial: {trial_name}")
+            logger.info("-" * 70)
 
-        # Run Joint Reaction Analysis for CEINMS
-    
-    if Execute().CEINMS_EXE_LOOP:
-        analyse.run_ceinms_exe_loop()
-    
-    # Run Joint Reaction Analysis with CEINMS muscle forces
-    if Execute().JRA_CEINMS:
-        analyse.run_jra_ceinms()
-    
-class GUI:
-    ''' Logics for GUI '''
-    def __init__(self):
-        pass
+            if _should_skip(trial_name, config):
+                logger.info(f"  Skipping (in trials_to_skip)")
+                continue
 
-if __name__ == "__main__":
-    
-    utils.print_to_log("Starting analysis...")
+            try:
 
-    start_time = time.time()
-    
-    print(f'Check settings in {utils.__file__}')
-    time.sleep(1)
-    for subject in SUBJECTS_TO_ANALYSE:
-        for session in SESSIONS_TO_ANALYSE:
-            for trial_name in TRIALS_TO_ANALYSE:
-                
-                trialPath = os.path.join(utils.SIMULATIONS_DIR, subject, session, trial_name)                
-                analysis = utils.Analyse(trialPath=trialPath) 
+                if config.enable_inverse_kinematics:
+                    _run_step(trial, "Inverse Kinematics", "run_ik")
 
-                template_subject = '_'.join(subject.split('_')[0:2])
-                analysis.copy_input_files(src_subject=template_subject, replace=False) 
-                
-                analysis.update_trial_attribute('replace', Execute().replace)
-                
-                utils.print_to_log(f'Running analysis for: {trialPath}')
+                if config.enable_inverse_dynamics:
+                    _run_step(trial, "Inverse Dynamics", "run_id")
 
-                ###########---Run main analysis function---########################
-                run_all_step(analyse=analysis)
+                if getattr(config, 'enable_static_optimization', False):
+                    _run_step(trial, "Static Optimization", "run_so")
 
-                ###################################################################
+                if getattr(config, 'enable_muscle_analysis', False):
+                    _run_step(trial, "Muscle Analysis", "run_ma")
 
-                utils.print_to_log(f'Analysis completed for: {trialPath}')
 
-                
-                if Execute().push_trial_to_git:
-                    analysis.push_trial_results_to_git()
-        
-        if Execute().push_subject_to_git:
-            analysis.push_subject_results_to_git()
+            except Exception as e:
+                logger.error(f"Trial {trial_name} failed: {e}")
+                logger.debug(traceback.format_exc())
+                continue
 
-        
-    
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    utils.print_to_log(f"Total analysis time: {elapsed_time:.2f} seconds \n \n")
+        # ------------------------------------------------------------------ #
+        # EMG SESSION AMPLITUDE NORMALISATION  (divide by session max)
+        # ------------------------------------------------------------------ #
+        if getattr(config, 'enable_emg_normalise', False) and trial_objects:
+            logger.info('Session EMG amplitude normalisation (session-max scaling)...')
+            try:
+                utils.normalise_emg_across_session(trial_objects)
+                logger.info('[OK] EMG normalised across session')
+            except Exception as e:
+                logger.error(f'[ERROR] EMG session normalisation: {e}')
 
+        # ------------------------------------------------------------------ #
+        # CEINMS INPUT DATA  (second pass — after EMG normalisation)
+        # ------------------------------------------------------------------ #
+        if (getattr(CEINMSSettings, 'enable_calibration', False) or
+                getattr(CEINMSSettings, 'enable_execution', False)) and trial_objects:
+            logger.info('Building CEINMS input data (post-EMG normalisation)...')
+            for trial in trial_objects:
+                if _should_skip(trial.trial, config):
+                    continue
+                _run_step(trial, 'CEINMS input data', 'create_ceinms_input_data')
+
+        # ------------------------------------------------------------------ #
+        # CEINMS CALIBRATION  (session-level — once after all trials)
+        # ------------------------------------------------------------------ #
+        if getattr(CEINMSSettings, 'enable_calibration', False) and trial_objects:
+            logger.info("=" * 70)
+            logger.info("CEINMS CALIBRATION  (session-level)")
+            logger.info("=" * 70)
+            # run_ceinms_calibration discovers sibling trial inputs automatically
+            _run_step(trial_objects[0], "CEINMS Calibration", "run_ceinms_calibration")
+
+        # ------------------------------------------------------------------ #
+        # CEINMS EXECUTION  (per-trial — needs calibrated model from above)
+        # ------------------------------------------------------------------ #
+        if getattr(CEINMSSettings, 'enable_execution', False):
+            logger.info("=" * 70)
+            logger.info("CEINMS EXECUTION  (per-trial)")
+            logger.info("=" * 70)
+            for trial in trial_objects:
+                if _should_skip(trial.trial, config):
+                    logger.info(f"    Skipping {trial.trial} (in trials_to_skip)")
+                    continue
+                _run_step(trial, "CEINMS Execution", "run_ceinms_exe")
+
+        logger.info("=" * 70)
+        logger.info("[OK] PIPELINE COMPLETED")
+        logger.info("=" * 70)
+        return True
+
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}")
+        traceback.print_exc()
+        return False
+    finally:
+        logger.info("Batch processing finished.")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> int:
+    if args.batch:
+        return 0 if run_batch_mode(args.batch) else 1
+    logger.info("No batch file provided. Use:  python . -b settings.py")
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

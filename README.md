@@ -33,7 +33,9 @@ https://github.com/basgoncalves
 (for later versions try [OpenSim using Conda](https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python))
 https://pypi.org/project/msk-modelling-python/0.0.13/ 
 
-#### Create a Virtual Environment**
+#### Activate your Virtual Environment**
+you can use 
+[Python](https://docs.python.org/3/library/venv.html) or [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) 
 ```sh
 cd <your project folder>
 python -m venv msk
@@ -54,7 +56,11 @@ uv pip install msk-modelling-python
 ```
 
 #### Test usage
+``` cmd
+if not exist test.py type nul > test.py
+```
 ``` python
+python test.py
 import msk_modelling_python as msk
 msk.bops.greet()
 ```
@@ -219,11 +225,7 @@ Goncalves, B. A. M. et al. -2023- Gait Posture 106, S68
 
 Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
-## Version updates 0.2.1
+## Version updates 0.3.6
 
-- include openSim function with functions to improve opensim management
-
-## Version updates 0.3.0
-
-- include ceinms and other plotting utils
+- update utils
 
