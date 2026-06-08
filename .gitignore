@@ -12,6 +12,25 @@ tests/
 test_env/
 build/
 example_data/
-app/
 torch_cpu.dll
 torch_cpu.zip
+
+# Stale root-level files left over from old package structure
+msk_modelling_python/bops.py
+msk_modelling_python/ceinms.py
+msk_modelling_python/classes.py
+msk_modelling_python/dev.py
+msk_modelling_python/install_opensim.py
+msk_modelling_python/notebook.ipynb
+msk_modelling_python/openSim.py
+msk_modelling_python/emg_normalise.py
+msk_modelling_python/exportC3D.py
+msk_modelling_python/settings.json
+msk_modelling_python/error_log.txt
+msk_modelling_python/log.txt
+msk_modelling_python/requirements.txt
+msk_modelling_python/app/
+msk_modelling_python/executables/
+msk_modelling_python/src/
+log.txt
+cleanup_and_commit.ps1

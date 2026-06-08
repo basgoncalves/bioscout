@@ -1,4 +1,0 @@
-20.05.2026_19:27:40:877: Settings XML is missing, empty, or too large. Creating new settings XML.
-20.05.2026_19:27:40:885: Updated model path to C:\Git\msk_modelling_python\models\Subject\session1\scaled.osim for trial at .
-20.05.2026_19:27:40:908: Updated emg to emg.mot for trial at C:\Git\msk_modelling_python\msk_modelling_python\app
-20.05.2026_19:27:40:908: Updated ceinms_excitations to emg.mot for trial at C:\Git\msk_modelling_python\msk_modelling_python\app

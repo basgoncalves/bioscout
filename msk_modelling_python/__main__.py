@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Biomechanical Analysis - Batch Processing Pipeline
+Biomechanical Analysis — entry point
 
-Uses utils.Analyse per trial so all file paths come from settings.Inputs
-rather than being hardcoded here.
+GUI mode (default):
+    python msk_modelling_python
+    python msk_modelling_python --gui
+
+Batch mode:
+    python msk_modelling_python -b settings.py
 """
 
 import sys
@@ -22,8 +26,9 @@ import utils
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-parser = argparse.ArgumentParser(description="Biomechanical Analysis - Batch Processing")
-parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file")
+parser = argparse.ArgumentParser(description="Biomechanical Analysis")
+parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file (batch mode)")
+parser.add_argument('-g', '--gui',   action='store_true', help="Launch GUI (default when no flags given)")
 args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
@@ -258,11 +263,17 @@ def run_batch_mode(settings_path: str) -> bool:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+def run_gui_mode() -> int:
+    from gui.main_window import main as gui_main
+    gui_main()
+    return 0
+
+
 def main() -> int:
     if args.batch:
         return 0 if run_batch_mode(args.batch) else 1
-    logger.info("No batch file provided. Use:  python . -b settings.py")
-    return 1
+    # GUI mode: explicit --gui flag, or no arguments at all
+    return run_gui_mode()
 
 
 if __name__ == '__main__':
