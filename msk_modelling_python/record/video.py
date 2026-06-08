@@ -17,18 +17,23 @@ from mediapipe.tasks.python import vision as mp_vision
 
 # Fix stdout encoding on Windows to support Unicode characters
 if sys.platform == 'win32':
-    # Reconfigure stdout to use UTF-8 encoding with error handling
-    try:
-        if hasattr(sys.stdout, 'buffer'):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    except (AttributeError, TypeError):
-        pass  # stdout already reconfigured or not available
+    # Reconfigure stdout/stderr for UTF-8, but only if they haven't already been
+    # replaced by a logging tee or similar wrapper (replacing a tee would lose
+    # log output and could corrupt the stream).
+    def _is_plain_text_io(s):
+        return isinstance(s, io.TextIOWrapper)
 
     try:
-        if hasattr(sys.stderr, 'buffer'):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    except (AttributeError, TypeError):
-        pass  # stderr already reconfigured or not available
+        if _is_plain_text_io(sys.stdout) and hasattr(sys.stdout, 'buffer'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+    try:
+        if _is_plain_text_io(sys.stderr) and hasattr(sys.stderr, 'buffer'):
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 
 _LANDMARK_NAMES = [
@@ -1355,11 +1360,7 @@ def main():
     # --- Quick recording session ---
     DURATION   = 10     # seconds to record
     CAMERA     = 'webcam'   # 'webcam' or 'ip'
-    # target_fps sets the VideoWriter playback rate; actual captured fps depends
-    # on the camera.  Set to None to use the camera-reported value.
-    FPS        = None   # e.g. 30, 60, or None
-    # Run pose+ball detection every N frames.  Increase to reduce CPU load;
-    # skipped frames reuse the last known result.
+    FPS        = None
     DETECT_INT = 2
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1369,7 +1370,6 @@ def main():
     tracker.record_video(duration_seconds=DURATION, camera_type=CAMERA,
                          output_dir=out, target_fps=FPS, detection_interval=DETECT_INT)
 
-    # Analysis pipeline
     tracker.save_frames(out / "frames")
     tracker.plot_joint_angles(save_path=str(out / "joint_angles.png"))
     tracker.analyze_release(save_path=str(out / "release_catch.png"))

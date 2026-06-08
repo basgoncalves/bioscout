@@ -1,0 +1,20 @@
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - ======================================================================
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - Biomechanical Analysis - Batch Processing
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - Session folder : C:\Users\Basilio\ucloud\Squat_Width\Simulations\P012d
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - ======================================================================
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - Found 2 C3D file(s)
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - ======================================================================
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - C3D EXPORT  (all trials)
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO - ======================================================================
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO -   cmj_02
+2026-06-09 00:06:58 - batch_20260609_000658 - INFO -     C3D export...
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO -     [OK] C3D export
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO -     EMG filter...
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO -     [OK] EMG filter
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO -   Skipping static_01 (in trials_to_skip)
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO - ----------------------------------------------------------------------
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO - MODEL SCALING
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO - ----------------------------------------------------------------------
+2026-06-09 00:06:59 - batch_20260609_000658 - ERROR - [CRITICAL] Model scaling failed: Static TRC not found: C:\Users\Basilio\ucloud\Squat_Width\Simulations\P012d\static_01\marker_experimental.trc
+2026-06-09 00:06:59 - batch_20260609_000658 - CRITICAL - Fatal error: Static TRC not found: C:\Users\Basilio\ucloud\Squat_Width\Simulations\P012d\static_01\marker_experimental.trc
+2026-06-09 00:06:59 - batch_20260609_000658 - INFO - Batch processing finished.

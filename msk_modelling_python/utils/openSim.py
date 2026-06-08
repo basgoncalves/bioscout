@@ -3757,7 +3757,6 @@ def run_body_kinematics(osim_modelPath=None, ik_output=None, bodies=None, setup_
         raise
 
 
-
 if __name__ == "__main__":
 
     class _Tee:
@@ -3781,7 +3780,6 @@ if __name__ == "__main__":
 
     LocalFuncs = [f for f in dir() if callable(globals()[f])]
 
-    # Command loop
     while True:
         print("Available commands:", LocalFuncs)
         command = input("Enter command: ")
@@ -3798,7 +3796,6 @@ if __name__ == "__main__":
         with open(log_filename, 'w', encoding='utf-8') as _lf:
             _orig_stdout = sys.stdout
             sys.stdout = _Tee(_lf)
-            # Also wire OpenSim's C++ logger to the same file so [info] frames are captured
             _osim_sink = False
             try:
                 osim.Logger.addFileSink(log_filename)

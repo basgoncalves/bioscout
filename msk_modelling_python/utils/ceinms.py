@@ -411,7 +411,7 @@ def create_input_data(MAFolder=None, excitationsFile=None, motionFile=None,
     
     # Add moment arms files 
     moment_arms = ET.SubElement(root, "momentArmsFiles")
-    for dof in settings.DOFs:
+    for dof in settings.BatchSettings.dof_list:
 
         dof_path = os.path.join(MAFolder, f'_MuscleAnalysis_MomentArm_{dof}.sto')
         dof_elem = ET.SubElement(moment_arms, "momentArmsFile")

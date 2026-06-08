@@ -757,7 +757,7 @@ class Analyse(settings.Inputs):
         """Log with trial name prefix."""
         print_to_log(message, trial=self.trial, terminal=terminal)
 
-    def export_c3d(self, create_folder=None, emg_string_list=settings.emg_string_list):
+    def export_c3d(self, create_folder=None, emg_string_list=settings.BatchSettings.emg_string_list):
         '''
         Export C3D file using the exportC3D script, which extracts EMG data and saves it in a format compatible with CEINMS.
 
@@ -788,6 +788,29 @@ class Analyse(settings.Inputs):
 
         exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list, create_folder=create_folder)
         
+    @staticmethod
+    def _get_openSim():
+        """Return the openSim module, attempting a late import if it is still None."""
+        global openSim
+        if openSim is not None:
+            return openSim
+        try:
+            from . import openSim as _os_mod
+            openSim = _os_mod
+            return openSim
+        except Exception:
+            pass
+        try:
+            import importlib.util as _ilu, os as _os_m
+            _p = _os_m.path.join(_os_m.path.dirname(_os_m.path.abspath(__file__)), 'openSim.py')
+            _spec = _ilu.spec_from_file_location('utils.openSim', _p)
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            openSim = _mod
+            return openSim
+        except Exception as _e:
+            raise RuntimeError(f"openSim module unavailable: {_e}") from _e
+
     def run_ik(self):
         os.chdir(os.path.abspath(self.path))
         self.load_settings(self.settingsXML)
@@ -797,8 +820,9 @@ class Analyse(settings.Inputs):
             self.time_range = self.get_time_range()
 
         # Create IK setup file if it doesn't exist or if replace is True
-        if not os.path.exists(self.setup_ik) or self.replace:  
-            openSim.create_setup_IK(osim_modelPath=self.model_dir,
+        _os = self._get_openSim()
+        if not os.path.exists(self.setup_ik) or self.replace:
+            _os.create_setup_IK(osim_modelPath=self.model_dir,
                                 marker_trc=self.markers,
                                 ik_output=self.ik,
                                 taskSetPath=None,
@@ -814,7 +838,7 @@ class Analyse(settings.Inputs):
 
         # Run IK using OpenSim API
         try:
-            openSim.run_ik(osim_modelPath=self.model_dir,
+            _os.run_ik(osim_modelPath=self.model_dir,
                     setup_xml=self.setup_ik,
                     resultsDir=self.path)
             self._log(f'[Success] Inverse Kinematics completed. Results are saved in {self.path}')
@@ -832,9 +856,10 @@ class Analyse(settings.Inputs):
 
     def run_id(self):
         os.chdir(self.path)
-        if not os.path.exists(self.setup_grf) or self.replace:            
+        _os = self._get_openSim()
+        if not os.path.exists(self.setup_grf) or self.replace:
             try:
-                openSim.create_grf_xml(grf_mot_path=self.grf_mot, 
+                _os.create_grf_xml(grf_mot_path=self.grf_mot, 
                         output_xml_path=self.setup_grf,
                         marker_trc_path=self.markers,
                         right_foot_markers=getattr(settings.BatchSettings, 'right_foot_markers', None),
@@ -843,7 +868,8 @@ class Analyse(settings.Inputs):
                         vert_force_threshold=10.0, filter_cutoff=6, datafile=None)
             except Exception as e:
                 template_grf_path = os.path.join(self.setup_dir, self.setup_grf)
-                shutil.copyfile(template_grf_path, self.setup_grf)                
+                if os.path.abspath(template_grf_path) != os.path.abspath(self.setup_grf):
+                    shutil.copyfile(template_grf_path, self.setup_grf)
 
         if os.path.exists(self.id) and not self.replace:
             self._log(f'Inverse Dynamics output already exists: {self.id}')
@@ -851,7 +877,7 @@ class Analyse(settings.Inputs):
         
         # Run ID using OpenSim API
         try:
-            openSim.run_id(osimModelPath=self.model_dir,
+            _os.run_id(osimModelPath=self.model_dir,
                     ikOutputPath=self.ik,
                     grfXmlPath=self.setup_grf,
                     setupXmlPath=self.setup_id)
@@ -875,8 +901,9 @@ class Analyse(settings.Inputs):
             self._log(f'Muscle Analysis output already exists: {self.ma}')
             return
 
+        _os = self._get_openSim()
         try:
-            openSim.run_ma(osim_modelPath=self.model_dir,
+            _os.run_ma(osim_modelPath=self.model_dir,
                         ik_output=os.path.join(self.path, self.ik),
                         grf_xml=os.path.join(self.path, self.setup_grf))
             self._log(f'[Success] Muscle Analysis completed. Results are saved in {self.ma}')
@@ -886,6 +913,7 @@ class Analyse(settings.Inputs):
     
     def run_so(self):
         os.chdir(self.path)
+        _os = self._get_openSim()
 
         # Resolve all paths to absolute so openSim.run_so never hits a
         # relative-path issue regardless of working directory changes.
@@ -910,7 +938,7 @@ class Analyse(settings.Inputs):
             return
 
         try:
-            openSim.run_so(osim_modelPath=self.model_dir,
+            _os.run_so(osim_modelPath=self.model_dir,
                     ik_output=ik_abs,
                     grf_xml=grf_abs,
                     setup_xml=setup_so_abs,
@@ -934,6 +962,7 @@ class Analyse(settings.Inputs):
     def run_jra(self):
         os.chdir(self.path)
         self.load_settings(self.settingsXML)
+        _os = self._get_openSim()
 
         if not os.path.exists(self.setup_jra):
             template_jra_path = os.path.join(self.setup_dir, self.setup_jra)
@@ -942,7 +971,7 @@ class Analyse(settings.Inputs):
         if os.path.exists(self.jra) and not self.replace:
             return
         try:
-            openSim.run_jra(osim_modelPath=self.model_dir,
+            _os.run_jra(osim_modelPath=self.model_dir,
                      ik_output=self.ik,
                      grf_xml=self.setup_grf,
                      setup_xml=self.setup_jra,

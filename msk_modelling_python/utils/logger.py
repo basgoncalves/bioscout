@@ -8,6 +8,32 @@ from typing import Optional
 import threading
 
 
+class _TeeStream:
+    """Writes to two streams simultaneously (stdout/stderr → terminal + log file)."""
+
+    def __init__(self, original, log_file_stream):
+        self._orig = original
+        self._log = log_file_stream
+
+    def write(self, data):
+        self._orig.write(data)
+        try:
+            self._log.write(data)
+            self._log.flush()
+        except Exception:
+            pass
+
+    def flush(self):
+        self._orig.flush()
+        try:
+            self._log.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._orig, name)
+
+
 class AppLogger:
     """Custom logger for the application."""
 
@@ -82,6 +108,12 @@ class AppLogger:
             except Exception:
                 pass
         self.logger.addHandler(console_handler)
+
+        # Tee stdout/stderr so print() calls also appear in the log file
+        if not _batch_mode and self.file_handler is not None:
+            import sys as _sys
+            _sys.stdout = _TeeStream(_sys.stdout, self.file_handler.stream)
+            _sys.stderr = _TeeStream(_sys.stderr, self.file_handler.stream)
 
     def debug(self, message: str) -> None:
         """Log debug message."""

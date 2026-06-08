@@ -13,51 +13,6 @@ SETUP_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\setup_files'
 PROJECT_NAME = 'squatting_fais'
 
 # ============================================================================
-# LEGACY PROJECT CONFIGURATION
-# ============================================================================
-
-# Model parameters
-marker_weights = {'pelvis': 10.0, 'femur_r': 1.0, 'tibia_r': 1.0, 'talus_r': 1.0,
-                  'calcn_r': 2.0, 'toes_r': 2.0, 'femur_l': 1.0, 'tibia_l': 1.0,
-                  'talus_l': 1.0, 'calcn_l': 2.0, 'toes_l': 2.0}
-
-DOFs = ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation',
-        'hip_flexion_l', 'hip_flexion_r', 'hip_adduction_l', 'hip_adduction_r',
-        'hip_rotation_l', 'hip_rotation_r', 'knee_angle_l', 'knee_angle_r',
-        'ankle_angle_l', 'ankle_angle_r']
-
-EMG_muscle_mapping = {
-    # Left Leg Muscles
-    'EMG_Channels_EMG02_L_gastro_med': ['fdl_l', 'fhl_l', 'gasmed_l', 'gaslat_l', 'perbrev_l', 'perlong_l', 'soleus_l', 'tibpost_l'],
-    'EMG_Channels_EMG05_L_rect_fem': ['recfem_l', 'sart_l', 'tfl_l'],
-    'EMG_Channels_EMG06_L_vast_med': ['vaslat_l', 'vasmed_l', 'vasint_l'],
-    'EMG_Channels_EMG07_L_semitend': ['bflh_l', 'bfsh_l', 'semimem_l', 'semiten_l'],
-    'EMG_Channels_EMG08_L_glut_med': ['glmed1_l', 'glmed2_l', 'glmed3_l'],
-
-    # Right Leg Muscles
-    'EMG_Channels_EMG10_R_gastro_med': ['fdl_r', 'fhl_r', 'gasmed_r', 'gaslat_r', 'perbrev_r', 'perlong_r', 'soleus_r', 'tibpost_r'],
-    'EMG_Channels_EMG13_R_rect_fem': ['recfem_r', 'sart_r', 'tfl_r'],
-    'EMG_Channels_EMG14_R_vast_med': ['vaslat_r', 'vasmed_r', 'vasint_r'],
-    'EMG_Channels_EMG15_R_semitend': ['bflh_r', 'bfsh_r', 'semimem_r', 'semiten_r'],
-    'EMG_Channels_EMG16_R_glut_med': ['glmed1_r', 'glmed2_r', 'glmed3_r']
-}
-
-DOFs_moments = {}
-Muscle_Groups = {}
-JCF_Groups = {}
-plot = {}
-model_config = {}
-
-# ============================================================================
-# C3D EXPORT DEFAULTS - USED BY GUI BATCH EXPORT
-# ============================================================================
-BATCH_C3D_EMG_LABEL_DEFAULT = "Voltage"
-BATCH_C3D_EMG_LOWPASS_DEFAULT = "500"
-BATCH_C3D_EMG_HIGHPASS_DEFAULT = "10"
-BATCH_C3D_EMG_NOTCH_DEFAULT = "50"
-emg_string_list = ["EMG", "Voltage", "muscle"]
-
-# ============================================================================
 # BATCH SETTINGS
 # ============================================================================
 class BatchSettings:
@@ -69,9 +24,42 @@ class BatchSettings:
     generic_model = os.path.join(MODELS_DIR, 'Catelli-V4.0_pyCGM_pelvis.osim')
     markerset = os.path.join(SETUP_DIR, "markers.xml")
     static_trial_name = 'static_01'
+    trials_to_skip: list = ['static']
 
     auto_create_dirs = True
     replace_existing = True
+
+    # DEGREES OF FREEDOM — single canonical list used across IK, ID, MA, and CEINMS
+    dof_list = [
+        'hip_flexion_l', 'hip_flexion_r',
+        'hip_adduction_l', 'hip_adduction_r',
+        'hip_rotation_l', 'hip_rotation_r',
+        'knee_angle_l', 'knee_angle_r',
+        'ankle_angle_l', 'ankle_angle_r',
+    ]
+
+    # MARKER WEIGHTS for model scaling
+    marker_weights = {
+        'pelvis': 10.0,
+        'femur_r': 1.0, 'tibia_r': 1.0, 'talus_r': 1.0, 'calcn_r': 2.0, 'toes_r': 2.0,
+        'femur_l': 1.0, 'tibia_l': 1.0, 'talus_l': 1.0, 'calcn_l': 2.0, 'toes_l': 2.0,
+    }
+
+    # EMG CHANNEL → OPENSIM MUSCLE MAPPING (used for C3D export and plotting)
+    emg_muscle_mapping = {
+        # Left Leg
+        'EMG_Channels_EMG02_L_gastro_med': ['fdl_l', 'fhl_l', 'gasmed_l', 'gaslat_l', 'perbrev_l', 'perlong_l', 'soleus_l', 'tibpost_l'],
+        'EMG_Channels_EMG05_L_rect_fem':   ['recfem_l', 'sart_l', 'tfl_l'],
+        'EMG_Channels_EMG06_L_vast_med':   ['vaslat_l', 'vasmed_l', 'vasint_l'],
+        'EMG_Channels_EMG07_L_semitend':   ['bflh_l', 'bfsh_l', 'semimem_l', 'semiten_l'],
+        'EMG_Channels_EMG08_L_glut_med':   ['glmed1_l', 'glmed2_l', 'glmed3_l'],
+        # Right Leg
+        'EMG_Channels_EMG10_R_gastro_med': ['fdl_r', 'fhl_r', 'gasmed_r', 'gaslat_r', 'perbrev_r', 'perlong_r', 'soleus_r', 'tibpost_r'],
+        'EMG_Channels_EMG13_R_rect_fem':   ['recfem_r', 'sart_r', 'tfl_r'],
+        'EMG_Channels_EMG14_R_vast_med':   ['vaslat_r', 'vasmed_r', 'vasint_r'],
+        'EMG_Channels_EMG15_R_semitend':   ['bflh_r', 'bfsh_r', 'semimem_r', 'semiten_r'],
+        'EMG_Channels_EMG16_R_glut_med':   ['glmed1_r', 'glmed2_r', 'glmed3_r'],
+    }
 
     # C3D EXPORT SETTINGS
     emg_label_default = "Voltage"
@@ -105,18 +93,17 @@ class BatchSettings:
     c3d_markers_height = 40
 
     # ANALYSIS PIPELINE - OPENSIM
-    enable_c3d_export = False
-    enable_scale_model = False
+    enable_c3d_export = True
+    enable_scale_model = True
     enable_muscle_scaling = False
     muscle_force_factor = 3
-    enable_inverse_kinematics = False
-    enable_inverse_dynamics = False
-    enable_static_optimization = False
-    enable_muscle_analysis = False
+    enable_inverse_kinematics = True
+    enable_inverse_dynamics = True
+    enable_static_optimization = True
+    enable_muscle_analysis = True
 
     # session-amplitude-normalise EMG after C3D export
-    enable_emg_normalise      = False
-    trials_to_skip: list = ['static']
+    enable_emg_normalise      = True
 
     @property
     def results_dir(self) -> Path:
@@ -163,13 +150,9 @@ class CEINMSSettings:
     betas  = '1 10'
     gammas = '1 10 100 500 1000 1500 2000 3000 4000 5000'
 
-    # Degrees of freedom included in the CEINMS model
-    dof_set = (
-        'hip_flexion_r hip_adduction_r hip_rotation_r '
-        'knee_angle_r ankle_angle_r '
-        'hip_flexion_l hip_adduction_l hip_rotation_l '
-        'knee_angle_l ankle_angle_l'
-    )
+    # Degrees of freedom included in the CEINMS model (derived from BatchSettings.dof_list,
+    # excluding pelvis DOFs which have no muscle crossings)
+    dof_set = ' '.join(d for d in BatchSettings.dof_list if 'pelvis' not in d)
 
     # --- Muscle parameter bounds (calibration) ---
     c1                   = '-0.99 -0.05'
@@ -244,6 +227,9 @@ class UISettings:
     sidebar_weight = 1
     content_weight = 3
 
+    # Default tab shown on launch (must match a key in main_window tab_definitions)
+    DEFAULT_TAB_ON_LAUNCH = "Session Analysis"
+
 
 # ============================================================================
 # RECORDING SETTINGS
@@ -259,6 +245,13 @@ class RecordingSettings:
 
     auto_name = True
     output_format = "mp4"
+
+    # Recording tab defaults
+    OUTPUT_DIR_TEMPLATE = r'C:\Recordings'
+    DEFAULT_DURATION_SECONDS = 30
+    DEFAULT_VIDEO_SOURCE = "webcam"
+    IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"
+    DEFAULT_OSIM_MODEL = ""
 
 
 # ============================================================================

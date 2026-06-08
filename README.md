@@ -1,4 +1,4 @@
-# msk_modelling_python (pre-release)
+# msk_modelling_python v0.4.0
 
 A Python package for musculoskeletal modelling.
 
@@ -31,11 +31,10 @@ https://github.com/basgoncalves
 
 ### Pip installation (works for python 3.8)
 (for later versions try [OpenSim using Conda](https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python))
-https://pypi.org/project/msk-modelling-python/0.0.13/ 
+https://pypi.org/project/msk-modelling-python/0.4.0/ 
 
 #### Activate your Virtual Environment**
-you can use 
-[Python](https://docs.python.org/3/library/venv.html) or [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) 
+you can use [Python](https://docs.python.org/3/library/venv.html) or [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) 
 ```sh
 cd <your project folder>
 python -m venv msk
@@ -56,19 +55,15 @@ uv pip install msk-modelling-python
 ```
 
 #### Test usage
-``` cmd
-if not exist test.py type nul > test.py
-```
-``` python
-python test.py
-import msk_modelling_python as msk
-msk.bops.greet()
+
+This launches the GUI. 
+```cmd
+python -m msk_modelling_python
 ```
 
-#### Install opensim 
-```python
-import msk_modelling_python as msk
-msk.install_opensim.run()
+To run in batch mode:
+```cmd
+python -m msk_modelling_python -b msk_modelling_python/settings.py
 ```
 
 
@@ -129,31 +124,33 @@ msk.install_opensim.run()
      pip install -r requirements.txt
      ```
 ---
-7. **Testing msk_modelling_python (in python)**
-     ```python
-     import msk_modelling_python as msk
-     msk.run_bops()
+7. **Launch msk_modelling_python**
+     ```cmd
+     python -m msk_modelling_python
      ```
-     Note: to change the performance of msk.run_bops() edit the settings file in .\msk_modelling_python\src\bops\settings.json
+     Note: to configure batch processing, edit `msk_modelling_python\settings.py` (see `BatchSettings` and `CEINMSSettings` classes)
 ---
 8. **Basic Usage**
-     ```python
-     import msk_modelling_python as msk
 
-     # export c3d
-     c3d_file_path = r'path\to\your\file.c3d'
-     msk.bops.export_c3d(c3d_file_path)
-
-     # run IK
-     trial = msk.Project
+     **GUI mode (default):**
+     ```cmd
+     python -m msk_modelling_python
      ```
+
+     **Batch mode** — configure `msk_modelling_python\settings.py` first, then:
+     ```cmd
+     python -m msk_modelling_python -b msk_modelling_python/settings.py
+     ```
+
+     Key settings to configure in `settings.py`:
+     
 ---
 9. **Use Example Scripts**
      Use example scripts in the "ExampleScripts" directory to get started with common tasks and workflows.
 
 ---
 
-This package includes a combination of other packages and custom functions to manipulate and analyze biomechanical data. Inspired by the MATLAB version of BOPS (Batch OpenSim Processing Scripts) - [BOPS](https://simtk.org/projects/bops/)
+This package includes a combination of other packages and custom functions to manipulate and analyze biomechanical data. Originally inspired by the MATLAB version of BOPS (Batch OpenSim Processing Scripts) - [BOPS](https://simtk.org/projects/bops/)
 
 ## Tools to be Included:
 - **BTK**  
@@ -176,26 +173,36 @@ This package includes a combination of other packages and custom functions to ma
 
 ## Code Structure
 
-1. **msk_modelling_python**
-     This is the main package including all the modules needed for msk modelling, stats, data_processing, etc. This package contains subpackages that can be used independently.
+1. **msk_modelling_python** — main package entry point; run with `python -m msk_modelling_python`
 
-2. **bops**
-     Batch Opensim Processing Software  
-     Package with functions and classes to use Opensim, CEINMS, stats, and others for easier processing.
+2. **settings.py** — central configuration file; edit `BatchSettings`, `CEINMSSettings`, `UISettings`, and `RecordingSettings` classes to control all pipeline behaviour
 
-3. **__main__** 
-    
+3. **gui/** — PyQt-based graphical interface (launched by default); widgets for batch processing, C3D export, EMG, CEINMS calibration, and results viewing
+
+4. **utils/** — core processing functions: OpenSim (IK, ID, SO, MA), CEINMS, EMG normalisation, model scaling, C3D export, and XML helpers
+
+5. **core/** — session and analysis runner logic used by both GUI and batch modes
+
+6. **config/** — config manager for loading/saving settings
+
+7. **record/** — video recording and camera utilities for motion capture sessions
+
+
 
 ---
 
 ## Examples
 
-Find examples under ".\example_data\example_modules".
+Launch the GUI for interactive use:
+```cmd
+python -m msk_modelling_python
+```
 
-**Workflow Examples**: See `example_data/workflow_example.py` for complete pipeline examples including:
-- OpenSim analysis pipelines (IK -> ID -> SO -> JRA)
-- Batch processing workflows
-- Data processing pipelines
+For scripted/batch pipelines, configure `msk_modelling_python\settings.py` and run:
+```cmd
+python -m msk_modelling_python -b msk_modelling_python/settings.py
+```
+The pipeline supports: C3D export → model scaling → IK → ID → SO → muscle analysis → CEINMS calibration → CEINMS execution.
 
 ---
 
@@ -225,7 +232,22 @@ Goncalves, B. A. M. et al. -2023- Gait Posture 106, S68
 
 Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
+## Version updates 0.0.17
+
+- Version bump with new images and path adjustments in classes
+
+## Version updates 0.0.20
+
+- Attempted CEINMS2 integration via pip packaging
+
 ## Version updates 0.3.6
 
-- update utils
+- Updated utils
+- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
+
+## Version updates 0.4.0
+
+- Improved app and batch processing with new settings and GUI entry point
+- Cleaned up stale files and moved CEINMS settings
+- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
 

@@ -1,0 +1,21 @@
+[GUI] Importing main_window...
+2026-06-09 00:02:37 - INFO - [GUI] Importing main_window...
+2026-06-09 00:02:38 - INFO - [GUI] Starting GUI...
+2026-06-09 00:02:38 - ERROR - [GUI] Crashed: type object 'UISettings' has no attribute 'DEFAULT_TAB_ON_LAUNCH'
+2026-06-09 00:02:38 - ERROR - Traceback (most recent call last):
+  File "C:\Git\msk_modelling_python\msk_modelling_python\__main__.py", line 294, in run_gui_mode
+    gui_main()
+    ~~~~~~~~^^
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 585, in main
+    app = MainWindow(fullscreen=fullscreen)
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 122, in __init__
+    self._setup_ui()
+    ~~~~~~~~~~~~~~^^
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 290, in _setup_ui
+    self._create_main_area()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 387, in _create_main_area
+    default_tab = UISettings.DEFAULT_TAB_ON_LAUNCH
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'UISettings' has no attribute 'DEFAULT_TAB_ON_LAUNCH'
+

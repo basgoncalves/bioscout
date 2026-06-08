@@ -52,8 +52,16 @@ from gui.widgets.results_viewer import ResultsViewerTab
 from gui.widgets.logs import LogsTab
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
 from gui.widgets.configuration import ConfigurationTab
-from gui.widgets.recording import RecordingTab
 from gui.widgets.console_terminal import ResizablePanelSplitter
+
+# Recording tab imports mediapipe/cv2 at module level — a native crash there
+# would kill the whole process.  Import it lazily so any failure is catchable.
+RecordingTab = None
+try:
+    from gui.widgets.recording import RecordingTab as _RecordingTab
+    RecordingTab = _RecordingTab
+except Exception as _rec_err:
+    print(f"[main_window] RecordingTab unavailable: {_rec_err}", flush=True)
 
 # Try to import libraries for better multi-monitor support
 MONITOR_DETECTION_AVAILABLE = False
@@ -106,8 +114,6 @@ class MainWindow(ctk.CTk):
         else:
             self.geometry("1400x900+0+0")
             self.minsize(1200, 700)
-            # Hide window initially so it doesn't flash on wrong screen
-            self.withdraw()
 
         try:
             self.config_manager = ConfigManager()
@@ -121,15 +127,11 @@ class MainWindow(ctk.CTk):
 
         self._setup_ui()
 
-        # Ensure window is fully opaque and properly rendered
-        self.after(10, lambda: self.attributes("-alpha", 1.0))
-
         # Force immediate rendering
         self.update_idletasks()
 
-        # Position window after it's fully initialized
+        # Reposition onto the correct monitor shortly after mainloop starts
         if not fullscreen:
-            # Bind to Map event which fires when window is first displayed
             self.bind("<Map>", self._on_window_mapped, add=True)
 
         logger.debug("Application initialized")
@@ -297,7 +299,7 @@ class MainWindow(ctk.CTk):
         title_label.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
 
         self.nav_buttons = {}
-        tabs = [
+        _all_tabs = [
             ("Recording", 1),
             ("Session Analysis", 2),
             ("C3D Export", 3),
@@ -310,6 +312,8 @@ class MainWindow(ctk.CTk):
             ("Settings", 10),
             ("Logs", 11)
         ]
+        tabs = [(name, row) for name, row in _all_tabs
+                if name != "Recording" or RecordingTab is not None]
 
         for tab_name, row in tabs:
             btn = ctk.CTkButton(
@@ -360,9 +364,11 @@ class MainWindow(ctk.CTk):
         self.tab_container.grid_rowconfigure(0, weight=1)
         self.tab_container.grid_columnconfigure(0, weight=1)
 
-        # Tab definitions for lazy loading - Recording is first (left-most position)
-        self.tab_definitions = {
-            "Recording": {"class": RecordingTab, "args": (self.config_manager, self.update_status)},
+        # Tab definitions for lazy loading
+        self.tab_definitions = {}
+        if RecordingTab is not None:
+            self.tab_definitions["Recording"] = {"class": RecordingTab, "args": (self.config_manager, self.update_status)}
+        self.tab_definitions.update({
             "Session Analysis": {"class": AnalysisControlSessionTab, "args": (self.config_manager, self.update_status)},
             "C3D Export": {"class": C3DExportTab, "args": (self.config_manager, self.update_status)},
             "Batch C3D": {"class": BatchC3DExport, "args": ()},
@@ -373,7 +379,7 @@ class MainWindow(ctk.CTk):
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
             "Settings": {"class": ConfigurationTab, "args": (self.config_manager, self.update_status)},
             "Logs": {"class": LogsTab, "args": (self.config_manager, self.update_status)},
-        }
+        })
 
         # Initialize tabs dict - will be populated on demand (lazy loading)
         self.tabs = {}
@@ -580,14 +586,24 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
         screen_x: Force window X position (for multi-monitor workaround)
         screen_y: Force window Y position (for multi-monitor workaround)
     """
-    app = MainWindow(fullscreen=fullscreen)
+    print("[main_window] Creating MainWindow...", flush=True)
+    try:
+        app = MainWindow(fullscreen=fullscreen)
+    except BaseException as e:
+        import traceback as _tb
+        print(f"[main_window] MainWindow() FAILED ({type(e).__name__}): {e}", flush=True)
+        _tb.print_exc()
+        return
+    print(f"[main_window] MainWindow created OK, state={app.state()}", flush=True)
 
     # If custom screen position provided, use it
     if screen_x is not None and screen_y is not None:
         app.after(500, lambda: app.geometry(f"1400x900+{screen_x}+{screen_y}"))
         logger.info(f"Using custom screen position: +{screen_x}+{screen_y}")
 
+    print("[main_window] Entering mainloop...", flush=True)
     app.run()
+    print("[main_window] mainloop() returned — window was closed.", flush=True)
 
 
 if __name__ == "__main__":

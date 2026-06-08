@@ -302,7 +302,7 @@ class AnalysisRunner:
 
     def _run_moment_arms(self, config: Dict[str, Any]) -> None:
         """Run moment arms step."""
-        self.analysis_obj.run_jra(analysis_type='JRA')
+        self.analysis_obj.run_jra()
 
     def _run_static_optimization(self, config: Dict[str, Any]) -> None:
         """Run static optimization step."""
@@ -310,7 +310,7 @@ class AnalysisRunner:
 
     def _run_joint_reaction_analysis(self, config: Dict[str, Any]) -> None:
         """Run joint reaction analysis step."""
-        self.analysis_obj.run_jra(analysis_type='JointReaction')
+        self.analysis_obj.run_jra()
 
     def _run_rra(self, config: Dict[str, Any]) -> None:
         """Run Residual Reduction Algorithm step."""

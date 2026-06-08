@@ -23,6 +23,25 @@ from utils.model_scaler import ModelScaler
 from utils.helpers import setup_logging
 import utils
 
+# Ensure utils.openSim is loaded — the deferred-import block at the bottom of
+# utils/__init__.py sets it, but it can silently remain None if the relative
+# import fails (circular-import race).  We guarantee it here, after all
+# top-level imports are complete.
+if getattr(utils, 'openSim', None) is None:
+    try:
+        import importlib.util as _ilu
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'utils', 'openSim.py')
+        _spec = _ilu.spec_from_file_location('utils.openSim', _p)
+        _mod = _ilu.module_from_spec(_spec)
+        sys.modules['utils.openSim'] = _mod
+        _spec.loader.exec_module(_mod)
+        utils.openSim = _mod
+        print(f"[main] utils.openSim loaded via importlib: {_mod}", flush=True)
+    except Exception as _e:
+        print(f"[main] WARNING: could not load utils.openSim: {_e}", flush=True)
+else:
+    print(f"[main] utils.openSim already loaded: {utils.openSim}", flush=True)
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -113,12 +132,15 @@ def run_batch_mode(settings_path: str) -> bool:
             logger.info("C3D EXPORT  (all trials)")
             logger.info("=" * 70)
             for trial in trial_objects:
-                if _should_skip(trial.trial, config):
+                is_static = config.static_trial_name in trial.trial
+                if _should_skip(trial.trial, config) and not is_static:
                     logger.info(f"  Skipping {trial.trial} (in trials_to_skip)")
                     continue
                 logger.info(f"  {trial.trial}")
                 _run_step(trial, "C3D export", "export_c3d")
-                _run_step(trial, "EMG filter", "run_emg_filter")
+                # Static trial only needs TRC for scaling — skip EMG processing
+                if not is_static:
+                    _run_step(trial, "EMG filter", "run_emg_filter")
 
         # ------------------------------------------------------------------ #
         # PHASE 2: MODEL SCALING  (once per session, uses static TRC)
@@ -264,8 +286,42 @@ def run_batch_mode(settings_path: str) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 def run_gui_mode() -> int:
-    from gui.main_window import main as gui_main
-    gui_main()
+    import traceback as _tb
+    _app_log = None
+    _app_log = None
+    try:
+        from utils.logger import logger as _app_log
+    except Exception:
+        pass
+
+    def _log(msg: str) -> None:
+        print(msg, flush=True)
+        if _app_log:
+            _app_log.info(msg)
+
+    def _err(msg: str) -> None:
+        print(msg, flush=True)
+        if _app_log:
+            _app_log.error(msg)
+
+    _log("[GUI] Importing main_window...")
+    try:
+        from gui.main_window import main as gui_main
+    except BaseException as e:
+        _err(f"[GUI] Import failed ({type(e).__name__}): {e}")
+        _err(_tb.format_exc())
+        return 1
+    _log("[GUI] Starting GUI...")
+    try:
+        gui_main()
+    except SystemExit as e:
+        _err(f"[GUI] sys.exit() called with code={e.code}")
+        return 1
+    except BaseException as e:
+        _err(f"[GUI] Crashed ({type(e).__name__}): {e}")
+        _err(_tb.format_exc())
+        return 1
+    _log("[GUI] GUI closed normally.")
     return 0
 
 

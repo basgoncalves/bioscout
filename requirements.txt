@@ -1,0 +1,29 @@
+# Core scientific stack
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+plotly
+
+# Data / file I/O
+pyyaml
+c3d
+packaging
+pyperclip
+
+# GUI
+customtkinter
+Pillow
+psutil
+pyautogui
+pygetwindow
+screeninfo
+
+# Video / recording (optional — needed for recording tab)
+opencv-python
+mediapipe
+
+# NOTE: opensim must be installed separately — it is not on PyPI.
+# Install via conda:  conda install -c opensim-org opensim
+# or download the Python bindings from https://simtk.org/projects/opensim
