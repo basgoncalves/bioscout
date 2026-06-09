@@ -1,4 +1,4 @@
-# msk_modelling_python v0.4.1
+# msk_modelling_python v0.4.2
 
 A Python package for musculoskeletal modelling.
 
@@ -10,6 +10,15 @@ https://github.com/basgoncalves
 ---
 
 ## Changelog
+
+### v0.4.2 (2026-06-09)
+- Fix `utils/__init__.py` truncated `emg_normalise` import block (IndentationError on startup)
+- Fix `utils/openSim.py` truncated `_Tee` class in `__main__` block (SyntaxError)
+- Fix `utils/dev.py` truncated parallel worker error handler
+- Fix `utils/__init__.py` ceinms import collision: use `importlib.util` to load `ceinms.py` explicitly, bypassing `ceinms/` binary package
+- Fix `settings.DOFs` → `settings.BatchSettings.dof_list` in `utils/__init__.py` and `utils/dev.py`
+- Fix IK NaN crash: interpolate missing marker values in TRC files before running `InverseKinematicsTool`
+- Add Video Analysis GUI tab: process pre-recorded videos to generate OpenSim MOT/TRC files
 
 ### v0.4.1 (2026-06-09)
 - Fix GUI crash on startup: `model_scaling` widget now correctly imports `marker_weights` from `BatchSettings` class instead of the deprecated module-level variable
@@ -272,4 +281,6 @@ Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 - Improved app and batch processing with new settings and GUI entry point
 - Cleaned up stale files and moved CEINMS settings
 - Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
+
+
 

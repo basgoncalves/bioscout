@@ -63,6 +63,13 @@ try:
 except Exception as _rec_err:
     print(f"[main_window] RecordingTab unavailable: {_rec_err}", flush=True)
 
+VideoAnalysisTab = None
+try:
+    from gui.widgets.video_analysis import VideoAnalysisTab as _VideoAnalysisTab
+    VideoAnalysisTab = _VideoAnalysisTab
+except Exception as _va_err:
+    print(f"[main_window] VideoAnalysisTab unavailable: {_va_err}", flush=True)
+
 # Try to import libraries for better multi-monitor support
 MONITOR_DETECTION_AVAILABLE = False
 try:
@@ -301,19 +308,21 @@ class MainWindow(ctk.CTk):
         self.nav_buttons = {}
         _all_tabs = [
             ("Recording", 1),
-            ("Session Analysis", 2),
-            ("C3D Export", 3),
-            ("Batch C3D", 4),
-            ("EMG Normalization", 5),
-            ("Model Scaling", 6),
-            ("CEINMS Calibration", 7),
-            ("Batch", 8),
-            ("Results", 9),
-            ("Settings", 10),
-            ("Logs", 11)
+            ("Video Analysis", 2),
+            ("Session Analysis", 3),
+            ("C3D Export", 4),
+            ("Batch C3D", 5),
+            ("EMG Normalization", 6),
+            ("Model Scaling", 7),
+            ("CEINMS Calibration", 8),
+            ("Batch", 9),
+            ("Results", 10),
+            ("Settings", 11),
+            ("Logs", 12)
         ]
         tabs = [(name, row) for name, row in _all_tabs
-                if name != "Recording" or RecordingTab is not None]
+                if (name != "Recording" or RecordingTab is not None)
+                and (name != "Video Analysis" or VideoAnalysisTab is not None)]
 
         for tab_name, row in tabs:
             btn = ctk.CTkButton(
@@ -368,6 +377,8 @@ class MainWindow(ctk.CTk):
         self.tab_definitions = {}
         if RecordingTab is not None:
             self.tab_definitions["Recording"] = {"class": RecordingTab, "args": (self.config_manager, self.update_status)}
+        if VideoAnalysisTab is not None:
+            self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
         self.tab_definitions.update({
             "Session Analysis": {"class": AnalysisControlSessionTab, "args": (self.config_manager, self.update_status)},
             "C3D Export": {"class": C3DExportTab, "args": (self.config_manager, self.update_status)},

@@ -1141,7 +1141,7 @@ class Analyse(settings.Inputs):
         elif forces_type == 'ceinms':
             muscle_forces = load_any_data_file(self.jra_forces_ceinms)
 
-        dofNames = settings.DOFs
+        dofNames = settings.BatchSettings.dof_list
         
         for dof_name in dofNames:
             moment_arms = load_any_data_file(os.path.join(self.path,self.ma, f"_MuscleAnalysis_MomentArm_{dof_name}.sto"))
@@ -1774,7 +1774,7 @@ class Analyse(settings.Inputs):
                         rmse_percentage_ceinms = (rmse_ceinms / (y_max - y_min)) * 100 if (y_max - y_min) != 0 else 0
                         ax.text(0.05, 0.80, f'CEINMS Activations vs EMG\nRMSE: {rmse_ceinms:.2f} (% {rmse_percentage_ceinms:.2f})\nR2: {r2_ceinms:.2f}', transform=ax.transAxes, fontsize=6, verticalalignment='top')
         
-        dofs = settings.DOFs
+        dofs = settings.BatchSettings.dof_list
         n_rows = 5
         n_cols = len(dofs)
         colors = {'externalBiomech':'blue','SO': 'green', 'CEINMS': 'red', 'EMG': 'gray'}
@@ -2186,7 +2186,7 @@ class Analyse(settings.Inputs):
         os.chdir(self.path)
         
         try:
-            dofSet = ' '.join(settings.DOFs)
+            dofSet = ' '.join(settings.BatchSettings.dof_list)
             ceinms.create_ceinms_cfg(ceinmsModelPath=self.ceinms_calibrated_model,
                                  alpha=self.alpha,
                                  beta=self.beta,
@@ -2804,7 +2804,7 @@ class Plot():
         Plots marker error for each trial on the provided axes.
         '''
         body_segments = settings.marker_weights.keys()
-        dofs = settings.DOFs
+        dofs = settings.BatchSettings.dof_list
 
 
         for trial_name, trial in self.trials.items():
@@ -2826,7 +2826,7 @@ class Plot():
 
     def external_biomechanics(self):
 
-        ik_columns = settings.DOFs
+        ik_columns = settings.BatchSettings.dof_list
         n_cols = len(ik_columns)
         n_rows = 2
         fig, ax = plt.subplots(nrows=int(n_rows), ncols=int(n_cols), figsize=(2*n_cols, 3*n_rows), sharex='col')
@@ -2976,7 +2976,7 @@ class Plot():
 
         _models_to_flip = ['Lernagopal', 'GPK']
 
-        ik_columns = settings.DOFs
+        ik_columns = settings.BatchSettings.dof_list
         n_rows = len(ik_columns)
         n_cols = len(self.trials)
         fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols,
@@ -3031,7 +3031,7 @@ class Plot():
         Output: results/moment_arms_<dof>.png
         '''
 
-        dofs = settings.DOFs
+        dofs = settings.BatchSettings.dof_list
 
         for dof in dofs:
             # --- collect moment arm data for every model ---
@@ -3132,7 +3132,7 @@ class Plot():
     def summary_errors(self):
         '''Plots summary of errors between models for each DOF'''
 
-        dofs = settings.DOFs
+        dofs = settings.BatchSettings.dof_list
         n_cols = len(dofs) + 1 # Add an extra column for the mean box plot across DOFs
         n_rows = 5 # IK errors, RMSE and r2 for both Moments and EMG 
         fig, ax = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(3*n_cols, 3*n_rows), sharex='col')
@@ -5187,10 +5187,17 @@ except (ImportError, ValueError):
         openSim = None
 
 try:
-    import ceinms as _ceinms_mod
+    # Load utils/ceinms.py explicitly — `import ceinms` would grab the
+    # utils/ceinms/ binary package instead (package takes precedence over
+    # the .py module when both share the same name).
+    import importlib.util as _ilu_c
+    _ceinms_py_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ceinms.py')
+    _ceinms_spec = _ilu_c.spec_from_file_location('ceinms_py', _ceinms_py_path)
+    _ceinms_mod = _ilu_c.module_from_spec(_ceinms_spec)
+    _ceinms_spec.loader.exec_module(_ceinms_mod)
     ceinms = _ceinms_mod
     HAS_CEINMS = True
-except ImportError:
+except Exception:
     HAS_CEINMS = False
     ceinms = None
 
@@ -5201,21 +5208,3 @@ try:
 except ImportError:
     HAS_EMG_NORMALISE = False
     emg_normalise = None
-
-if __name__ == "__main__":
-    
-    LocalFuncs = [f for f in dir() if callable(globals()[f])]
-    print("Available commands:", LocalFuncs)
-
-    # Command loop
-    while True:
-        command = input("Enter command: ").strip()
-        if command not in LocalFuncs:
-            print("Invalid command. Please try again.")
-            continue
-        try:
-            globals()[command]()
-        except Exception as e:
-            print(f"Error: {e}")
-
-        print('Done.')

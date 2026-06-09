@@ -247,8 +247,8 @@ class RecordingSettings:
     output_format = "mp4"
 
     # Recording tab defaults
-    OUTPUT_DIR_TEMPLATE = r"C:\Users\Basilio\Videos\recordings"
-    DEFAULT_DURATION_SECONDS = 5
+    OUTPUT_DIR_TEMPLATE = r'C:\Recordings'
+    DEFAULT_DURATION_SECONDS = 30
     DEFAULT_VIDEO_SOURCE = "webcam"
     IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"
     DEFAULT_OSIM_MODEL = ""

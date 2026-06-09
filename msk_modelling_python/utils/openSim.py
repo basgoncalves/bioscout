@@ -27,21 +27,7 @@ except ImportError as e:
     settings = None
 
 import utils
-
-# exportC3D imports utils, so we must NOT import it at module level
-# (would cause circular: utils -> openSim -> exportC3D -> utils)
-# Use lazy import instead — resolved on first attribute access
-exportC3D = None
-def _load_exportC3D():
-    global exportC3D
-    if exportC3D is None:
-        try:
-            import exportC3D as _ec3d
-            exportC3D = _ec3d
-        except Exception:
-            exportC3D = None
-    return exportC3D
-
+import exportC3D  # Lazy import below to avoid circular dependency
 
 def terminal_warnings(mode='off'):
     """Set OpenSim terminal warnings on or off."""
@@ -1476,67 +1462,6 @@ def export_c3d(c3d_file_path, emg_string_list=['emg'], create_folder=True):
         tuple: (success: bool, message: str)
     """
     try:
-        # Try to import exportC3D from multiple locations with fallback
-        exportC3D = None
-
-        # Try 1: From local utils folder (PRIMARY - user added it here)
-        try:
-            utils_path = Path(__file__).parent
-            if utils_path.exists():
-                sys.path.insert(0, str(utils_path))
-                import exportC3D as exp_c3d
-                exportC3D = exp_c3d
-                sys.path.pop(0)
-        except (ImportError, ModuleNotFoundError):
-            if utils_path in sys.path:
-                sys.path.remove(str(utils_path))
-
-        # Try 2: Direct import (if in PYTHONPATH)
-        if exportC3D is None:
-            try:
-                import exportC3D as exp_c3d
-                exportC3D = exp_c3d
-            except (ImportError, ModuleNotFoundError):
-                pass
-
-        # Try 3: Import from msk_modelling_python (sibling project)
-        if exportC3D is None:
-            try:
-                msk_path = Path(__file__).parent.parent.parent.parent / 'msk_modelling_python'
-                if msk_path.exists():
-                    sys.path.insert(0, str(msk_path))
-                    import exportC3D as exp_c3d
-                    exportC3D = exp_c3d
-                    if str(msk_path) in sys.path:
-                        sys.path.remove(str(msk_path))
-            except (ImportError, ModuleNotFoundError):
-                pass
-
-        # Try 4: From code directory
-        if exportC3D is None:
-            try:
-                code_path = Path(__file__).parent.parent.parent
-                if code_path.exists():
-                    sys.path.insert(0, str(code_path))
-                    import exportC3D as exp_c3d
-                    exportC3D = exp_c3d
-                    if str(code_path) in sys.path:
-                        sys.path.remove(str(code_path))
-            except (ImportError, ModuleNotFoundError):
-                pass
-
-        # If still not found, provide helpful error
-        if exportC3D is None:
-            return False, (
-                "exportC3D module not found. "
-                "Checked locations:\n"
-                f"1. Local utils folder: {Path(__file__).parent / 'exportC3D.py'}\n"
-                f"2. Python path imports\n"
-                f"3. msk_modelling_python sibling project\n"
-                f"4. Code directory: {Path(__file__).parent.parent.parent / 'exportC3D.py'}\n"
-                "Please add exportC3D.py to the utils folder or ensure it's in PYTHONPATH."
-            )
-
         # Call the export function
         exportC3D.main(
             c3d_file_path,
@@ -2643,6 +2568,40 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
         print(f"Loading IK tool from {setup_xml}")
         ikTool = osim.InverseKinematicsTool(setup_xml)
         ikTool.setModel(model)
+
+        # --- NaN interpolation: fill missing marker data before IK ---
+        # A single NaN in the TRC causes AssemblySolver to return -nan(ind)
+        # and crash with "Required condition 'goalValue >= 0' was not met."
+        try:
+            import xml.etree.ElementTree as _ET
+            import pandas as _pd
+            _tree = _ET.parse(setup_xml)
+            _mf = _tree.getroot().findtext('.//marker_file') or ''
+            # resolve relative path the same way OpenSim does (relative to cwd)
+            if _mf and not os.path.isabs(_mf):
+                _mf = os.path.join(resultsDir, _mf)
+            if _mf and os.path.isfile(_mf):
+                _trc_lines = open(_mf, 'r').readlines()
+                _header = []
+                _data_start = 0
+                for _i, _line in enumerate(_trc_lines):
+                    if _line.strip() and _line.split('\t')[0].replace('.', '', 1).lstrip('-').isdigit():
+                        _data_start = _i
+                        break
+                    _header.append(_line)
+                _df = _pd.read_csv(_mf, sep='\t', skiprows=len(_header), header=0)
+                _numeric = _df.select_dtypes(include='number')
+                _nan_count = int(_numeric.isna().sum().sum())
+                if _nan_count > 0:
+                    print(f"[IK] Interpolating {_nan_count} NaN values in TRC marker data...")
+                    _df[_numeric.columns] = _numeric.interpolate(method='linear', limit_direction='both')
+                    _df.fillna(0, inplace=True)  # fallback for columns that are entirely NaN
+                    with open(_mf, 'w') as _f:
+                        _f.writelines(_header)
+                        _df.to_csv(_f, sep='\t', index=False, lineterminator='\n')
+                    print(f"[IK] TRC NaN interpolation complete → {_mf}")
+        except Exception as _nan_e:
+            print(f"[IK] Warning: NaN interpolation step failed (continuing): {_nan_e}")
 
         # Run the inverse kinematics calculation
         print("Running inverse kinematics...")

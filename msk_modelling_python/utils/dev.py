@@ -102,7 +102,7 @@ def scale_moment_arm_based_on_emg(analysis: utils.Analyse):
         → every 10% of normalised EMG (0–1) adds a 30% increase to the moment arm at that instant.
 
         Uses settings.EMG_muscle_mapping to map each EMG channel to its muscles, and
-        settings.DOFs to determine which MomentArm .sto files to modify.
+        settings.BatchSettings.dof_list to determine which MomentArm .sto files to modify.
         EMG is interpolated onto the moment-arm time grid so mismatched sample rates are handled.
         """
         import numpy as np
@@ -115,7 +115,7 @@ def scale_moment_arm_based_on_emg(analysis: utils.Analyse):
         emg_data = utils.load_any_data_file(analysis.emg)
         emg_time = emg_data['time'].values
 
-        for dof_name in settings.DOFs:
+        for dof_name in settings.BatchSettings.dof_list:
                 ma_path = os.path.join(analysis.ma, f"_MuscleAnalysis_MomentArm_{dof_name}.sto")
                 if not os.path.exists(ma_path):
                         print(f"[skip] MomentArm file not found: {ma_path}")
@@ -196,3 +196,4 @@ if __name__ == "__main__":
 
 
 # END
+ial}] ERROR: {error}')
