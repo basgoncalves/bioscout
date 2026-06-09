@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -51,6 +51,7 @@ setup(
             '*.jpg', '*.png',
             'ceinms/*.exe', 'ceinms/*.dll', 'ceinms/*.txt',
         ],
+        'msk_modelling_python.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
         'msk_modelling_python.tests': ['*.xml'],
     },
     entry_points={

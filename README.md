@@ -1,4 +1,4 @@
-# msk_modelling_python v0.4.0
+# msk_modelling_python v0.4.1
 
 A Python package for musculoskeletal modelling.
 
@@ -6,6 +6,17 @@ A Python package for musculoskeletal modelling.
 https://ufind.univie.ac.at/de/person.html?id=1004543
 https://github.com/basgoncalves
 
+
+---
+
+## Changelog
+
+### v0.4.1 (2026-06-09)
+- Fix GUI crash on startup: `model_scaling` widget now correctly imports `marker_weights` from `BatchSettings` class instead of the deprecated module-level variable
+- Fix `batch_c3d_export` widget to read EMG defaults from `BatchSettings` attributes instead of removed module-level constants
+
+### v0.4.0
+- Batch pipeline fix, GUI stability improvements, OpenSim late-load
 
 ---
 
@@ -39,6 +50,17 @@ you can use [Python](https://docs.python.org/3/library/venv.html) or [Conda](htt
 cd <your project folder>
 python -m venv msk
 ```
+
+conda
+```sh
+conda create -n msk python=3.11
+conda activate msk
+```
+or if using miniconda
+```
+C:\ProgramData\miniconda3\Scripts\activate.bat msk
+```
+
 Note: replace 'msk' if you want a different name
 
 ```
@@ -240,14 +262,4 @@ Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
 - Attempted CEINMS2 integration via pip packaging
 
-## Version updates 0.3.6
-
-- Updated utils
-- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
-
-## Version updates 0.4.0
-
-- Improved app and batch processing with new settings and GUI entry point
-- Cleaned up stale files and moved CEINMS settings
-- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
-
+##

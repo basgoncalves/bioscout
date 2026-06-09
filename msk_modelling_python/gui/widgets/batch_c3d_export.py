@@ -19,13 +19,11 @@ from .c3d_export import C3DExportTab
 
 # Try to import Inputs class and settings from settings module
 try:
-    from settings import (
-        Inputs,
-        BATCH_C3D_EMG_LABEL_DEFAULT,
-        BATCH_C3D_EMG_LOWPASS_DEFAULT,
-        BATCH_C3D_EMG_HIGHPASS_DEFAULT,
-        BATCH_C3D_EMG_NOTCH_DEFAULT,
-    )
+    from settings import Inputs, BatchSettings
+    BATCH_C3D_EMG_LABEL_DEFAULT = BatchSettings.emg_label_default
+    BATCH_C3D_EMG_LOWPASS_DEFAULT = BatchSettings.emg_lowpass_default
+    BATCH_C3D_EMG_HIGHPASS_DEFAULT = BatchSettings.emg_highpass_default
+    BATCH_C3D_EMG_NOTCH_DEFAULT = BatchSettings.emg_notch_default
     HAS_INPUTS = True
 except ImportError:
     HAS_INPUTS = False
