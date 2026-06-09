@@ -8,7 +8,7 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).parent
 LOG_DIR = MODULE_PATH / "logs"
 MODELS_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Models'
-SESSION_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P012d'
+SESSION_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05'
 SETUP_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\setup_files'
 PROJECT_NAME = 'squatting_fais'
 
@@ -23,8 +23,8 @@ class BatchSettings:
     setup_files_folder = SETUP_DIR
     generic_model = os.path.join(MODELS_DIR, 'Catelli-V4.0_pyCGM_pelvis.osim')
     markerset = os.path.join(SETUP_DIR, "markers.xml")
-    static_trial_name = 'static_01'
-    trials_to_skip: list = ['static']
+    static_trial_name = 'static01'
+    trials_to_skip: list = []
 
     auto_create_dirs = True
     replace_existing = True
@@ -100,10 +100,10 @@ class BatchSettings:
     enable_inverse_kinematics = True
     enable_inverse_dynamics = True
     enable_static_optimization = True
-    enable_muscle_analysis = True
+    enable_muscle_analysis = False
 
     # session-amplitude-normalise EMG after C3D export
-    enable_emg_normalise      = True
+    enable_emg_normalise      = False
 
     @property
     def results_dir(self) -> Path:

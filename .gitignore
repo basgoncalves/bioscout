@@ -13,7 +13,6 @@ test_env/
 build/
 example_data/
 torch_cpu.dll
-torch_cpu.zip
 
 # Stale root-level files left over from old package structure
 msk_modelling_python/bops.py
@@ -34,3 +33,8 @@ msk_modelling_python/executables/
 msk_modelling_python/src/
 log.txt
 cleanup_and_commit.ps1
+
+# Logs
+logs/
+*.log
+msk_modelling_python/logs/

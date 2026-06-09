@@ -1,3 +1,2 @@
-include msk_modelling_python/src/platypus.jpg
-include msk_modelling_python/src/platypus_sad.jpg
-recursive-include msk_modelling_python/ceinms2 *
+recursive-include msk_modelling_python/utils/ceinms *.exe *.dll *.txt
+recursive-include msk_modelling_python/config *.yaml *.xml

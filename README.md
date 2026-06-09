@@ -262,4 +262,14 @@ Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
 - Attempted CEINMS2 integration via pip packaging
 
-##
+## Version updates 0.3.6
+
+- Updated utils
+- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
+
+## Version updates 0.4.0
+
+- Improved app and batch processing with new settings and GUI entry point
+- Cleaned up stale files and moved CEINMS settings
+- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
+
