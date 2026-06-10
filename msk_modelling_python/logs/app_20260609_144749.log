@@ -1,0 +1,21 @@
+[main] utils.openSim loaded via importlib: <module 'utils.openSim' from 'C:\\Git\\msk_modelling_python\\msk_modelling_python\\utils\\openSim.py'>
+[GUI] Importing main_window...
+2026-06-09 14:47:49 - INFO - [GUI] Importing main_window...
+[GUI] Starting GUI...
+2026-06-09 14:47:50 - INFO - [GUI] Starting GUI...
+[main_window] Creating MainWindow...
+2026-06-09 14:47:50 - INFO - Tab created successfully: Session Analysis
+2026-06-09 14:47:51 - INFO - Tab created successfully: Recording
+2026-06-09 14:47:52 - INFO - Tab created successfully: Video Analysis
+2026-06-09 14:47:53 - INFO - Tab created successfully: C3D Export
+2026-06-09 14:47:53 - INFO - Tab created successfully: Batch C3D
+2026-06-09 14:47:54 - INFO - Tab created successfully: EMG Normalization
+2026-06-09 14:47:54 - INFO - Tab created successfully: Model Scaling
+2026-06-09 14:47:54 - INFO - Tab created successfully: CEINMS Calibration
+2026-06-09 14:47:54 - INFO - Tab created successfully: Batch
+2026-06-09 14:48:01 - INFO - Tab created successfully: Results
+2026-06-09 14:48:02 - INFO - Tab created successfully: Settings
+2026-06-09 14:48:02 - INFO - Tab created successfully: Logs
+2026-06-09 14:48:31 - INFO - Status: Analysing video… (info)
+2026-06-09 14:49:21 - INFO - Status: Analysis complete (info)
+2026-06-09 14:52:29 - INFO - Application closed

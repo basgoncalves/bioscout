@@ -68,7 +68,9 @@ try:
     from gui.widgets.video_analysis import VideoAnalysisTab as _VideoAnalysisTab
     VideoAnalysisTab = _VideoAnalysisTab
 except Exception as _va_err:
+    import traceback as _tb
     print(f"[main_window] VideoAnalysisTab unavailable: {_va_err}", flush=True)
+    _tb.print_exc()
 
 # Try to import libraries for better multi-monitor support
 MONITOR_DETECTION_AVAILABLE = False

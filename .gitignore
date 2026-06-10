@@ -27,14 +27,17 @@ msk_modelling_python/exportC3D.py
 msk_modelling_python/settings.json
 msk_modelling_python/error_log.txt
 msk_modelling_python/log.txt
+msk_modelling_python/utils/log.txt
+*.task
+*.pt
+
+# Runtime outputs — recordings, exports, temp files
+msk_modelling_python/outputs/
+outputs/
+*.mp4
+*.wav
+*.mp3
+*.kdenlive
 msk_modelling_python/requirements.txt
 msk_modelling_python/app/
-msk_modelling_python/executables/
-msk_modelling_python/src/
-log.txt
-cleanup_and_commit.ps1
-
-# Logs
-logs/
-*.log
-msk_modelling_python/logs/
+msk_mod

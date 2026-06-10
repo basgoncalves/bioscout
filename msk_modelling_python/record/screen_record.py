@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import threading
 import tkinter as tk
+from tkinter import ttk
 import ctypes
 
 
@@ -28,6 +29,7 @@ class ScreenRecorder:
         self._btn_start = None
         self._btn_stop = None
         self._fps_var = None
+        self._audio_var = None  # StringVar: 'Off' / 'System audio' / 'Microphone'
 
     # ------------------------------------------------------------------ #
     #  Virtual screen helpers                                              #
@@ -165,8 +167,7 @@ class ScreenRecorder:
         """Recording loop — runs in a daemon background thread."""
         left, top, width, height = self.area
 
-        # Use app's output directory
-        output_dir = Path(__file__).parent.parent / "outputs"
+        output_dir = Path.home() / "Videos"
         output_dir.mkdir(exist_ok=True)
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -176,6 +177,48 @@ class ScreenRecorder:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
+        audio_stream = None
+        audio_data = []
+        audio_samplerate = 44100
+        audio_source = self._audio_var.get()
+
+        if audio_source != 'Off':
+            try:
+                import sounddevice as sd
+
+                def _audio_cb(indata, _frames, _time, _status):
+                    audio_data.append(indata.copy())
+
+                if audio_source == 'System audio':
+                    # WASAPI loopback — captures whatever is playing on the default output
+                    out_idx = sd.default.device[1]
+                    out_info = sd.query_devices(out_idx)
+                    audio_samplerate = int(out_info['default_samplerate'])
+                    audio_stream = sd.InputStream(
+                        device=out_idx,
+                        samplerate=audio_samplerate,
+                        channels=2,
+                        dtype='float32',
+                        callback=_audio_cb,
+                        extra_settings=sd.WasapiSettings(loopback=True))
+                else:  # Microphone
+                    in_idx = sd.default.device[0]
+                    in_info = sd.query_devices(in_idx)
+                    audio_samplerate = int(in_info['default_samplerate'])
+                    channels = min(2, max(1, int(in_info['max_input_channels'])))
+                    audio_stream = sd.InputStream(
+                        samplerate=audio_samplerate,
+                        channels=channels,
+                        dtype='float32',
+                        callback=_audio_cb)
+
+                audio_stream.start()
+            except ImportError:
+                self.root.after(0, self._status_var.set,
+                                "Audio unavailable — pip install sounddevice")
+            except Exception as exc:
+                self.root.after(0, self._status_var.set, f"Audio error: {exc}")
+
         try:
             while self.recording:
                 img = pyautogui.screenshot(region=(left, top, width, height))
@@ -183,9 +226,67 @@ class ScreenRecorder:
                 out.write(frame)
         finally:
             out.release()
+            if audio_stream is not None:
+                audio_stream.stop()
+                audio_stream.close()
 
-        # Marshal UI update back onto the main thread
-        self.root.after(0, self._on_recording_done, output_path)
+        final_path = output_path
+        if audio_data:
+            self.root.after(0, self._status_var.set, "Merging audio…")
+            wav_path = output_dir / f"screen_record_{ts}_audio.wav"
+            self._write_wav(wav_path, audio_data, audio_samplerate)
+            merged_path = output_dir / f"screen_record_{ts}_final.mp4"
+            if self._merge_audio_video(output_path, wav_path, merged_path):
+                output_path.unlink(missing_ok=True)
+                wav_path.unlink(missing_ok=True)
+                final_path = merged_path
+            else:
+                # no merger available — keep WAV alongside video
+                wav_path.replace(output_dir / f"screen_record_{ts}.wav")
+
+        self.root.after(0, self._on_recording_done, final_path)
+
+    @staticmethod
+    def _write_wav(path, audio_data, samplerate):
+        """Write captured float32 audio chunks to a 16-bit WAV file."""
+        import wave
+        audio_array = np.concatenate(audio_data, axis=0)
+        audio_int16 = (np.clip(audio_array, -1.0, 1.0) * 32767).astype(np.int16)
+        channels = audio_array.shape[1] if audio_array.ndim > 1 else 1
+        with wave.open(str(path), 'wb') as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(samplerate)
+            wf.writeframes(audio_int16.tobytes())
+
+    @staticmethod
+    def _merge_audio_video(video_path, wav_path, out_path):
+        """Merge silent video with WAV audio. Returns True on success."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['ffmpeg', '-y',
+                 '-i', str(video_path), '-i', str(wav_path),
+                 '-c:v', 'copy', '-c:a', 'aac', '-shortest',
+                 str(out_path)],
+                capture_output=True, timeout=300)
+            if result.returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            from moviepy.editor import VideoFileClip, AudioFileClip
+            video = VideoFileClip(str(video_path))
+            audio = AudioFileClip(str(wav_path))
+            video.set_audio(audio).write_videofile(str(out_path), logger=None)
+            video.close()
+            audio.close()
+            return True
+        except ImportError:
+            pass
+
+        return False
 
     def _on_recording_done(self, path):
         """Handle completion of recording."""
@@ -329,7 +430,7 @@ class ScreenRecorder:
         def browse():
             p = filedialog.askopenfilename(
                 title="Select video", parent=dlg,
-                initialdir=str((Path(__file__).parent.parent / "outputs").resolve()),
+                initialdir=str(Path.home() / "Videos"),
                 filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")])
             if p:
                 file_var.set(p)
@@ -458,104 +559,3 @@ class ScreenRecorder:
                              state=tk.DISABLED, bg='#1565c0', fg='white',
                              activebackground='#0d47a1', activeforeground='white')
         trim_btn.pack(side='left', padx=6)
-        tk.Button(act, text="Close", width=8,
-                  command=lambda: (_release(), dlg.destroy())).pack(side='left', padx=6)
-
-        dlg.protocol("WM_DELETE_WINDOW", lambda: (_release(), dlg.destroy()))
-
-    def _do_trim(self, in_path, start_s, end_s, out_path, status_var, btn):
-        """Trim in_path [start_s, end_s) and write to out_path (background thread)."""
-        cap = cv2.VideoCapture(str(in_path))
-        fps   = cap.get(cv2.CAP_PROP_FPS) or 20.0
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        start_f = int(start_s * fps)
-        end_f   = int(end_s * fps) if end_s is not None else total
-        end_f   = min(end_f, total)
-
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
-        try:
-            for _ in range(max(0, end_f - start_f)):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                out.write(frame)
-        finally:
-            cap.release()
-            out.release()
-
-        self.root.after(0, status_var.set, f"Saved → {out_path.name}")
-        self.root.after(0, btn.config, {'state': tk.NORMAL})
-
-    def _on_quit(self):
-        """Quit the recorder."""
-        self.recording = False
-        self._hide_area_overlay()
-        self.root.destroy()
-
-    # ------------------------------------------------------------------ #
-    #  Main entry point                                                    #
-    # ------------------------------------------------------------------ #
-    def run(self):
-        """Launch the screen recorder control panel."""
-        self.root = tk.Tk()
-        self.root.title("Screen Recorder")
-        self.root.resizable(False, False)
-        self.root.attributes('-topmost', True)
-
-        self._area_label_var = tk.StringVar(value="No area selected")
-        self._status_var     = tk.StringVar(value="Select an area to begin")
-
-        pad = dict(padx=12, pady=5)
-
-        tk.Label(self.root, textvariable=self._area_label_var,
-                 font=('Arial', 10, 'bold')).pack(**pad)
-
-        # FPS row
-        fps_frame = tk.Frame(self.root)
-        fps_frame.pack(padx=12, pady=(0, 2))
-        tk.Label(fps_frame, text="FPS:", font=('Arial', 9)).pack(side=tk.LEFT)
-        self._fps_var = tk.StringVar(value='20')
-        fps_spin = tk.Spinbox(fps_frame, textvariable=self._fps_var,
-                              values=(5, 10, 15, 20, 24, 30, 60),
-                              width=5, font=('Arial', 9), state='readonly')
-        fps_spin.pack(side=tk.LEFT, padx=4)
-
-        btn_frame = tk.Frame(self.root)
-        btn_frame.pack(padx=12, pady=4)
-
-        tk.Button(btn_frame, text="Select Area", width=13,
-                  command=self._on_select).grid(row=0, column=0, padx=4)
-
-        self._btn_start = tk.Button(btn_frame, text="▶  Start", width=11,
-                                    state=tk.DISABLED, command=self._on_start,
-                                    bg='#2e7d32', fg='white',
-                                    activebackground='#1b5e20', activeforeground='white')
-        self._btn_start.grid(row=0, column=1, padx=4)
-
-        self._btn_stop = tk.Button(btn_frame, text="■  Stop", width=11,
-                                   state=tk.DISABLED, command=self._on_stop,
-                                   bg='#c62828', fg='white',
-                                   activebackground='#7f0000', activeforeground='white')
-        self._btn_stop.grid(row=0, column=2, padx=4)
-
-        tk.Button(btn_frame, text="Quit", width=8,
-                  command=self._on_quit).grid(row=0, column=3, padx=4)
-
-        tk.Button(btn_frame, text="✂  Trim Video", width=15,
-                  command=self._on_trim).grid(row=1, column=0, columnspan=4, pady=(6, 0))
-
-        tk.Label(self.root, textvariable=self._status_var,
-                 font=('Arial', 9), fg='gray').pack(**pad)
-
-        self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
-        self.root.mainloop()
-
-
-if __name__ == "__main__":
-    recorder = ScreenRecorder()
-    recorder.run()

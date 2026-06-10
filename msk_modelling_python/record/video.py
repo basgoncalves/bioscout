@@ -54,6 +54,7 @@ _LANDMARK_NAMES = [
 ]
 
 MODULE_DIR = os.path.dirname(__file__)
+MODELS_DIR = os.path.join(os.path.dirname(MODULE_DIR), 'models')
 # ======================================================================
 # Model configuration
 # ======================================================================
@@ -113,7 +114,7 @@ class MotModelConfig:
 # Coordinates: r_shoulder_elev, r_elbow_flex + 6 ball DOFs
 ARM26_BALL_CONFIG = MotModelConfig(
     name='arm26_ball',
-    osim_path=os.path.join(MODULE_DIR, 'arm26_ball.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'arm26_ball.osim'),
     angle_columns=[
         # (col_name, lm_a, lm_vertex, lm_b, offset, clip_min, clip_max)
         ('r_shoulder_elev', 'right_hip',      'right_shoulder', 'right_elbow', 180, 0, 180),
@@ -136,7 +137,7 @@ ARM26_BALL_CONFIG = MotModelConfig(
 #   plus lumbar / cervical / thorax DOFs
 FULL_BODY_CONFIG = MotModelConfig(
     name='full_body_with_ball',
-    osim_path=os.path.join(MODULE_DIR, 'Full_Body_with_ball.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'Full_Body_with_ball.osim'),
     angle_columns=[
         # ---------------- Right arm ----------------
         ('arm_flex_r',    'right_hip',      'right_shoulder', 'right_elbow',      180, -90, 180),
@@ -172,7 +173,7 @@ FULL_BODY_CONFIG = MotModelConfig(
 
 NECK_MODEL_CONFIG = MotModelConfig(
     name='Neck_model',
-    osim_path=os.path.join(MODULE_DIR, 'Neck_model.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'Neck_model.osim'),
     angle_columns=[
         # Head flexion/extension: nose relative to shoulders
         ('head_flexion',      'right_shoulder',  'nose',            'left_shoulder',   90, -45,  45),
@@ -193,44 +194,62 @@ NECK_MODEL_CONFIG = MotModelConfig(
 )
 
 # GPK_generic.osim — Lower body + lumbar spine (pelvis, hips, knees, ankles, lumbar)
+#
+# "midpoint_hips" and "midpoint_shoulders" are synthetic landmarks computed
+# on-the-fly in write_opensim_mot() as the average of the left/right pair.
+# Pelvis translations are approximated from pixel position scaled to metres.
 GPK_GENERIC_CONFIG = MotModelConfig(
     name='GPK_generic',
-    osim_path=os.path.join(MODULE_DIR, 'GPK_generic.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'GPK_generic.osim'),
     angle_columns=[
-        # Pelvis (6 DOF) - extract from pose landmarks
-        ('pelvis_tilt',        'right_hip',       'left_hip',        'midpoint_hips',   90, -45, 45),
-        ('pelvis_list',        'right_hip',       'midpoint_hips',   'left_hip',        90, -30, 30),
-        ('pelvis_rotation',    'right_hip',       'right_knee',      'left_knee',       0, -90, 90),
-        # Pelvis translation (set to 0 for now - would need marker data)
-        ('pelvis_tx',          'right_hip',       'right_hip',       'right_hip',       0, -1, 1),    # dummy
-        ('pelvis_ty',          'right_hip',       'right_hip',       'right_hip',       0, -1, 1),    # dummy
-        ('pelvis_tz',          'right_hip',       'right_hip',       'right_hip',       0, -1, 1),    # dummy
+        # Pelvis orientation (3 DOF) — 2-D approximations from sagittal view
+        # tilt  : forward tilt of trunk — shoulder-to-hip angle vs vertical
+        ('pelvis_tilt',        'right_shoulder',  'right_hip',       'right_knee',      180, -45,  45),
+        # list  : lateral lean — left-hip to right-hip tilt
+        ('pelvis_list',        'right_hip',       'midpoint_hips',   'left_hip',         90, -30,  30),
+        # rotation: approximated as 0 (requires 3-D depth information)
+        ('pelvis_rotation',    'right_shoulder',  'right_hip',       'left_hip',          0, -30,  30),
+        # Pelvis translation — encoded as synthetic columns; resolved in writer
+        ('pelvis_tx',          '_pelvis_tx_',     '_pelvis_tx_',     '_pelvis_tx_',       0, -15,  15),
+        ('pelvis_ty',          '_pelvis_ty_',     '_pelvis_ty_',     '_pelvis_ty_',       0,  -1,   2),
+        ('pelvis_tz',          'right_hip',       'left_hip',        'right_shoulder',    0,  -1,   1),
         # Right hip (3 DOF)
-        ('hip_flexion_r',      'right_hip',       'right_knee',      'right_ankle',     180, -30, 120),
-        ('hip_adduction_r',    'right_hip',       'right_knee',      'left_hip',        90, -30, 30),
-        ('hip_rotation_r',     'right_hip',       'right_knee',      'right_shoulder',  0, -90, 90),
+        # flexion: thigh angle relative to trunk  (shoulder→hip→knee)
+        ('hip_flexion_r',      'right_shoulder',  'right_hip',       'right_knee',       180, -30, 120),
+        # adduction: in-plane medial/lateral (hip→knee relative to pelvis width)
+        ('hip_adduction_r',    'left_hip',        'right_hip',       'right_knee',        90, -30,  30),
+        # rotation: set to 0 (not reliably estimated from 2-D)
+        ('hip_rotation_r',     'right_shoulder',  'right_hip',       'left_hip',           0, -40,  40),
         # Right knee (2 DOF)
-        ('knee_angle_r',       'right_hip',       'right_knee',      'right_ankle',     180, 0, 150),
-        ('knee_adduction_r',   'right_knee',      'right_ankle',     'left_knee',       90, -30, 30),
+        # flexion: thigh-to-shank angle  (hip→knee→ankle)
+        ('knee_angle_r',       'right_hip',       'right_knee',      'right_ankle',      180,   0, 150),
+        # adduction: approximate from coronal projection
+        ('knee_adduction_r',   'left_knee',       'right_knee',      'right_ankle',       90, -20,  20),
         # Right ankle (3 DOF)
-        ('ankle_angle_r',      'right_knee',      'right_ankle',     'right_foot_index', 90, -40, 30),
-        ('subtalar_angle_r',   'right_ankle',     'right_foot_index','right_heel',      0, -20, 20),
-        ('mtp_angle_r',        'right_foot_index','right_heel',      'right_foot_index', 90, -30, 30),
+        # dorsiflexion: shank-to-foot angle  (knee→ankle→foot_index)
+        ('ankle_angle_r',      'right_knee',      'right_ankle',     'right_foot_index',  90, -40,  30),
+        # subtalar: heel-to-toe relative to shank
+        ('subtalar_angle_r',   'right_ankle',     'right_heel',      'right_foot_index',   0, -20,  20),
+        # mtp: toe angle (ankle→heel→foot_index)
+        ('mtp_angle_r',        'right_ankle',     'right_heel',      'right_foot_index',  90, -20,  20),
         # Left hip (3 DOF)
-        ('hip_flexion_l',      'left_hip',        'left_knee',       'left_ankle',      180, -30, 120),
-        ('hip_adduction_l',    'left_hip',        'left_knee',       'right_hip',       90, -30, 30),
-        ('hip_rotation_l',     'left_hip',        'left_knee',       'left_shoulder',   0, -90, 90),
+        ('hip_flexion_l',      'left_shoulder',   'left_hip',        'left_knee',        180, -30, 120),
+        ('hip_adduction_l',    'right_hip',       'left_hip',        'left_knee',         90, -30,  30),
+        ('hip_rotation_l',     'left_shoulder',   'left_hip',        'right_hip',          0, -40,  40),
         # Left knee (2 DOF)
-        ('knee_angle_l',       'left_hip',        'left_knee',       'left_ankle',      180, 0, 150),
-        ('knee_adduction_l',   'left_knee',       'left_ankle',      'right_knee',      90, -30, 30),
+        ('knee_angle_l',       'left_hip',        'left_knee',       'left_ankle',       180,   0, 150),
+        ('knee_adduction_l',   'right_knee',      'left_knee',       'left_ankle',        90, -20,  20),
         # Left ankle (3 DOF)
-        ('ankle_angle_l',      'left_knee',       'left_ankle',      'left_foot_index', 90, -40, 30),
-        ('subtalar_angle_l',   'left_ankle',      'left_foot_index', 'left_heel',       0, -20, 20),
-        ('mtp_angle_l',        'left_foot_index', 'left_heel',       'left_foot_index', 90, -30, 30),
-        # Lumbar spine (3 DOF)
-        ('lumbar_extension',   'right_hip',       'left_hip',        'midpoint_shoulders', 90, -90, 90),
-        ('lumbar_bending',     'right_shoulder',  'midpoint_hips',   'left_shoulder',   90, -90, 90),
-        ('lumbar_rotation',    'right_shoulder',  'right_hip',       'left_hip',        0, -90, 90),
+        ('ankle_angle_l',      'left_knee',       'left_ankle',      'left_foot_index',   90, -40,  30),
+        ('subtalar_angle_l',   'left_ankle',      'left_heel',       'left_foot_index',    0, -20,  20),
+        ('mtp_angle_l',        'left_ankle',      'left_heel',       'left_foot_index',   90, -20,  20),
+        # Lumbar spine (3 DOF) — uses synthetic midpoint landmarks
+        # extension: trunk forward tilt (hip-midpoint → shoulder-midpoint)
+        ('lumbar_extension',   'midpoint_hips',   'midpoint_shoulders', 'right_shoulder', 90, -60,  60),
+        # bending: lateral lean of trunk
+        ('lumbar_bending',     'right_shoulder',  'midpoint_shoulders','left_shoulder',   90, -45,  45),
+        # rotation: approximated as 0
+        ('lumbar_rotation',    'right_shoulder',  'right_hip',       'left_hip',           0, -45,  45),
     ],
     include_ball=False,
 )
@@ -282,7 +301,7 @@ def discover_available_models():
 
     # Scan directory for .osim files
     try:
-        osim_files = [f for f in os.listdir(MODULE_DIR) if f.endswith('.osim')]
+        osim_files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.osim')]
 
         for osim_file in osim_files:
             model_name = osim_file.replace('.osim', '')
@@ -295,7 +314,7 @@ def discover_available_models():
             # Basic arm angles work for most models
             generic_config = MotModelConfig(
                 name=model_name,
-                osim_path=os.path.join(MODULE_DIR, osim_file),
+                osim_path=os.path.join(MODELS_DIR, osim_file),
                 angle_columns=[
                     # Right arm
                     ('r_shoulder_flex', 'right_hip',      'right_shoulder', 'right_elbow', 180, -90, 180),
@@ -337,7 +356,8 @@ class MovementTracker:
     write_opensim_mot()   — full-session MOT for arm26_ball.osim → .mot
     """
 
-    def __init__(self, max_trajectory_length=200, hsv_lower=None, hsv_upper=None):
+    def __init__(self, max_trajectory_length=200, hsv_lower=None, hsv_upper=None,
+                 ball_color='orange'):
         self.max_trajectory_length = max_trajectory_length
         self.trajectory = deque(maxlen=max_trajectory_length)
         self._records = []          # populated by track_and_display
@@ -345,14 +365,31 @@ class MovementTracker:
         self._frame_shape = None    # (h, w) set on first captured frame
 
         # MediaPipe Pose (Tasks API)
-        model_path = Path("pose_landmarker_lite.task")
+        # Use 'full' model for better accuracy on small/distant players
+        _record_dir = Path(__file__).parent
+        model_path = _record_dir / "pose_landmarker_full.task"
         if not model_path.exists():
             url = ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-                   "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task")
-            print("Downloading pose landmarker model...")
+                   "pose_landmarker_full/float16/latest/pose_landmarker_full.task")
+            print("Downloading pose landmarker model (full)…")
             try:
-                urllib.request.urlretrieve(url, model_path)
-                print("✓ Model downloaded successfully")
+                import urllib.request as _ur
+                req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with _ur.urlopen(req, timeout=20) as resp:
+                    total = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    chunk = 1 << 16
+                    with open(model_path, "wb") as fh:
+                        while True:
+                            buf = resp.read(chunk)
+                            if not buf:
+                                break
+                            fh.write(buf)
+                            downloaded += len(buf)
+                            if total:
+                                pct = int(downloaded / total * 100)
+                                print(f"  {pct}% ({downloaded / 1_048_576:.1f} MB)", end="\r", flush=True)
+                print("\n✓ Model downloaded successfully")
             except Exception as e:
                 print(f"ERROR: Failed to download pose landmarker model: {e}")
                 raise
@@ -368,9 +405,23 @@ class MovementTracker:
             print(f"ERROR: Failed to create PoseLandmarker: {e}")
             raise
 
-        # Ball HSV colour range (default: green ball)
-        self.hsv_lower = hsv_lower if hsv_lower is not None else np.array([35, 50, 30])
-        self.hsv_upper = hsv_upper if hsv_upper is not None else np.array([85, 255, 255])
+        # Ball HSV colour range — pick a preset or supply custom bounds
+        _HSV_PRESETS = {
+            # Basketball (NBA orange/brown)
+            'orange': (np.array([5,  120,  80]), np.array([25, 255, 255])),
+            # Tennis / soccer ball (yellow-green)
+            'yellow': (np.array([25,  80,  80]), np.array([40, 255, 255])),
+            # Green ball / marker
+            'green':  (np.array([35,  50,  30]), np.array([85, 255, 255])),
+        }
+        if hsv_lower is not None and hsv_upper is not None:
+            self.hsv_lower, self.hsv_upper = np.array(hsv_lower), np.array(hsv_upper)
+        else:
+            preset = _HSV_PRESETS.get(ball_color, _HSV_PRESETS['orange'])
+            self.hsv_lower, self.hsv_upper = preset
+        # Second HSV range for orange (wraps around hue=0 for red-orange tones)
+        self._hsv_lower2 = np.array([170, 120,  80]) if ball_color == 'orange' else None
+        self._hsv_upper2 = np.array([180, 255, 255]) if ball_color == 'orange' else None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -607,6 +658,7 @@ class MovementTracker:
                     last_pose_lm = {
                         name: (lm.x * w, lm.y * h)
                         for name, lm in zip(_LANDMARK_NAMES, pose_result.pose_landmarks[0])
+                        if (lm.visibility or 0.0) >= 0.3
                     }
                 last_center = self._detect_ball(frame)
 
@@ -688,23 +740,33 @@ class MovementTracker:
         return video_path
 
     def _detect_ball(self, frame):
-        """Return (cx, cy) of best circular green blob, or None."""
+        """Return (cx, cy) of the most circular coloured blob, or None.
+
+        Uses self.hsv_lower/upper (primary range) and optionally
+        self._hsv_lower2/upper2 (secondary range for orange hue wrap-around).
+        """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
+        if self._hsv_lower2 is not None:
+            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, self._hsv_lower2, self._hsv_upper2))
+
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         best, best_score = None, 0
         for c in contours:
             area = cv2.contourArea(c)
-            if area < 1500:
+            if area < 200:          # ~15px diameter minimum (works for distant balls)
+                continue
+            if area > 50000:        # ignore huge blobs (stands, jerseys)
                 continue
             p = cv2.arcLength(c, True)
             if p == 0:
                 continue
             circ = (4 * np.pi * area) / (p ** 2)
-            if circ < 0.55:
+            if circ < 0.50:         # keep reasonably round shapes
                 continue
             score = area * circ
             if score > best_score:
@@ -817,6 +879,7 @@ class MovementTracker:
                     last_pose_lm = {
                         name: (lm.x * w_f, lm.y * h_f)
                         for name, lm in zip(_LANDMARK_NAMES, pose_result.pose_landmarks[0])
+                        if (lm.visibility or 0.0) >= 0.3
                     }
                 last_center = self._detect_ball(frame)
 
@@ -905,92 +968,105 @@ class MovementTracker:
 
             # Draw pose skeleton + angle labels
             if lm is not None:
-                # ===== NECK MODEL LANDMARKS =====
-                neck_landmarks = [
-                    ('nose', (0, 255, 255)),
-                    ('left_ear', (0, 165, 255)),
-                    ('right_ear', (255, 0, 0)),
-                    ('mouth_left', (0, 255, 0)),
-                    ('left_shoulder', (255, 0, 255)),
-                    ('right_shoulder', (255, 255, 0)),
-                ]
+                # Helper: draw a line between two landmarks if both visible
+                def _line(p1, p2, color, thickness=2):
+                    if p1 and p2:
+                        cv2.line(annotated,
+                                 (int(p1[0]), int(p1[1])),
+                                 (int(p2[0]), int(p2[1])),
+                                 color, thickness)
 
-                # Draw landmark points
-                for lm_name, color in neck_landmarks:
-                    pt = lm.get(lm_name)
-                    if pt:
-                        x, y = int(pt[0]), int(pt[1])
-                        cv2.circle(annotated, (x, y), 5, color, -1)
-                        cv2.circle(annotated, (x, y), 5, (255, 255, 255), 1)
+                def _dot(p, color, r=4):
+                    if p:
+                        cv2.circle(annotated, (int(p[0]), int(p[1])), r, color, -1)
+                        cv2.circle(annotated, (int(p[0]), int(p[1])), r, (255, 255, 255), 1)
 
-                # Draw neck connections
-                neck_connections = [
-                    ('left_ear', 'nose', 'right_ear'),
-                    ('left_shoulder', 'nose', 'right_shoulder'),
-                    ('left_ear', 'left_shoulder'),
-                    ('right_ear', 'right_shoulder'),
-                ]
+                # Collect pending angle labels → draw after skeleton to avoid overlap
+                angle_labels = []  # list of (x, y, text, color)
 
-                for connection in neck_connections:
-                    if len(connection) == 2:
-                        pt_a = lm.get(connection[0])
-                        pt_b = lm.get(connection[1])
-                        if pt_a and pt_b:
-                            x1, y1 = int(pt_a[0]), int(pt_a[1])
-                            x2, y2 = int(pt_b[0]), int(pt_b[1])
-                            cv2.line(annotated, (x1, y1), (x2, y2), (100, 100, 255), 2)
-                    elif len(connection) == 3:
-                        pt_a = lm.get(connection[0])
-                        pt_m = lm.get(connection[1])
-                        pt_b = lm.get(connection[2])
-                        if pt_a and pt_m and pt_b:
-                            x1, y1 = int(pt_a[0]), int(pt_a[1])
-                            x2, y2 = int(pt_m[0]), int(pt_m[1])
-                            x3, y3 = int(pt_b[0]), int(pt_b[1])
-                            cv2.line(annotated, (x1, y1), (x2, y2), (100, 100, 255), 2)
-                            cv2.line(annotated, (x2, y2), (x3, y3), (100, 100, 255), 2)
-                            ang = self._angle_between(pt_a, pt_m, pt_b)
-                            cv2.putText(annotated, f"{ang:.0f} deg", (x2 + 10, y2 - 10),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                # ===== FULL BODY SKELETON =====
+                # Right side: orange (#e07b39 → BGR 57,123,224)
+                # Left side:  blue   (#39a7e0 → BGR 224,167,57)
+                RIGHT = (57, 123, 224)
+                LEFT  = (224, 167, 57)
+                BODY  = (180, 180, 180)
 
-                # ===== ARM MODEL (compatibility) =====
-                for side, color in (('left', (0, 165, 255)), ('right', (255, 0, 0))):
-                    hip      = lm.get(f'{side}_hip')
-                    shoulder = lm.get(f'{side}_shoulder')
-                    elbow    = lm.get(f'{side}_elbow')
-                    wrist    = lm.get(f'{side}_wrist')
+                for side, color in (('left', LEFT), ('right', RIGHT)):
+                    shoulder   = lm.get(f'{side}_shoulder')
+                    elbow      = lm.get(f'{side}_elbow')
+                    wrist      = lm.get(f'{side}_wrist')
+                    hip        = lm.get(f'{side}_hip')
+                    knee       = lm.get(f'{side}_knee')
+                    ankle      = lm.get(f'{side}_ankle')
+                    foot_index = lm.get(f'{side}_foot_index')
+                    heel       = lm.get(f'{side}_heel')
+                    index      = lm.get(f'{side}_index')
 
-                    arm_pts = [hip, shoulder, elbow, wrist]
-                    for i in range(len(arm_pts) - 1):
-                        if arm_pts[i] and arm_pts[i+1]:
-                            x1, y1 = int(arm_pts[i][0]), int(arm_pts[i][1])
-                            x2, y2 = int(arm_pts[i+1][0]), int(arm_pts[i+1][1])
-                            cv2.line(annotated, (x1, y1), (x2, y2), color, 2)
+                    # Draw limb segments
+                    _line(shoulder, elbow, color)
+                    _line(elbow, wrist, color)
+                    _line(hip, knee, color)
+                    _line(knee, ankle, color)
+                    _line(ankle, heel, color)
+                    _line(heel, foot_index, color)
 
-                    for pt in [shoulder, elbow, wrist]:
-                        if pt:
-                            x, y = int(pt[0]), int(pt[1])
-                            cv2.circle(annotated, (x, y), 4, color, -1)
-                            cv2.circle(annotated, (x, y), 4, (255, 255, 255), 1)
+                    # Dot each joint
+                    for pt in [shoulder, elbow, wrist, hip, knee, ankle, foot_index]:
+                        _dot(pt, color)
 
-                    # Calculate shoulder elevation (using correct landmarks for ARM26_BALL)
+                    # Shoulder-elbow angle (elbow flexion), label offset from elbow
                     if shoulder and elbow and wrist:
-                        ang_raw = self._angle_between(shoulder, elbow, wrist)
-                        ang = 180 - ang_raw  # Apply offset to match MOT file
-                        if 0 <= ang <= 180:  # Only display valid angles
-                            x, y = int(shoulder[0]) + 5, int(shoulder[1]) - 5
-                            cv2.putText(annotated, f"{ang:.0f} deg", (x, y),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        ang = self._angle_between(shoulder, elbow, wrist)
+                        if 0 <= ang <= 180:
+                            ex, ey = int(elbow[0]), int(elbow[1])
+                            angle_labels.append((ex + 12, ey - 8, f"Elb {ang:.0f}d", color))
 
-                    # Calculate elbow flexion
-                    index = lm.get(f'{side}_index')
-                    if elbow and wrist and index:
-                        ang_raw = self._angle_between(elbow, wrist, index)
-                        ang = np.clip(ang_raw, 0, 150)  # Clip to valid range
-                        if 0 <= ang <= 150:
-                            x, y = int(elbow[0]) + 5, int(elbow[1]) - 5
-                            cv2.putText(annotated, f"{ang:.0f} deg", (x, y),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    # Hip-knee angle (knee flexion), label offset from knee
+                    if hip and knee and ankle:
+                        ang = self._angle_between(hip, knee, ankle)
+                        if 0 <= ang <= 180:
+                            kx, ky = int(knee[0]), int(knee[1])
+                            angle_labels.append((kx + 12, ky - 8, f"Kn {ang:.0f}d", color))
+
+                    # Knee-ankle angle (ankle), label offset from ankle
+                    if knee and ankle and foot_index:
+                        ang = self._angle_between(knee, ankle, foot_index)
+                        if 0 <= ang <= 180:
+                            ax_, ay = int(ankle[0]), int(ankle[1])
+                            angle_labels.append((ax_ + 12, ay - 8, f"Ank {ang:.0f}d", color))
+
+                # Torso connections (shoulders ↔ hips)
+                ls, rs = lm.get('left_shoulder'), lm.get('right_shoulder')
+                lh, rh = lm.get('left_hip'),      lm.get('right_hip')
+                _line(ls, rs, BODY)
+                _line(lh, rh, BODY)
+                _line(ls, lh, BODY)
+                _line(rs, rh, BODY)
+
+                # Head (nose)
+                nose = lm.get('nose')
+                _dot(nose, (0, 255, 255), r=5)
+                if nose and ls and rs:
+                    mid_sh = ((ls[0]+rs[0])/2, (ls[1]+rs[1])/2)
+                    _line(nose, mid_sh, BODY)
+
+                # ===== DRAW ANGLE LABELS (de-overlapped) =====
+                # Sort by y so labels read top-to-bottom, then nudge any that collide
+                angle_labels.sort(key=lambda t: t[1])
+                min_gap = 18  # pixels between label baselines
+                placed = []   # (x, y) of already-placed labels
+                for lx, ly, txt, col in angle_labels:
+                    # Push down if too close to a previous label
+                    for px, py in placed:
+                        if abs(lx - px) < 60 and abs(ly - py) < min_gap:
+                            ly = py + min_gap
+                    placed.append((lx, ly))
+                    # Background rect for readability
+                    (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+                    cv2.rectangle(annotated, (lx - 2, ly - th - 2), (lx + tw + 2, ly + 2),
+                                  (0, 0, 0), -1)
+                    cv2.putText(annotated, txt, (lx, ly),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
 
             # Draw ball position if detected
             if center is not None:
@@ -1044,8 +1120,8 @@ class MovementTracker:
                 ('Left',  'left_knee',      'left_ankle',     'right_knee',       '#39a7e0'),
             ]),
             ('Ankle Angle', [
-                ('Right', 'right_knee',     'right_ankle',    'right_foot_index', '#7ccc60'),
-                ('Left',  'left_knee',      'left_ankle',     'left_foot_index',  '#3daa20'),
+                ('Right', 'right_knee',     'right_ankle',    'right_foot_index', '#e07b39'),
+                ('Left',  'left_knee',      'left_ankle',     'left_foot_index',  '#39a7e0'),
             ]),
         ]
 
@@ -1284,18 +1360,109 @@ class MovementTracker:
         has_ball  = model_config.include_ball and len(ball_ts) > 0
 
         t0 = self._records[0][1]
+
+        # --- Initial hip x for relative forward translation ---
+        _init_hip_x = 0.0
+        for _, _, _lm0, _ in self._records:
+            if _lm0 is not None:
+                _lh0 = _lm0.get('left_hip');  _rh0 = _lm0.get('right_hip')
+                _m0 = ((_lh0[0] + _rh0[0]) / 2, (_lh0[1] + _rh0[1]) / 2) \
+                      if (_lh0 and _rh0) else (_lh0 or _rh0)
+                if _m0:
+                    _init_hip_x = _m0[0]
+                    break
+
+        # --- Floor y: 95th-percentile of all foot/heel landmark y-positions ---
+        # In image coords y increases downward, so the 95th percentile is near
+        # the lowest foot position = floor level.  Robust to airborne frames.
+        _foot_ys = []
+        for _, _, _lm_f, _ in self._records:
+            if _lm_f is None:
+                continue
+            for _key in ('left_heel', 'right_heel',
+                         'left_foot_index', 'right_foot_index'):
+                _pt = _lm_f.get(_key)
+                if _pt:
+                    _foot_ys.append(_pt[1])
+        if _foot_ys:
+            _floor_y_px = float(np.percentile(_foot_ys, 95))
+        else:
+            # Fallback: treat bottom of frame as floor
+            _floor_y_px = float(self._frame_shape[0]) if self._frame_shape else 720.0
+
         rows = []
         for _, t, lm, _ in self._records:
             rel_t = t - t0
+
+            # --- Build synthetic / midpoint landmarks for this frame ---
+            def _midpoint(a, b):
+                if a and b:
+                    return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+                return a or b  # fall back to whichever is available
+
+            def _resolve(name):
+                """Return (x,y) for a real or synthetic landmark name."""
+                if lm is None:
+                    return None
+                if name == 'midpoint_hips':
+                    return _midpoint(lm.get('left_hip'), lm.get('right_hip'))
+                if name == 'midpoint_shoulders':
+                    return _midpoint(lm.get('left_shoulder'), lm.get('right_shoulder'))
+                return lm.get(name)
+
+            # Pelvis translation: project midpoint-of-hips to metres
+            if lm is not None:
+                lh = lm.get('left_hip');  rh = lm.get('right_hip')
+                mid_hip = _midpoint(lh, rh)
+            else:
+                mid_hip = None
+            # tx: horizontal displacement from first frame (±15 m range)
+            pelvis_tx_val = float((mid_hip[0] - _init_hip_x) * px_to_m) if mid_hip else 0.0
+            # ty: height of hip above floor — floor at 95th-pctile foot position
+            # Image y increases downward, so height = (floor_y - hip_y) * scale
+            pelvis_ty_val = float((_floor_y_px - mid_hip[1]) * px_to_m) if mid_hip else 0.0
+
+            # -------------------------------------------------------
+            # Segment-angle helpers (image coords: Y positive = down)
+            # seg_angle: angle of p1→p2 from downward vertical.
+            #   0°  = pointing straight down
+            #  +90° = pointing right
+            #  -90° = pointing left
+            # -------------------------------------------------------
+            import math as _math
+
+            def _seg_angle(p1, p2):
+                if p1 is None or p2 is None:
+                    return None
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]   # positive = downward in image
+                return _math.degrees(_math.atan2(dx, dy))
+
+            def _angle_diff(a, b):
+                """Signed difference b − a, normalised to (−180, 180]."""
+                if a is None or b is None:
+                    return None
+                d = b - a
+                while d >  180: d -= 360
+                while d < -180: d += 360
+                return d
 
             # --- Angle columns defined by the config ---
             angle_vals = []
             for col_name, lm_a, lm_vertex, lm_b, offset, clip_min, clip_max \
                     in model_config.angle_columns:
+                # Handle pelvis translation synthetic columns
+                if lm_a == '_pelvis_tx_':
+                    angle_vals.append(float(np.clip(pelvis_tx_val, clip_min, clip_max)))
+                    continue
+                if lm_a == '_pelvis_ty_':
+                    angle_vals.append(float(np.clip(pelvis_ty_val, clip_min, clip_max)))
+                    continue
+
                 if lm is not None:
-                    pa = lm.get(lm_a)
-                    pv = lm.get(lm_vertex)
-                    pb = lm.get(lm_b)
+                    pa = _resolve(lm_a)
+                    pv = _resolve(lm_vertex)
+                    pb = _resolve(lm_b)
                     if pa and pv and pb:
                         val = float(np.clip(
                             offset - self._angle_between(pa, pv, pb),
@@ -1305,6 +1472,98 @@ class MovementTracker:
                 else:
                     val = 0.0
                 angle_vals.append(val)
+
+            # -------------------------------------------------------
+            # GPK_generic override: replace hip/knee/ankle with
+            # segment-angle-based values that are properly signed.
+            #
+            # Hip flexion  = angle of thigh relative to pelvis axis.
+            #   +ve = leg forward (flexion), −ve = leg back (extension).
+            # Knee flexion = absolute bend (0 = straight, 150 = full flex).
+            # Ankle        = foot vs shank angle (dorsi/plantar flex).
+            # -------------------------------------------------------
+            if model_config.name == 'GPK_generic' and lm is not None:
+                col_idx = {c[0]: i for i, c in enumerate(model_config.angle_columns)}
+
+                # Determine facing direction from right foot:
+                #   if foot_index is to the right of heel → facing right (+1)
+                #   otherwise → facing left (−1)
+                rfi = lm.get('right_foot_index')
+                rhe = lm.get('right_heel')
+                lfi = lm.get('left_foot_index')
+                lhe = lm.get('left_heel')
+                # Use whichever foot has both landmarks
+                if rfi and rhe:
+                    facing = 1 if rfi[0] > rhe[0] else -1
+                elif lfi and lhe:
+                    facing = -1 if lfi[0] > lhe[0] else 1
+                else:
+                    facing = 1   # default
+
+                # --- Pelvis tilt: forward lean of trunk from vertical ---
+                # Use whichever hip+shoulder pair is available
+                _r_sh = lm.get('right_shoulder'); _r_hp = lm.get('right_hip')
+                _l_sh = lm.get('left_shoulder');  _l_hp = lm.get('left_hip')
+                _tilt_sh = _r_sh or _l_sh
+                _tilt_hp = _r_hp or _l_hp
+                if _tilt_sh and _tilt_hp:
+                    _tdx = _tilt_sh[0] - _tilt_hp[0]
+                    _tdy = _tilt_sh[1] - _tilt_hp[1]  # negative (shoulder above)
+                    # atan2(facing*dx, -dy): 0=upright, +ve=forward lean
+                    _tilt = _math.degrees(_math.atan2(facing * _tdx, -_tdy))
+                    if 'pelvis_tilt' in col_idx:
+                        _c = model_config.angle_columns[col_idx['pelvis_tilt']]
+                        angle_vals[col_idx['pelvis_tilt']] = float(
+                            np.clip(_tilt, _c[5], _c[6]))
+
+                # pelvis_list can't be estimated from a sagittal 2-D view → zero
+                if 'pelvis_list' in col_idx:
+                    angle_vals[col_idx['pelvis_list']] = 0.0
+
+                for side in ('r', 'l'):
+                    s = 'right' if side == 'r' else 'left'
+                    sf = facing if side == 'r' else -facing
+
+                    shoulder = lm.get(f'{s}_shoulder')
+                    hip      = lm.get(f'{s}_hip')
+                    knee     = lm.get(f'{s}_knee')
+                    ankle    = lm.get(f'{s}_ankle')
+                    foot_idx = lm.get(f'{s}_foot_index')
+                    heel     = lm.get(f'{s}_heel')
+
+                    trunk_up = _seg_angle(hip, shoulder)   # ~0° = straight up
+                    thigh    = _seg_angle(hip, knee)       # ~0° = straight down
+                    shank    = _seg_angle(knee, ankle)
+                    foot     = _seg_angle(ankle, foot_idx)
+
+                    # Hip flexion: thigh vs pelvis-down axis
+                    if trunk_up is not None and thigh is not None:
+                        pelvis_down = _angle_diff(0.0, trunk_up + 180)
+                        # raw diff (positive = forward relative to image x-axis)
+                        raw_flex = _angle_diff(pelvis_down, thigh)
+                        # apply facing sign so +ve is always anatomical flexion
+                        hip_flex = sf * raw_flex
+                        k = f'hip_flexion_{side}'
+                        if k in col_idx:
+                            c = model_config.angle_columns[col_idx[k]]
+                            angle_vals[col_idx[k]] = float(np.clip(hip_flex, c[5], c[6]))
+
+                    # Knee flexion: shank vs thigh (always 0–150)
+                    if thigh is not None and shank is not None:
+                        knee_flex = abs(_angle_diff(thigh, shank) or 0.0)
+                        k = f'knee_angle_{side}'
+                        if k in col_idx:
+                            c = model_config.angle_columns[col_idx[k]]
+                            angle_vals[col_idx[k]] = float(np.clip(knee_flex, c[5], c[6]))
+
+                    # Ankle dorsiflexion: foot vs shank, neutral ≈ 90° difference
+                    if shank is not None and foot is not None:
+                        diff = _angle_diff(shank, foot)
+                        ankle_val = (diff or 0.0) - 90.0  # 0 = neutral standing
+                        k = f'ankle_angle_{side}'
+                        if k in col_idx:
+                            c = model_config.angle_columns[col_idx[k]]
+                            angle_vals[col_idx[k]] = float(np.clip(ankle_val, c[5], c[6]))
 
             # --- Ball columns (optional) ---
             if has_ball:
@@ -1351,8 +1610,10 @@ class MovementTracker:
         print(f"  Model   : {model_config.name}")
         print(f"  .osim   : {model_config.osim_path}")
         print(f"  Rows    : {len(rows)}  (~{rows[-1][0]:.2f} s)")
-        print(f"  px\u2192m    : {px_to_m:.5f}  "
+        print(f"  px->m   : {px_to_m:.5f}  "
               f"({'arm joints' if scale_samples else 'frame-height fallback'})")
+        print(f"  floor_y : {_floor_y_px:.1f} px  "
+              f"({'foot landmarks' if _foot_ys else 'frame-height fallback'})")
         print(f"  Columns : {', '.join(model_config.column_names)}")
 
 
@@ -1378,8 +1639,4 @@ def main():
     tracker.write_opensim_mot(save_path=str(out / "buet_motion.mot"),
                               model_config=FULL_BODY_CONFIG)
     tracker.write_opensim_mot(save_path=str(out / "full_body_motion.mot"),
-                              model_config=FULL_BODY_CONFIG)
-
-
-if __name__ == "__main__":
-    main()
+                              model_

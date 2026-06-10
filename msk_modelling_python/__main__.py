@@ -325,8 +325,111 @@ def run_gui_mode() -> int:
     return 0
 
 
+def run_video_batch_mode(settings_path: str) -> bool:
+    """
+    Run video analysis batch from a JSON settings file.
+
+    Settings file format (JSON):
+    {
+        "videos": ["path/to/video1.mp4", "path/to/video2.mp4"],
+              "model": "full_body",
+        "detect_interval": 1,
+        "output_dir": "path/to/output"
+    }
+    """
+    import json
+    import subprocess
+
+    settings_file = Path(settings_path)
+    if not settings_file.exists():
+        logger.error(f"Settings file not found: {settings_path}")
+        return False
+
+    try:
+        cfg = json.loads(settings_file.read_text())
+    except Exception as e:
+        logger.error(f"Failed to parse settings file: {e}")
+        return False
+
+    videos = cfg.get("videos", [])
+    if not videos:
+        logger.error("No videos listed in settings file.")
+        return False
+
+    model = cfg.get("model", "full_body")
+    detect_interval = int(cfg.get("detect_interval", 1))
+    output_dir = cfg.get("output_dir", None)
+
+    analyzer = Path(__file__).parent / "record" / "video_analyzer.py"
+    if not analyzer.exists():
+        logger.error(f"video_analyzer.py not found at {analyzer}")
+        return False
+
+    logger.info("=" * 70)
+    logger.info("Video Analysis — Batch Mode")
+    logger.info(f"Settings : {settings_path}")
+    logger.info(f"Videos   : {len(videos)}")
+    logger.info(f"Model    : {model}")
+    logger.info(f"Interval : {detect_interval}")
+    if output_dir:
+        logger.info(f"Output   : {output_dir}")
+    logger.info("=" * 70)
+
+    all_ok = True
+    for i, video in enumerate(videos, 1):
+        video_path = Path(video)
+        logger.info(f"[{i}/{len(videos)}] {video_path.name}")
+
+        cmd = [
+            sys.executable, str(analyzer),
+            "--video", str(video),
+            "--model", model,
+            "--detect-interval", str(detect_interval),
+        ]
+        if output_dir:
+            cmd += ["--output-dir", str(output_dir)]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            for line in proc.stdout:
+                logger.info("  " + line.rstrip())
+            proc.wait()
+            if proc.returncode == 0:
+                logger.info(f"  [OK] {video_path.name}")
+            else:
+                logger.error(f"  [FAILED] {video_path.name} (exit {proc.returncode})")
+                all_ok = False
+        except Exception as e:
+            logger.error(f"  [ERROR] {video_path.name}: {e}")
+            all_ok = False
+
+    logger.info("=" * 70)
+    logger.info("[OK] Video batch finished." if all_ok else "[WARN] Some videos failed.")
+    logger.info("=" * 70)
+    return all_ok
+
+
+def _is_video_batch_settings(settings_path: str) -> bool:
+    """Return True if the settings file looks like a video batch config (has 'videos' key)."""
+    import json
+    try:
+        cfg = json.loads(Path(settings_path).read_text())
+        return "videos" in cfg
+    except Exception:
+        return False
+
+
 def main() -> int:
     if args.batch:
+        if _is_video_batch_settings(args.batch):
+            return 0 if run_video_batch_mode(args.batch) else 1
         return 0 if run_batch_mode(args.batch) else 1
     # GUI mode: explicit --gui flag, or no arguments at all
     return run_gui_mode()

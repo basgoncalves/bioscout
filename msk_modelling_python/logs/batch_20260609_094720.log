@@ -1,0 +1,11 @@
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - ======================================================================
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - Biomechanical Analysis - Batch Processing
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - Session folder : C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - ======================================================================
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - Found 16 C3D file(s)
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - ----------------------------------------------------------------------
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - MODEL SCALING
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - ----------------------------------------------------------------------
+2026-06-09 09:47:20 - batch_20260609_094720 - ERROR - [CRITICAL] Model scaling failed: Static TRC not found: C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05\static01\marker_experimental.trc
+2026-06-09 09:47:20 - batch_20260609_094720 - CRITICAL - Fatal error: Static TRC not found: C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05\static01\marker_experimental.trc
+2026-06-09 09:47:20 - batch_20260609_094720 - INFO - Batch processing finished.

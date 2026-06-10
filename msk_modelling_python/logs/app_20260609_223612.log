@@ -1,0 +1,19 @@
+[main] utils.openSim loaded via importlib: <module 'utils.openSim' from 'C:\\Git\\msk_modelling_python\\msk_modelling_python\\utils\\openSim.py'>
+[GUI] Importing main_window...
+2026-06-09 22:36:12 - INFO - [GUI] Importing main_window...
+[main_window] VideoAnalysisTab unavailable: unexpected indent (video_analysis.py, line 1736)
+[GUI] Starting GUI...
+2026-06-09 22:36:12 - INFO - [GUI] Starting GUI...
+[main_window] Creating MainWindow...
+2026-06-09 22:36:13 - INFO - Tab created successfully: Session Analysis
+2026-06-09 22:36:14 - INFO - Tab created successfully: Recording
+2026-06-09 22:36:15 - INFO - Tab created successfully: C3D Export
+2026-06-09 22:36:15 - INFO - Tab created successfully: Batch C3D
+2026-06-09 22:36:16 - INFO - Tab created successfully: EMG Normalization
+2026-06-09 22:36:16 - INFO - Tab created successfully: Model Scaling
+2026-06-09 22:36:16 - INFO - Tab created successfully: CEINMS Calibration
+2026-06-09 22:36:16 - INFO - Tab created successfully: Batch
+2026-06-09 22:36:16 - INFO - Tab created successfully: Results
+2026-06-09 22:36:17 - INFO - Tab created successfully: Settings
+2026-06-09 22:36:17 - INFO - Tab created successfully: Logs
+2026-06-09 22:36:53 - INFO - Application closed

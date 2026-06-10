@@ -2,30 +2,11 @@
 
 A Python package for musculoskeletal modelling.
 
+This package includes a combination of other packages and custom functions to manipulate and analyze biomechanical data. Originally inspired by the MATLAB version of BOPS (Batch OpenSim Processing Scripts) - [BOPS](https://simtk.org/projects/bops/)
+
 **Author:** Basilio Goncalves, PhD, University of Vienna, 2024
 https://ufind.univie.ac.at/de/person.html?id=1004543
 https://github.com/basgoncalves
-
-
----
-
-## Changelog
-
-### v0.4.2 (2026-06-09)
-- Fix `utils/__init__.py` truncated `emg_normalise` import block (IndentationError on startup)
-- Fix `utils/openSim.py` truncated `_Tee` class in `__main__` block (SyntaxError)
-- Fix `utils/dev.py` truncated parallel worker error handler
-- Fix `utils/__init__.py` ceinms import collision: use `importlib.util` to load `ceinms.py` explicitly, bypassing `ceinms/` binary package
-- Fix `settings.DOFs` → `settings.BatchSettings.dof_list` in `utils/__init__.py` and `utils/dev.py`
-- Fix IK NaN crash: interpolate missing marker values in TRC files before running `InverseKinematicsTool`
-- Add Video Analysis GUI tab: process pre-recorded videos to generate OpenSim MOT/TRC files
-
-### v0.4.1 (2026-06-09)
-- Fix GUI crash on startup: `model_scaling` widget now correctly imports `marker_weights` from `BatchSettings` class instead of the deprecated module-level variable
-- Fix `batch_c3d_export` widget to read EMG defaults from `BatchSettings` attributes instead of removed module-level constants
-
-### v0.4.0
-- Batch pipeline fix, GUI stability improvements, OpenSim late-load
 
 ---
 
@@ -99,7 +80,7 @@ python -m msk_modelling_python -b msk_modelling_python/settings.py
 
 
 ---
-## Work with the code 
+## Work with the code in edditing mode
 
 1. **Activate your virtual enviroment (assume name 'msk')** 
    ```
@@ -181,7 +162,6 @@ python -m msk_modelling_python -b msk_modelling_python/settings.py
 
 ---
 
-This package includes a combination of other packages and custom functions to manipulate and analyze biomechanical data. Originally inspired by the MATLAB version of BOPS (Batch OpenSim Processing Scripts) - [BOPS](https://simtk.org/projects/bops/)
 
 ## Tools to be Included:
 - **BTK**  
@@ -216,9 +196,11 @@ This package includes a combination of other packages and custom functions to ma
 
 6. **config/** — config manager for loading/saving settings
 
-7. **record/** — video recording and camera utilities for motion capture sessions
+7. **record/** — video recording, camera utilities, and pose-estimation pipeline (`video_analyzer.py`) for motion capture sessions
 
+8. **models/** — bundled OpenSim model files (`.osim`) and geometry meshes
 
+9. **movement_detector/** — rule-based classifier that segments pose landmark time-series into labelled movement types (walking, running, jumping, etc.) with landmark gap-filling
 
 ---
 
@@ -235,6 +217,19 @@ python -m msk_modelling_python -b msk_modelling_python/settings.py
 ```
 The pipeline supports: C3D export → model scaling → IK → ID → SO → muscle analysis → CEINMS calibration → CEINMS execution.
 
+For video-only batch processing, pass a JSON file with a `"videos"` key:
+```cmd
+python -m msk_modelling_python -b video_batch.json
+```
+```json
+{
+    "videos": ["path/to/video1.mp4", "path/to/video2.mp4"],
+    "model": "full_body",
+    "detect_interval": 1,
+    "output_dir": "path/to/output"
+}
+```
+
 ---
 
 ## Contact
@@ -244,6 +239,8 @@ For any questions or inquiries, please contact:
 - **Name:** Basilio Goncalves
 - **Email:** basilio.goncalves@univie.ac.at
 - **ResearchGate:** [Basilio Goncalves](https://www.researchgate.net/profile/Basilio-Goncalves)
+
+---
 
 ## References
 
@@ -263,24 +260,28 @@ Goncalves, B. A. M. et al. -2023- Gait Posture 106, S68
 
 Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 
-## Version updates 0.0.17
+---
 
-- Version bump with new images and path adjustments in classes
+## Changelog
 
-## Version updates 0.0.20
+### v0.4.2 (2026-06-10)
+- Fix `utils/__init__.py` truncated `emg_normalise` import block (IndentationError on startup)
+- Fix `utils/openSim.py` truncated `_Tee` class in `__main__` block (SyntaxError)
+- Fix `utils/dev.py` truncated parallel worker error handler
+- Fix `utils/__init__.py` ceinms import collision: use `importlib.util` to load `ceinms.py` explicitly, bypassing `ceinms/` binary package
+- Fix `settings.DOFs` → `settings.BatchSettings.dof_list` in `utils/__init__.py` and `utils/dev.py`
+- Fix IK NaN crash: interpolate missing marker values in TRC files before running `InverseKinematicsTool`
+- Add **Video Analysis GUI tab**: process pre-recorded videos to generate OpenSim MOT/TRC files using MediaPipe pose estimation
+- Add **video batch mode** (`-b video_batch.json`): run `video_analyzer.py` over a list of videos from a JSON config file — auto-detected by the presence of a `"videos"` key
+- Add **`movement_detector` module**: rule-based pose landmark classifier that segments video into labelled motion types (walking, running, jumping, squatting, side-cut, shuffle, deceleration, backward walking/running) with gap-filling for occluded landmarks
+- Move OpenSim model files (`*.osim`) from `record/` into a dedicated `models/` package for cleaner imports
+- Add `RecordingSettings.DEFAULT_VIDEO_ANALYSIS_MODEL` and `OUTPUT_DIR_TEMPLATE` to `settings.py`
 
-- Attempted CEINMS2 integration via pip packaging
+### v0.4.1 (2026-06-09)
+- Fix GUI crash on startup: `model_scaling` widget now correctly imports `marker_weights` from `BatchSettings` class instead of the deprecated module-level variable
+- Fix `batch_c3d_export` widget to read EMG defaults from `BatchSettings` attributes instead of removed module-level constants
 
-## Version updates 0.3.6
-
-- Updated utils
-- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
-
-## Version updates 0.4.0
-
+### v0.4.0
 - Improved app and batch processing with new settings and GUI entry point
 - Cleaned up stale files and moved CEINMS settings
-- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
-
-
-
+- Added n8n-inspired workflow

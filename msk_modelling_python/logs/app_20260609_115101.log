@@ -1,0 +1,24 @@
+[main] WARNING: could not load utils.openSim: No module named 'opensim'
+[GUI] Importing main_window...
+2026-06-09 11:51:01 - INFO - [GUI] Importing main_window...
+2026-06-09 11:51:01 - WARNING - Could not import exportC3D: No module named 'opensim'
+[GUI] Import failed (ImportError): cannot import name 'marker_weights' from 'settings' (C:\Git\msk_modelling_python\msk_modelling_python\settings.py)
+2026-06-09 11:51:01 - ERROR - [GUI] Import failed (ImportError): cannot import name 'marker_weights' from 'settings' (C:\Git\msk_modelling_python\msk_modelling_python\settings.py)
+Traceback (most recent call last):
+  File "C:\Git\msk_modelling_python\msk_modelling_python\__main__.py", line 309, in run_gui_mode
+    from gui.main_window import main as gui_main
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 47, in <module>
+    from gui.widgets.model_scaling import ModelScalingTab
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\widgets\model_scaling.py", line 16, in <module>
+    from settings import marker_weights
+ImportError: cannot import name 'marker_weights' from 'settings' (C:\Git\msk_modelling_python\msk_modelling_python\settings.py)
+
+2026-06-09 11:51:01 - ERROR - Traceback (most recent call last):
+  File "C:\Git\msk_modelling_python\msk_modelling_python\__main__.py", line 309, in run_gui_mode
+    from gui.main_window import main as gui_main
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 47, in <module>
+    from gui.widgets.model_scaling import ModelScalingTab
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\widgets\model_scaling.py", line 16, in <module>
+    from settings import marker_weights
+ImportError: cannot import name 'marker_weights' from 'settings' (C:\Git\msk_modelling_python\msk_modelling_python\settings.py)
+

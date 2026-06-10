@@ -247,11 +247,21 @@ class RecordingSettings:
     output_format = "mp4"
 
     # Recording tab defaults
-    OUTPUT_DIR_TEMPLATE = r"C:\Users\Basilio\Videos\recordings"
+    OUTPUT_DIR_TEMPLATE = str(Path.home() / "Videos" / "recordings")
     DEFAULT_DURATION_SECONDS = 5
     DEFAULT_VIDEO_SOURCE = "webcam"
     IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"
-    DEFAULT_OSIM_MODEL = ""
+    DEFAULT_OSIM_MODEL = "GPK_generic"
+
+    # Video Analysis tab — set to the model name you want pre-selected in the
+    # dropdown so you don't have to change it every time.
+    # Must match a key in record.video.AVAILABLE_MODELS (or leave blank to use
+    # the first entry in the list).
+    DEFAULT_VIDEO_ANALYSIS_MODEL = "GPK_generic"
+
+    # Temporal pose smoothing: maximum pixel distance a landmark may move
+    # between consecutive estimated frames. Set to 0 to disable smoothing.
+    DEFAULT_POSE_MAX_DELTA_PX = 50
 
 
 # ============================================================================
@@ -340,6 +350,11 @@ class Inputs:
         """Return all attributes as a dictionary."""
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
 
+
+# ============================================================================
+# BACKWARD COMPATIBILITY
+# ============================================================================
+Config = BatchSettings
 
 # ============================================================================
 # BACKWARD COMPATIBILITY

@@ -1,0 +1,38 @@
+[main] utils.openSim loaded via importlib: <module 'utils.openSim' from 'C:\\Git\\msk_modelling_python\\msk_modelling_python\\utils\\openSim.py'>
+[GUI] Importing main_window...
+2026-06-10 09:56:18 - INFO - [GUI] Importing main_window...
+[GUI] Starting GUI...
+2026-06-10 09:56:19 - INFO - [GUI] Starting GUI...
+[main_window] Creating MainWindow...
+2026-06-10 09:56:19 - INFO - Tab created successfully: Session Analysis
+2026-06-10 09:56:20 - INFO - Tab created successfully: Recording
+2026-06-10 09:56:21 - INFO - Tab created successfully: Video Analysis
+2026-06-10 09:56:21 - INFO - Tab created successfully: Video Analysis
+2026-06-10 09:56:22 - INFO - Tab created successfully: C3D Export
+2026-06-10 09:56:22 - INFO - Tab created successfully: Batch C3D
+2026-06-10 09:56:22 - INFO - Tab created successfully: EMG Normalization
+2026-06-10 09:56:22 - INFO - Tab created successfully: Model Scaling
+2026-06-10 09:56:22 - INFO - Tab created successfully: CEINMS Calibration
+2026-06-10 09:56:23 - INFO - Tab created successfully: Batch
+2026-06-10 09:56:23 - INFO - Tab created successfully: Results
+2026-06-10 09:56:24 - INFO - Tab created successfully: Settings
+2026-06-10 09:56:24 - INFO - Tab created successfully: Logs
+2026-06-10 10:09:19 - ERROR - [GUI] Crashed (KeyboardInterrupt): 
+2026-06-10 10:09:19 - ERROR - Traceback (most recent call last):
+  File "C:\Git\msk_modelling_python\msk_modelling_python\__main__.py", line 316, in run_gui_mode
+    gui_main()
+    ~~~~~~~~^^
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 618, in main
+    app.run()
+    ~~~~~~~^^
+  File "C:\Git\msk_modelling_python\msk_modelling_python\gui\main_window.py", line 591, in run
+    self.mainloop()
+    ~~~~~~~~~~~~~^^
+  File "C:\Users\Basilio\miniconda3\envs\msk311b\Lib\site-packages\customtkinter\windows\ctk_tk.py", line 165, in mainloop
+    super().mainloop(*args, **kwargs)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Basilio\miniconda3\envs\msk311b\Lib\tkinter\__init__.py", line 1599, in mainloop
+    self.tk.mainloop(n)
+    ~~~~~~~~~~~~~~~~^^^
+KeyboardInterrupt
+
