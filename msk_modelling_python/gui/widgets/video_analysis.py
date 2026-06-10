@@ -227,8 +227,6 @@ class VideoAnalysisTab(ctk.CTkFrame):
         ctk.CTkButton(xform_row, text="1:1",
                       command=lambda: self._crop_to_aspect_ratio(1, 1),
                       **_ar).pack(side="left", padx=1)
-        ctk.CTkButton(xform_row, text="Fit", command=self._reset_zoom,
-                      **_xs).pack(side="left", padx=(4, 1))
         self.zoom_label = ctk.CTkLabel(xform_row, text="100%",
                                         font=("Segoe UI", 9), text_color="#888888", width=36)
         self.zoom_label.pack(side="left", padx=4)
@@ -508,25 +506,25 @@ class VideoAnalysisTab(ctk.CTkFrame):
             fg_color="#2a2a2a", hover_color="#444444",
             font=("Segoe UI", 11, "bold"),
             command=lambda: self._step_frame(-1)
-        ).grid(row=0, column=0, padx=(8, 2), pady=(8, 4))
+        ).grid(row=0, column=0, padx=(8, 2), pady=(3, 2))
         ctk.CTkButton(
             controls, text="▶", width=28, height=24,
             fg_color="#2a2a2a", hover_color="#444444",
             font=("Segoe UI", 11, "bold"),
             command=lambda: self._step_frame(1)
-        ).grid(row=0, column=1, padx=(0, 6), pady=(8, 4))
+        ).grid(row=0, column=1, padx=(0, 6), pady=(3, 2))
         ctk.CTkButton(
             controls, text="[ In", width=42, height=24,
             fg_color="#1a3a22", hover_color="#2a5a33",
             text_color="#44cc44", font=("Segoe UI", 10, "bold"),
             command=self._tl_set_in_here
-        ).grid(row=0, column=2, padx=(0, 2), pady=(8, 4))
+        ).grid(row=0, column=2, padx=(0, 2), pady=(3, 2))
         ctk.CTkButton(
             controls, text="Out ]", width=42, height=24,
             fg_color="#3a1a1a", hover_color="#5a2a2a",
             text_color="#ee4444", font=("Segoe UI", 10, "bold"),
             command=self._tl_set_out_here
-        ).grid(row=0, column=3, padx=(0, 6), pady=(8, 4))
+        ).grid(row=0, column=3, padx=(0, 6), pady=(3, 2))
         # spacer
         ctk.CTkFrame(controls, fg_color="transparent").grid(
             row=0, column=4, sticky="ew")
@@ -534,20 +532,20 @@ class VideoAnalysisTab(ctk.CTkFrame):
             controls, text="0.0 s", width=52,
             font=("Segoe UI", 10), text_color="#aaaaaa"
         )
-        self.scrub_time_label.grid(row=0, column=5, padx=(0, 4), pady=(8, 4))
+        self.scrub_time_label.grid(row=0, column=5, padx=(0, 4), pady=(3, 2))
         self.tl_dur_label = ctk.CTkLabel(
             controls, text="", width=80,
             font=("Segoe UI", 10), text_color="#888888"
         )
-        self.tl_dur_label.grid(row=0, column=6, padx=(0, 8), pady=(8, 4))
+        self.tl_dur_label.grid(row=0, column=6, padx=(0, 8), pady=(3, 2))
 
         # Row 1 — timeline canvas
         self._timeline = tk.Canvas(
-            controls, height=52, bg="#111111",
+            controls, height=40, bg="#111111",
             bd=0, highlightthickness=0
         )
         self._timeline.grid(row=1, column=0, columnspan=7,
-                            sticky="ew", padx=8, pady=(0, 8))
+                            sticky="ew", padx=8, pady=(0, 4))
         self._timeline.bind("<Configure>",       lambda e: self._tl_redraw())
         self._timeline.bind("<Button-1>",        self._tl_press)
         self._timeline.bind("<B1-Motion>",       self._tl_drag)
@@ -575,7 +573,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
         # --- Mode hint + progress bar ---
         hint_row = ctk.CTkFrame(right, fg_color="transparent")
-        hint_row.grid(row=2, column=0, sticky="ew", pady=(0, 2))
+        hint_row.grid(row=2, column=0, sticky="ew", pady=0)
         hint_row.grid_columnconfigure(0, weight=1)
         self.mode_hint = ctk.CTkLabel(hint_row, text="", font=("Segoe UI", 10),
                                       text_color="#ffcc44")
@@ -661,7 +659,9 @@ class VideoAnalysisTab(ctk.CTkFrame):
             thumb = self._get_display_thumb()
             if thumb:
                 self._frame_photo = thumb
-                self.canvas.create_image(0, 0, anchor="nw", image=self._frame_photo)
+                x = getattr(self, '_img_x0', 0)
+                y = getattr(self, '_img_y0', 0)
+                self.canvas.create_image(x, y, anchor="nw", image=self._frame_photo)
                 self._draw_pose_overlay(self._current_frame_idx)
                 self._redraw_rect()
                 self._draw_zoom_indicator()
@@ -1126,34 +1126,65 @@ class VideoAnalysisTab(ctk.CTkFrame):
         return self._view
 
     def _get_display_thumb(self) -> Optional[ImageTk.PhotoImage]:
-        """Crop frame to current viewport and resize to canvas dims."""
+        """Fit viewport into canvas with letterboxing (no distortion).
+        Handles zoom-in (viewport ⊆ image) and zoom-out (viewport > image).
+        Sets _disp_x0/_disp_y0/_disp_scale and _img_x0/_img_y0 for coord mapping."""
         if self._frame_img is None:
             return None
         cw, ch = self._cw, self._ch
         x0, y0, x1, y1 = self._get_view()
-        vw, vh = self._frame_img.size
-        ix0 = max(0, int(x0)); iy0 = max(0, int(y0))
-        ix1 = min(vw, int(x1)); iy1 = min(vh, int(y1))
-        if ix1 <= ix0 or iy1 <= iy0 or cw < 1 or ch < 1:
+        vw_img, vh_img = self._frame_img.size
+        vw_v, vh_v = x1 - x0, y1 - y0
+        if vw_v <= 0 or vh_v <= 0 or cw < 1 or ch < 1:
             return None
-        cropped = self._frame_img.crop((ix0, iy0, ix1, iy1))
-        return ImageTk.PhotoImage(cropped.resize((cw, ch), Image.LANCZOS))
+
+        # Scale so the entire viewport (including any black-bar region) fits in canvas
+        scale = min(cw / vw_v, ch / vh_v)
+
+        # Viewport top-left in canvas pixels (centred)
+        vp_canvas_w = int(vw_v * scale)
+        vp_canvas_h = int(vh_v * scale)
+        self._disp_x0 = (cw - vp_canvas_w) // 2
+        self._disp_y0 = (ch - vp_canvas_h) // 2
+        self._disp_scale = scale
+
+        # Clip viewport to image bounds
+        ix0 = max(0.0, x0); iy0 = max(0.0, y0)
+        ix1 = min(float(vw_img), x1); iy1 = min(float(vh_img), y1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            return None  # viewport entirely outside image
+
+        # Canvas position for the visible (clipped) portion
+        self._img_x0 = self._disp_x0 + round((ix0 - x0) * scale)
+        self._img_y0 = self._disp_y0 + round((iy0 - y0) * scale)
+
+        clip_disp_w = max(1, round((ix1 - ix0) * scale))
+        clip_disp_h = max(1, round((iy1 - iy0) * scale))
+
+        cropped = self._frame_img.crop((int(ix0), int(iy0), int(ix1), int(iy1)))
+        return ImageTk.PhotoImage(cropped.resize((clip_disp_w, clip_disp_h), Image.LANCZOS))
 
     def _canvas_to_video(self, cx: int, cy: int):
         x0, y0, x1, y1 = self._get_view()
-        vw_v = x1 - x0; vh_v = y1 - y0
+        vw_v, vh_v = x1 - x0, y1 - y0
         cw, ch = self._cw, self._ch
         if vw_v <= 0 or vh_v <= 0 or cw <= 0 or ch <= 0:
             return int(cx), int(cy)
-        return int(x0 + cx * vw_v / cw), int(y0 + cy * vh_v / ch)
+        scale = min(cw / vw_v, ch / vh_v)
+        dx0 = (cw - vw_v * scale) / 2
+        dy0 = (ch - vh_v * scale) / 2
+        return int(x0 + (cx - dx0) / scale), int(y0 + (cy - dy0) / scale)
 
     def _video_to_canvas(self, vx: int, vy: int):
         x0, y0, x1, y1 = self._get_view()
-        vw_v = x1 - x0; vh_v = y1 - y0
+        vw_v, vh_v = x1 - x0, y1 - y0
         cw, ch = self._cw, self._ch
         if vw_v <= 0 or vh_v <= 0:
             return int(vx), int(vy)
-        return int((vx - x0) * cw / vw_v), int((vy - y0) * ch / vh_v)
+        scale = min(cw / vw_v, ch / vh_v)
+        dx0 = (cw - vw_v * scale) / 2
+        dy0 = (ch - vh_v * scale) / 2
+        return int(dx0 + (vx - x0) * scale), int(dy0 + (vy - y0) * scale)
 
     def _rect_canvas_coords(self):
         rect = self._frame_rects.get(self._current_frame_idx, self._player_rect)
@@ -1379,10 +1410,10 @@ class VideoAnalysisTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _on_canvas_scroll(self, event):
-        """Zoom in/out centered on the mouse position."""
+        """Zoom in/out centred on the mouse position.
+        Allows zoom-out past 100% (viewport extends beyond image → black bars)."""
         if self._frame_img is None:
             return
-        # Normalise delta across platforms
         if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
             factor = 0.8   # zoom in — viewport shrinks
         else:
@@ -1393,32 +1424,42 @@ class VideoAnalysisTab(ctk.CTkFrame):
         vw_img, vh_img = float(self._frame_img.size[0]), float(self._frame_img.size[1])
         cw, ch = self._cw, self._ch
 
-        # Video coord under mouse
-        vx = x0 + event.x * vw_v / cw
-        vy = y0 + event.y * vh_v / ch
+        # Letterbox-aware mouse → video coord
+        scale = min(cw / vw_v, ch / vh_v)
+        dx0 = (cw - vw_v * scale) / 2
+        dy0 = (ch - vh_v * scale) / 2
+        vx = x0 + (event.x - dx0) / scale
+        vy = y0 + (event.y - dy0) / scale
 
-        new_vw = max(80.0, min(vw_img, vw_v * factor))
-        new_vh = max(80.0, min(vh_img, vh_v * factor))
-
-        # Preserve aspect ratio of current view
+        # New viewport size — preserve AR, min 80 px, max 3× image (zoom-out limit)
         ar = vw_v / vh_v if vh_v > 0 else 1.0
-        if new_vw / new_vh > ar:
-            new_vw = new_vh * ar
-        else:
-            new_vh = new_vw / ar
+        new_vw = max(80.0, min(vw_img * 3, vw_v * factor))
+        new_vh = new_vw / ar
 
-        # Keep the point under the mouse fixed
-        nx0 = vx - event.x * new_vw / cw
-        ny0 = vy - event.y * new_vh / ch
+        # New letterbox scale and offset for fixed-point calc
+        new_scale = min(cw / new_vw, ch / new_vh)
+        new_dx0   = (cw - new_vw * new_scale) / 2
+        new_dy0   = (ch - new_vh * new_scale) / 2
+
+        # Keep the video point under mouse fixed
+        nx0 = vx - (event.x - new_dx0) / new_scale
+        ny0 = vy - (event.y - new_dy0) / new_scale
         nx1, ny1 = nx0 + new_vw, ny0 + new_vh
 
-        # Clamp to image bounds
-        if nx0 < 0:        nx0, nx1 = 0.0, new_vw
-        elif nx1 > vw_img: nx1, nx0 = vw_img, vw_img - new_vw
-        if ny0 < 0:        ny0, ny1 = 0.0, new_vh
-        elif ny1 > vh_img: ny1, ny0 = vh_img, vh_img - new_vh
-
         if new_vw >= vw_img and new_vh >= vh_img:
+            # Zoom-out: centre image symmetrically with black bars
+            nx0 = -(new_vw - vw_img) / 2
+            ny0 = -(new_vh - vh_img) / 2
+            nx1, ny1 = nx0 + new_vw, ny0 + new_vh
+        else:
+            # Zoom-in: clamp inside image bounds
+            if nx0 < 0:        nx0, nx1 = 0.0, new_vw
+            elif nx1 > vw_img: nx1, nx0 = vw_img, vw_img - new_vw
+            if ny0 < 0:        ny0, ny1 = 0.0, new_vh
+            elif ny1 > vh_img: ny1, ny0 = vh_img, vh_img - new_vh
+
+        # Snap to None at near-exact fit (avoids hairline drift)
+        if abs(new_vw - vw_img) < 2 and abs(new_vh - vh_img) < 2:
             self._view = None
         else:
             self._view = (nx0, ny0, nx1, ny1)
@@ -1435,18 +1476,23 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.canvas.config(cursor="fleur")
 
     def _on_canvas_mid_drag(self, event):
-        """Pan the view."""
+        """Pan the view (letterbox-aware; allows panning during zoom-out)."""
         if not self._pan_start or not self._pan_view0:
             return
         x0, y0, x1, y1 = self._pan_view0
         vw_v, vh_v = x1 - x0, y1 - y0
         cw, ch = self._cw, self._ch
-        dvx = -(event.x - self._pan_start[0]) * vw_v / cw
-        dvy = -(event.y - self._pan_start[1]) * vh_v / ch
         vw_img = float(self._frame_img.size[0]) if self._frame_img else float(_CANVAS_W)
         vh_img = float(self._frame_img.size[1]) if self._frame_img else float(_CANVAS_H)
-        nx0 = max(0.0, min(vw_img - vw_v, x0 + dvx))
-        ny0 = max(0.0, min(vh_img - vh_v, y0 + dvy))
+        scale = min(cw / vw_v, ch / vh_v) if vw_v > 0 and vh_v > 0 else 1.0
+        dvx = -(event.x - self._pan_start[0]) / scale
+        dvy = -(event.y - self._pan_start[1]) / scale
+        nx0 = x0 + dvx
+        ny0 = y0 + dvy
+        # Clamp only when zoomed in (viewport fits within image)
+        if vw_v < vw_img and vh_v < vh_img:
+            nx0 = max(0.0, min(vw_img - vw_v, nx0))
+            ny0 = max(0.0, min(vh_img - vh_v, ny0))
         self._view = (nx0, ny0, nx0 + vw_v, ny0 + vh_v)
         self._redraw_canvas_from_cache()
 
@@ -1492,7 +1538,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
             return
         vw_img = self._frame_img.size[0]
         x0, _y0, x1, _y1 = self._view
-        pct = int(vw_img / max(1.0, x1 - x0) * 100)
+        vw_v = x1 - x0
+        pct = int(vw_img / max(1.0, vw_v) * 100)
         self.zoom_label.configure(text=f"{pct}%")
 
     def _draw_zoom_indicator(self):
@@ -2065,9 +2112,9 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
                             # Consolidate head landmarks
                             _HEAD_SRC = [
-                                "nose","left_eye_inner","left_eye","left_eye_outer",
-                                "right_eye_inner","right_eye","right_eye_outer",
-                                "left_ear","right_ear","mouth_left","mouth_right",
+                                "nose", "left_eye_inner", "left_eye", "left_eye_outer",
+                                "right_eye_inner", "right_eye", "right_eye_outer",
+                                "left_ear", "right_ear", "mouth_left", "mouth_right",
                             ]
                             _head_pts = [landmarks[k] for k in _HEAD_SRC if k in landmarks]
                             if _head_pts:
@@ -2079,8 +2126,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
                                 landmarks.pop(k, None)
 
                             # Consolidate hand landmarks
-                            _LHAND_SRC = ["left_wrist","left_pinky","left_index","left_thumb"]
-                            _RHAND_SRC = ["right_wrist","right_pinky","right_index","right_thumb"]
+                            _LHAND_SRC = ["left_wrist", "left_pinky", "left_index", "left_thumb"]
+                            _RHAND_SRC = ["right_wrist", "right_pinky", "right_index", "right_thumb"]
                             for _hand_key, _srcs in [("left_hand", _LHAND_SRC),
                                                       ("right_hand", _RHAND_SRC)]:
                                 _pts = [landmarks[k] for k in _srcs if k in landmarks]
@@ -2097,4 +2144,389 @@ class VideoAnalysisTab(ctk.CTkFrame):
                     # Store result: new detection, or fall back to previous frame
                     if _accepted is not None:
                         new_poses[fi] = _accepted
-                        prev_landmark
+                        prev_landmarks = _accepted
+                    elif prev_landmarks:
+                        # No detection or rejected — reuse previous pose unchanged
+                        new_poses[fi] = dict(prev_landmarks)
+
+                    if i % 5 == 0:
+                        pct = int(i / n * 100)
+                        self.after(0, lambda p=pct:
+                                   self.track_progress_label.configure(
+                                       text=f"Estimating… {p}%"))
+
+            self._frame_poses.update(new_poses)
+            total_new = len(new_poses)
+            cap.release()
+            self.after(0, lambda t=total_new: self._on_preview_done(t))
+
+        except Exception as e:
+            self.after(0, lambda err=str(e):
+                       self.track_progress_label.configure(
+                           text=f"Preview error: {err}", text_color="#ff4444"))
+            self.after(0, lambda: self.preview_btn.configure(
+                state="normal", text="\U0001f9b4 Estimate Poses"))
+            self._previewing = False
+
+    def _on_preview_done(self, n: int):
+        self._previewing = False
+        self.preview_btn.configure(state="normal", text="\U0001f9b4 Estimate Poses")
+        self.track_progress_label.configure(
+            text=f"✅ {n} frames with pose overlay",
+            text_color="#44cc44")
+        self._redraw_rect()
+
+    # ------------------------------------------------------------------
+    # Pose overlay drawing
+    # ------------------------------------------------------------------
+
+    # Joints to draw with a larger dot + white fill
+    _KEY_JOINTS = {
+        "head",
+        "left_shoulder",  "right_shoulder",
+        "left_elbow",     "right_elbow",
+        "left_hand",      "right_hand",
+        "left_hip",       "right_hip",
+        "left_knee",      "right_knee",
+        "left_ankle",     "right_ankle",
+    }
+
+    # Segment colours: torso=white, left=blue, right=orange, head=grey
+    _SEG_COLOUR = {
+        ("head",           "left_shoulder"):  "#888888",
+        ("head",           "right_shoulder"): "#888888",
+        ("left_shoulder",  "right_shoulder"): "#ffffff",
+        ("left_shoulder",  "left_elbow"):     "#4499ff",
+        ("left_elbow",     "left_hand"):      "#4499ff",
+        ("right_shoulder", "right_elbow"):    "#ff8844",
+        ("right_elbow",    "right_hand"):     "#ff8844",
+        ("left_shoulder",  "left_hip"):       "#ffffff",
+        ("right_shoulder", "right_hip"):      "#ffffff",
+        ("left_hip",       "right_hip"):      "#ffffff",
+        ("left_hip",       "left_knee"):      "#4499ff",
+        ("left_knee",      "left_ankle"):     "#4499ff",
+        ("right_hip",      "right_knee"):     "#ff8844",
+        ("right_knee",     "right_ankle"):    "#ff8844",
+    }
+
+    def _draw_pose_overlay(self, frame_idx: int):
+        """Draw pose skeleton + joint dots for the given frame on the canvas."""
+        self.canvas.delete("pose_overlay")
+        poses = self._frame_poses.get(frame_idx, {})
+        if not poses:
+            return
+
+        # Segments
+        for (a, b), colour in self._SEG_COLOUR.items():
+            if a in poses and b in poses:
+                ax, ay = self._video_to_canvas(int(poses[a][0]), int(poses[a][1]))
+                bx, by = self._video_to_canvas(int(poses[b][0]), int(poses[b][1]))
+                self.canvas.create_line(
+                    ax, ay, bx, by,
+                    fill=colour, width=2, tags="pose_overlay"
+                )
+
+        # Joint dots
+        for name, (vx, vy) in poses.items():
+            cx, cy = self._video_to_canvas(int(vx), int(vy))
+            if name in self._KEY_JOINTS:
+                r, fill, outline = 5, "#ffffff", "#000000"
+            else:
+                r, fill, outline = 3, "#aaaaaa", ""
+            self.canvas.create_oval(
+                cx - r, cy - r, cx + r, cy + r,
+                fill=fill, outline=outline, width=1,
+                tags="pose_overlay"
+            )
+
+        # If frame is locked, draw a small lock badge
+        if frame_idx in self._locked_frames:
+            cw = self._cw
+            self.canvas.create_text(
+                cw - 8, 8,
+                text="\U0001f512", font=("Segoe UI", 10),
+                fill="#ffcc44", anchor="ne",
+                tags="pose_overlay"
+            )
+
+    # ------------------------------------------------------------------
+    # Player label helper
+    # ------------------------------------------------------------------
+
+    def _get_player_label(self) -> str:
+        """Return a short label string for the player bounding box."""
+        if self._current_frame_idx in self._locked_frames:
+            return "\U0001f512 locked"
+        n = len(self._frame_poses.get(self._current_frame_idx, {}))
+        if n:
+            return f"\U0001f9b4 {n} pts"
+        return "Player"
+
+    # ------------------------------------------------------------------
+    # Calibration
+    # ------------------------------------------------------------------
+
+    def _start_calibration(self):
+        """Enter calibration mode: user clicks 2 points to define a known distance."""
+        self._interact_mode = 'calibrate'
+        self._calib_points = []
+        self.canvas.delete("calib_mark")
+        self.canvas.delete("calib_line")
+        self.calib_status_label.configure(
+            text="Click point 1…", text_color="#ffcc44")
+        self.canvas.config(cursor="crosshair")
+        self.canvas.focus_set()
+
+    def _finish_calibration(self):
+        """Complete 2-point calibration: ask for real-world distance."""
+        if len(self._calib_points) < 2:
+            return
+        p1, p2 = self._calib_points[:2]
+        import math
+        pixel_dist = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        if pixel_dist < 1:
+            self._clear_calibration()
+            return
+
+        # Draw line between the two points
+        c1 = self._video_to_canvas(int(p1[0]), int(p1[1]))
+        c2 = self._video_to_canvas(int(p2[0]), int(p2[1]))
+        self.canvas.create_line(c1[0], c1[1], c2[0], c2[1],
+                                fill="#ffdd00", width=2, dash=(4, 2),
+                                tags="calib_line")
+
+        from tkinter.simpledialog import askfloat
+        dist_m = askfloat(
+            "Calibration",
+            f"Enter real-world distance between the 2 clicked points (metres):\n"
+            f"(pixel distance: {pixel_dist:.1f} px)",
+            minvalue=0.001, parent=self
+        )
+        if dist_m is None or dist_m <= 0:
+            self._clear_calibration()
+            return
+
+        self._scale_px_per_m = pixel_dist / dist_m
+        self._interact_mode = None
+        self.calib_status_label.configure(
+            text=f"✅ {self._scale_px_per_m:.1f} px/m",
+            text_color="#44cc44")
+        self.canvas.config(cursor="crosshair")
+
+    def _clear_calibration(self):
+        """Remove calibration data and markers."""
+        self._calib_points = []
+        self._scale_px_per_m = None
+        self._interact_mode = None
+        self.calib_status_label.configure(
+            text="Not calibrated", text_color="#888888")
+        self.canvas.delete("calib_mark")
+        self.canvas.delete("calib_line")
+
+    # ------------------------------------------------------------------
+    # Video browsing + loading
+    # ------------------------------------------------------------------
+
+    def _browse_video(self):
+        from tkinter.filedialog import askopenfilename
+        path = askopenfilename(
+            title="Select Video File",
+            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv *.wmv *.m4v"),
+                       ("All files", "*.*")]
+        )
+        if not path:
+            return
+        self.video_entry.delete(0, "end")
+        self.video_entry.insert(0, path)
+        self._load_video(path)
+
+    def _load_video(self, path: str):
+        """Load a video file: read metadata and show first frame."""
+        import cv2
+        vpath = Path(path)
+        if not vpath.exists():
+            return
+        self._video_path = vpath
+        self._view = None
+        self._frame_rects = {}
+        self._user_anchors = set()
+        self._frame_poses = {}
+        self._locked_frames = set()
+        self._player_rect = None
+        self._calib_points = []
+        self._scale_px_per_m = None
+        self._interact_mode = None
+        self._video_rotation = 0
+        self._video_flip_h = False
+
+        cap = cv2.VideoCapture(str(vpath))
+        fps   = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._video_fps      = fps
+        self._video_duration = total / fps if fps > 0 else 0.0
+        self._current_frame_idx = 0
+        self._start_time = None
+        self._end_time   = None
+
+        ret, frame = cap.read()
+        cap.release()
+        if ret:
+            from PIL import Image as _PIL
+            img = _PIL.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            self._frame_img = img
+            self._frame_photo = None
+        else:
+            self._frame_img = None
+
+        dur_s  = self._video_duration
+        dur_m  = int(dur_s // 60)
+        dur_s2 = dur_s - dur_m * 60
+        self.video_info_label.configure(
+            text=f"{w}×{h}  {fps:.1f} fps  {dur_m}:{dur_s2:04.1f}")
+        self.tl_dur_label.configure(text=f"/ {dur_m}:{dur_s2:04.1f}")
+        self.scrub_time_label.configure(text="0.0 s")
+
+        # Reset sliders
+        self._on_scrub_slider(0.0)
+        self._redraw_canvas_from_cache()
+        self._update_zoom_label()
+        self._tl_redraw()
+        self._update_sel_status()
+        self.video_entry.delete(0, "end")
+        self.video_entry.insert(0, str(vpath))
+
+    # ------------------------------------------------------------------
+    # Output / export
+    # ------------------------------------------------------------------
+
+    def _browse_output(self):
+        from tkinter.filedialog import askdirectory
+        folder = askdirectory(title="Select Output Directory", parent=self)
+        if folder:
+            self.output_entry.delete(0, "end")
+            self.output_entry.insert(0, folder)
+
+    def _run_analysis(self):
+        """Export poses CSV then attempt OpenSim analysis."""
+        if not self._video_path or not self._video_path.exists():
+            from tkinter import messagebox
+            messagebox.showwarning("No Video", "Load a video file first.", parent=self)
+            return
+        if self._running:
+            return
+        self._export_poses_csv(silent=False)
+
+    def _export_poses_csv(self, silent: bool = False):
+        """Write all pose data to a CSV file next to the video (or chosen output dir)."""
+        import csv
+        if not self._frame_poses:
+            if not silent:
+                from tkinter import messagebox
+                messagebox.showinfo(
+                    "No Poses", "No pose data to export.\nRun pose estimation first.", parent=self)
+            return
+
+        out_dir_str = self.output_entry.get().strip()
+        if out_dir_str:
+            out_dir = Path(out_dir_str)
+        elif self._video_path:
+            out_dir = self._video_path.parent
+        else:
+            from tkinter import messagebox
+            messagebox.showwarning("No Output Directory",
+                                   "Set an output directory first.", parent=self)
+            return
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stem     = self._video_path.stem if self._video_path else "poses"
+        csv_path = out_dir / f"{stem}_poses.csv"
+        fps      = self._video_fps or 30.0
+
+        all_names = sorted({
+            name
+            for poses in self._frame_poses.values()
+            for name in poses
+        })
+
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                header = (["frame", "time_s"]
+                          + [f"{n}_x" for n in all_names]
+                          + [f"{n}_y" for n in all_names])
+                writer.writerow(header)
+                for fi in sorted(self._frame_poses.keys()):
+                    poses = self._frame_poses[fi]
+                    row   = [fi, round(fi / fps, 4)]
+                    row  += [round(poses[n][0], 2) if n in poses else "" for n in all_names]
+                    row  += [round(poses[n][1], 2) if n in poses else "" for n in all_names]
+                    writer.writerow(row)
+            self._log(f"Poses exported → {csv_path}")
+            self._refresh_output_files()
+            if not silent:
+                from tkinter import messagebox
+                messagebox.showinfo("Export Complete",
+                                    f"Poses exported to:\n{csv_path}", parent=self)
+        except Exception as e:
+            if not silent:
+                from tkinter import messagebox
+                messagebox.showerror("Export Error", str(e), parent=self)
+
+    def _cancel_analysis(self):
+        """Cancel a running analysis or tracking job."""
+        self._running   = False
+        self._tracking  = False
+        self._previewing = False
+        if self._process and self._process.poll() is None:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass
+        self._set_running(False)
+
+    def _refresh_output_files(self):
+        """Repopulate the Output Files list from the chosen output directory."""
+        for w in self.files_frame.winfo_children():
+            w.destroy()
+
+        out_dir_str = self.output_entry.get().strip()
+        if not out_dir_str and self._video_path:
+            out_dir_str = str(self._video_path.parent)
+        if not out_dir_str:
+            _lbl = ctk.CTkLabel(
+                self.files_frame, text="(no output files found)",
+                text_color="#666666", font=("Segoe UI", 10))
+            _lbl.pack(padx=8, pady=8)
+            return
+
+        out_dir = Path(out_dir_str)
+        if not out_dir.exists():
+            return
+
+        exts = {".csv", ".trc", ".mot", ".osim", ".sto", ".json", ".mp4"}
+        files = sorted(
+            (f for f in out_dir.iterdir() if f.suffix.lower() in exts),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
+        if not files:
+            _lbl = ctk.CTkLabel(
+                self.files_frame, text="(no output files found)",
+                text_color="#666666", font=("Segoe UI", 10))
+            _lbl.pack(padx=8, pady=8)
+            return
+
+        for f in files[:20]:
+            row = ctk.CTkFrame(self.files_frame, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=1)
+            ctk.CTkLabel(row, text=f.name,
+                         font=("Segoe UI", 9), text_color="#aaaaaa",
+                         anchor="w").pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(
+                row, text="Open", width=55, height=20,
+                fg_color="#444444", hover_color="#555555",
+                font=("Segoe UI", 9),
+                command=lambda p=f: os.startfile(str(p))
+            ).pack(side="right")
