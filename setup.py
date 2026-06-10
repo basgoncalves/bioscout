@@ -53,6 +53,7 @@ setup(
         ],
         'msk_modelling_python.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
         'msk_modelling_python.tests': ['*.xml'],
+        'msk_modelling_python.models': ['*.osim'],
     },
     entry_points={
         'console_scripts': [

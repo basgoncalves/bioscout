@@ -559,3 +559,110 @@ class ScreenRecorder:
                              state=tk.DISABLED, bg='#1565c0', fg='white',
                              activebackground='#0d47a1', activeforeground='white')
         trim_btn.pack(side='left', padx=6)
+        tk.Button(act, text="Close", width=8,
+                  command=lambda: (_release(), dlg.destroy())).pack(side='left', padx=6)
+
+        dlg.protocol("WM_DELETE_WINDOW", lambda: (_release(), dlg.destroy()))
+
+    def _do_trim(self, in_path, start_s, end_s, out_path, status_var, btn):
+        """Trim in_path [start_s, end_s) and write to out_path (background thread)."""
+        cap = cv2.VideoCapture(str(in_path))
+        fps   = cap.get(cv2.CAP_PROP_FPS) or 20.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        start_f = int(start_s * fps)
+        end_f   = int(end_s * fps) if end_s is not None else total
+        end_f   = min(end_f, total)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+        try:
+            for _ in range(max(0, end_f - start_f)):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                out.write(frame)
+        finally:
+            cap.release()
+            out.release()
+
+        self.root.after(0, status_var.set, f"Saved → {out_path.name}")
+        self.root.after(0, btn.config, {'state': tk.NORMAL})
+
+    def _on_quit(self):
+        """Quit the recorder."""
+        self.recording = False
+        self._hide_area_overlay()
+        self.root.destroy()
+
+    # ------------------------------------------------------------------ #
+    #  Main entry point                                                    #
+    # ------------------------------------------------------------------ #
+    def run(self):
+        """Launch the screen recorder control panel."""
+        self.root = tk.Tk()
+        self.root.title("Screen Recorder")
+        self.root.resizable(False, False)
+        self.root.attributes('-topmost', True)
+
+        self._area_label_var = tk.StringVar(value="No area selected")
+        self._status_var     = tk.StringVar(value="Select an area to begin")
+
+        pad = dict(padx=12, pady=5)
+
+        tk.Label(self.root, textvariable=self._area_label_var,
+                 font=('Arial', 10, 'bold')).pack(**pad)
+
+        # FPS row
+        fps_frame = tk.Frame(self.root)
+        fps_frame.pack(padx=12, pady=(0, 2))
+        tk.Label(fps_frame, text="FPS:", font=('Arial', 9)).pack(side=tk.LEFT)
+        self._fps_var = tk.StringVar(value='20')
+        fps_spin = tk.Spinbox(fps_frame, textvariable=self._fps_var,
+                              values=(5, 10, 15, 20, 24, 30, 60),
+                              width=5, font=('Arial', 9), state='readonly')
+        fps_spin.pack(side=tk.LEFT, padx=4)
+
+        tk.Label(fps_frame, text="Audio:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(12, 0))
+        self._audio_var = tk.StringVar(value='Off')
+        ttk.Combobox(fps_frame, textvariable=self._audio_var,
+                     values=['Off', 'System audio', 'Microphone'],
+                     width=13, state='readonly').pack(side=tk.LEFT, padx=4)
+
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(padx=12, pady=4)
+
+        tk.Button(btn_frame, text="Select Area", width=13,
+                  command=self._on_select).grid(row=0, column=0, padx=4)
+
+        self._btn_start = tk.Button(btn_frame, text="▶  Start", width=11,
+                                    state=tk.DISABLED, command=self._on_start,
+                                    bg='#2e7d32', fg='white',
+                                    activebackground='#1b5e20', activeforeground='white')
+        self._btn_start.grid(row=0, column=1, padx=4)
+
+        self._btn_stop = tk.Button(btn_frame, text="■  Stop", width=11,
+                                   state=tk.DISABLED, command=self._on_stop,
+                                   bg='#c62828', fg='white',
+                                   activebackground='#7f0000', activeforeground='white')
+        self._btn_stop.grid(row=0, column=2, padx=4)
+
+        tk.Button(btn_frame, text="Quit", width=8,
+                  command=self._on_quit).grid(row=0, column=3, padx=4)
+
+        tk.Button(btn_frame, text="✂  Trim Video", width=15,
+                  command=self._on_trim).grid(row=1, column=0, columnspan=4, pady=(6, 0))
+
+        tk.Label(self.root, textvariable=self._status_var,
+                 font=('Arial', 9), fg='gray').pack(**pad)
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    recorder = ScreenRecorder()
+    recorder.run()

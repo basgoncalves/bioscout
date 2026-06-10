@@ -284,4 +284,15 @@ Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
 ### v0.4.0
 - Improved app and batch processing with new settings and GUI entry point
 - Cleaned up stale files and moved CEINMS settings
-- Added n8n-inspired workflow
+- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
+- Batch pipeline fix, GUI stability improvements, OpenSim late-load
+
+### v0.3.6
+- Updated utils
+- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
+
+### v0.0.20
+- Attempted CEINMS2 integration via pip packaging
+
+### v0.0.17
+- Version bump with new images and path adjustments in classes

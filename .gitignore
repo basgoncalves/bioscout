@@ -40,4 +40,15 @@ outputs/
 *.kdenlive
 msk_modelling_python/requirements.txt
 msk_modelling_python/app/
-msk_mod
+msk_modelling_python/executables/
+msk_modelling_python/src/
+log.txt
+cleanup_and_commit.ps1
+
+# Logs
+logs/
+*.log
+msk_modelling_python/logs/
+
+*Geometry/
+msk_modelling_python/outputs/

@@ -1639,4 +1639,8 @@ def main():
     tracker.write_opensim_mot(save_path=str(out / "buet_motion.mot"),
                               model_config=FULL_BODY_CONFIG)
     tracker.write_opensim_mot(save_path=str(out / "full_body_motion.mot"),
-                              model_
+                              model_config=FULL_BODY_CONFIG)
+
+
+if __name__ == "__main__":
+    main()
