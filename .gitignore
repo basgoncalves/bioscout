@@ -43,7 +43,6 @@ bioscout/app/
 bioscout/executables/
 bioscout/src/
 log.txt
-cleanup_and_commit.ps1
 
 # Logs
 logs/
@@ -51,4 +50,6 @@ logs/
 bioscout/logs/
 
 *Geometry/
-bioscout/outputs/
+
+# User-specific batch config (contains local paths)
+video_batch_run.json

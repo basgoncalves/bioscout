@@ -1,8 +1,0 @@
-{
-    "videos": [
-        "C:/Users/Basilio/Videos/running/jump_side_view.mp4",
-        "C:/Users/Basilio/Videos/running/squat_front_view.mp4"
-    ],
-    "model": "GPK_generic",
-    "detect_interval": 1
-}
