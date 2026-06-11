@@ -1,4 +1,4 @@
-"""
+u"""
 Unified Settings Module
 """
 
@@ -13,7 +13,7 @@ MODULE_PATH = Path(__file__).parent
 # PROJECT ROOT — the only absolute path you need to change per project.
 # All other paths are derived from it.
 # ============================================================================
-PROJECT_ROOT    = Path(r'C:\Users\Basilio\ucloud\Squat_Width')
+PROJECT_ROOT    = Path.home() / 'Ucloud' / 'FAIS'
 PROJECT_NAME    = 'squatting_fais'
 
 MODELS_DIR      = PROJECT_ROOT / 'Models'
@@ -33,15 +33,13 @@ class PlayerConfig:
     group: str = ''                                     # e.g. 'fais', 'control'
     sessions: List[str] = field(default_factory=list)  # session folder names under SIMULATIONS_DIR;
                                                         # leave empty to use [player_id]
-    static_trial: str = 'static_01'                    # static/calibration trial name
+    static_trial: str = 'static1'                    # static/calibration trial name
     notes: str = ''
 
 
 PLAYERS = {
-    'P03': PlayerConfig(group='fais'),
-    'P05': PlayerConfig(group='fais'),
-    'P08': PlayerConfig(group='control'),
-    'P09': PlayerConfig(group='control'),
+    '012': PlayerConfig(group='fais'),
+    '078': PlayerConfig(group='control'),
 }
 
 
@@ -85,8 +83,8 @@ class BatchSettings:
     #  auto-detects any trial whose name starts with "static".)
     sessions = SESSIONS
     setup_files_folder = SETUP_DIR
-    generic_model = os.path.join(MODELS_DIR, 'Catelli-V4.0_pyCGM_pelvis.osim')
-    markerset = os.path.join(SETUP_DIR, "markers.xml")
+    generic_model = os.path.join(MODELS_DIR, 'Rajagopal2015_FAI_os4.osim')
+    markerset = os.path.join(SETUP_DIR, "markers_FAIS.xml")
     trials_to_skip: list = []
 
     auto_create_dirs = True
@@ -369,7 +367,7 @@ class Inputs:
         self.emg = 'emg.mot'
         self.emg_filtered_normalised = 'emg_filtered_normalised.mot'
         self.grf_mot = 'grf.mot'
-        self.markerset = 'markers.xml'
+        self.markerset = 'markers_FAIS.xml'
         self.markers = 'marker_experimental.trc'
         self.events = 'events.csv'
 

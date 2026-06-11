@@ -40,12 +40,13 @@ python -m bioscout
 
 **Run batch pipeline:**
 ```bash
+cd <project_dir>
 python -m bioscout -b settings.py
 ```
-
+Note: copy the setting
 **Custom dataset:**
 ```bash
-python -m bioscout -b bioscout/settings_teaching.py
+python -m bioscout -b bioscout/settings.py
 ```
 
 ---

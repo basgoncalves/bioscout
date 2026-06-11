@@ -8,6 +8,10 @@ GUI mode (default):
 
 Batch mode:
     python -m bioscout -b settings.py
+    python -m bioscout -b /path/to/project/settings.py
+
+Init mode (scaffold a new project):
+    python -m bioscout --init /path/to/new/project
 """
 
 import sys
@@ -49,6 +53,8 @@ else:
 parser = argparse.ArgumentParser(description="Biomechanical Analysis")
 parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file (batch mode)")
 parser.add_argument('-g', '--gui',   action='store_true', help="Launch GUI (default when no flags given)")
+parser.add_argument('--init', type=str, metavar='PROJECT_PATH',
+                    help="Initialise a new project: create folder structure and copy settings template")
 args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
@@ -291,7 +297,17 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
                     logger.info(f"  Skipping {trial.trial} (in trials_to_skip)")
                     continue
                 logger.info(f"  {trial.trial}")
-                _run_step(trial, "C3D export", "export_c3d")
+                ok = _run_step(trial, "C3D export", "export_c3d")
+                # After export, refresh time_range from the newly created TRC so that
+                # IK/ID setup files get the correct time window (settings XML was
+                # written before the TRC existed, so time_range was 'None').
+                if ok:
+                    os.chdir(trial.path)
+                    new_tr = trial.get_time_range()
+                    if new_tr:
+                        trial.time_range = new_tr
+                        trial.update_trial_attribute('time_range', new_tr)
+                        logger.info(f"    time_range updated: {new_tr[0]:.4f} – {new_tr[1]:.4f} s")
                 # Static trial only needs TRC for scaling — skip EMG processing
                 if not is_static:
                     _run_step(trial, "EMG filter", "run_emg_filter")
@@ -571,6 +587,120 @@ def run_video_batch_mode(settings_path: str) -> bool:
     return all_ok
 
 
+def run_init_mode(project_path: str) -> int:
+    """Initialise a new BioScout project at *project_path*.
+
+    Actions
+    -------
+    1. Create standard subdirectories (simulations/, Models/, setup_files/, logs/)
+       if they do not exist.
+    2. Copy the package settings.py template to <project_path>/settings.py,
+       updating PROJECT_ROOT to the given path (skipped if settings.py already exists).
+    3. If simulations/ already contains participant sub-folders, compare them
+       against the PLAYERS registry in the existing settings.py and warn about
+       any mismatches.
+    """
+    import shutil
+    import re as _re
+
+    project = Path(project_path).resolve()
+    print(f"\n{'='*60}")
+    print(f"BioScout — Initialising project at: {project}")
+    print(f"{'='*60}")
+
+    # ---------------------------------------------------------------------- #
+    # 1. Create standard folder structure
+    # ---------------------------------------------------------------------- #
+    standard_dirs = ['simulations', 'Models', 'setup_files', 'logs']
+    for d in standard_dirs:
+        target = project / d
+        if not target.exists():
+            target.mkdir(parents=True)
+            print(f"  [created]  {target}")
+        else:
+            print(f"  [exists]   {target}")
+
+    # ---------------------------------------------------------------------- #
+    # 2. Copy settings template
+    # ---------------------------------------------------------------------- #
+    settings_dest = project / 'settings.py'
+    settings_src  = Path(__file__).parent / 'settings.py'
+
+    if settings_dest.exists():
+        print(f"\n  [skip] settings.py already exists — not overwriting.")
+        print(f"         Edit it directly: {settings_dest}")
+    else:
+        if settings_src.exists():
+            content = settings_src.read_text(encoding='utf-8')
+            # Replace PROJECT_ROOT with the actual project path (forward slashes
+            # work on all platforms; raw string keeps backslashes on Windows).
+            path_repr = repr(str(project)).replace("\\\\", "\\")
+            content = _re.sub(
+                r"PROJECT_ROOT\s*=\s*.*",
+                f"PROJECT_ROOT    = Path({path_repr})",
+                content,
+                count=1,
+            )
+            settings_dest.write_text(content, encoding='utf-8')
+            print(f"\n  [created]  {settings_dest}")
+            print(f"  ⚠  Edit PLAYERS and generic_model / markerset paths before running --batch.")
+        else:
+            print(f"\n  [warn] Package settings.py template not found at {settings_src}.")
+
+    # ---------------------------------------------------------------------- #
+    # 3. Check existing simulations against PLAYERS in settings.py
+    # ---------------------------------------------------------------------- #
+    sims_dir = project / 'simulations'
+    if sims_dir.exists():
+        sim_folders = sorted(
+            d.name for d in sims_dir.iterdir() if d.is_dir()
+        )
+
+        if sim_folders:
+            # Try to load PLAYERS from the settings file
+            players_in_settings: Optional[set] = None
+            try:
+                import importlib.util as _ilu
+                _spec = _ilu.spec_from_file_location('_init_settings', str(settings_dest))
+                _mod  = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                if hasattr(_mod, 'PLAYERS'):
+                    players_in_settings = set(_mod.PLAYERS.keys())
+            except Exception as _e:
+                print(f"\n  [warn] Could not parse PLAYERS from settings.py: {_e}")
+
+            print(f"\n  Simulation folders found  : {sim_folders}")
+
+            if players_in_settings is not None:
+                print(f"  PLAYERS in settings.py    : {sorted(players_in_settings)}")
+                missing_from_settings = set(sim_folders) - players_in_settings
+                missing_from_disk     = players_in_settings - set(sim_folders)
+
+                if missing_from_settings:
+                    print(f"\n  ⚠  WARNING: these folders exist in simulations/ but are NOT in PLAYERS:")
+                    for m in sorted(missing_from_settings):
+                        print(f"       {m}")
+                if missing_from_disk:
+                    print(f"\n  ⚠  WARNING: these PLAYERS entries have no folder in simulations/:")
+                    for m in sorted(missing_from_disk):
+                        print(f"       {m}")
+                if not missing_from_settings and not missing_from_disk:
+                    print(f"\n  ✓  simulations/ folders match PLAYERS in settings.py.")
+            else:
+                print(f"\n  [info] Add these folder names to PLAYERS in settings.py:")
+                for f in sim_folders:
+                    print(f"           '{f}': PlayerConfig(group=''),")
+
+    print(f"\n{'='*60}")
+    print(f"Project ready. Next steps:")
+    print(f"  1. Edit {settings_dest}")
+    print(f"     — set PLAYERS, generic_model, markerset")
+    print(f"  2. cd {project}")
+    print(f"  3. python -m bioscout -b settings.py")
+    print(f"{'='*60}\n")
+    return 0
+
+
 def _is_video_batch_settings(settings_path: str) -> bool:
     """Return True if the settings file looks like a video batch config (has 'videos' key)."""
     import json
@@ -582,6 +712,8 @@ def _is_video_batch_settings(settings_path: str) -> bool:
 
 
 def main() -> int:
+    if args.init:
+        return run_init_mode(args.init)
     if args.batch:
         if _is_video_batch_settings(args.batch):
             return 0 if run_video_batch_mode(args.batch) else 1

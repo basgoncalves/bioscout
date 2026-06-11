@@ -815,8 +815,10 @@ class Analyse(settings.Inputs):
         os.chdir(os.path.abspath(self.path))
         self.load_settings(self.settingsXML)
 
-        # Refresh time_range from data — TRC may not have existed when settings XML was first written
-        if not hasattr(self, 'time_range') or self.time_range is None:
+        # Refresh time_range from data — TRC may not have existed when settings XML was first written.
+        # Also catches the 'None' string produced when the XML was saved before export.
+        _tr = getattr(self, 'time_range', None)
+        if _tr is None or str(_tr).strip() in ('None', '[]', ''):
             self.time_range = self.get_time_range()
 
         # Create IK setup file if it doesn't exist or if replace is True
