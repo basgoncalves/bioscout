@@ -4,8 +4,8 @@ Update versions here when releasing new features.
 """
 
 # Application Version
-APP_VERSION = "0.4.0"
-APP_NAME = "msk_modelling_python"
+APP_VERSION = "1.0.0"
+APP_NAME = "bioscout"
 
 # Module Versions
 MODULE_VERSIONS = {
@@ -42,6 +42,17 @@ DEPENDENCY_VERSIONS = {
 
 # Version History
 VERSION_HISTORY = {
+    "1.0.0": {
+        "date": "2026-06-11",
+        "changes": [
+            "Package renamed from msk_modelling_python to bioscout",
+            "Added PlayerConfig dataclass and build_sessions() helper in settings",
+            "Added project_analysis module (load/compare groups, time-normalise curves)",
+            "Added set_project_log_dir() to AppLogger for batch log redirection",
+            "Extended PlayerProfile with group and mocap_sessions fields",
+            "Version bumped to 1.0.0 — first PyPI release as bioscout",
+        ]
+    },
     "2.1.0": {
         "date": "2026-05-13",
         "changes": [

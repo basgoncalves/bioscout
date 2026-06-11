@@ -210,8 +210,8 @@ if not version_updated:
     sys.exit(1)
 
 # Step 8: Build the package (Automated)
-# Note: Uses the Python executable that ran *this* script
-success = run_command([PYTHON_EXECUTABLE, SETUP_PY_FILE, "sdist", "bdist_wheel"])
+# Uses PEP 517 build frontend — does not invoke setup.py directly
+success = run_command([PYTHON_EXECUTABLE, "-m", "build"])
 if not success:
     print("\n🛑 Script stopped due to error building the package.")
     sys.exit(1)
