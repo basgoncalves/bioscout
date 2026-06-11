@@ -1,0 +1,62 @@
+project:
+  simulations_dir: simulations2
+  models_dir: models
+  results_dir: results
+analysis:
+  reset_settings_xml: false
+  replace_existing: true
+  export_c3d: false
+  increase_muscle_force: false
+  muscle_force_scale_factor: 3.0
+  inverse_kinematics: true
+  inverse_dynamics: true
+  muscle_analysis: true
+  check_moment_arms: false
+  static_optimization: false
+  joint_reaction_analysis: false
+  emg_normalise: false
+  scale_emg: false
+  emg_scale_factor: 0.7
+  create_ceinms_files: false
+  create_ceinms_model: false
+  ceinms_calibration: true
+  ceinms_calibration_plots: false
+  ceinms_optimisation: false
+  ceinms_execution: false
+  ceinms_execution_loop: false
+  jra_ceinms: false
+  create_plots: false
+  plot_emg: false
+ceinms:
+  calibration_trials:
+  - squat_trial_1
+  alpha: 10
+  beta: 1
+  gamma: 1000
+processing:
+  mode: sequential
+  max_workers: 4
+  push_subject_to_git: false
+  push_trial_to_git: false
+gui:
+  theme: dark
+  window_width: 1400
+  window_height: 900
+  auto_save_config: true
+  log_output: true
+  verbose_logging: false
+plotting:
+  figure_size:
+  - 12
+  - 8
+  dpi: 100
+  font_size: 10
+  style: seaborn-v0_8-darkgrid
+batch:
+  auto_discover: true
+  skip_errors: false
+  create_summary_report: true
+  max_retries: 0
+recording:
+  output_dir: C:\Users\Basilio\Videos\Recordings
+  duration_seconds: 5

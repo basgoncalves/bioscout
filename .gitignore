@@ -15,26 +15,40 @@ example_data/
 torch_cpu.dll
 
 # Stale root-level files left over from old package structure
-msk_modelling_python/bops.py
-msk_modelling_python/ceinms.py
-msk_modelling_python/classes.py
-msk_modelling_python/dev.py
-msk_modelling_python/install_opensim.py
-msk_modelling_python/notebook.ipynb
-msk_modelling_python/openSim.py
-msk_modelling_python/emg_normalise.py
-msk_modelling_python/exportC3D.py
-msk_modelling_python/settings.json
-msk_modelling_python/error_log.txt
-msk_modelling_python/log.txt
-msk_modelling_python/requirements.txt
-msk_modelling_python/app/
-msk_modelling_python/executables/
-msk_modelling_python/src/
+bioscout/bops.py
+bioscout/ceinms.py
+bioscout/classes.py
+bioscout/dev.py
+bioscout/install_opensim.py
+bioscout/notebook.ipynb
+bioscout/openSim.py
+bioscout/emg_normalise.py
+bioscout/exportC3D.py
+bioscout/settings.json
+bioscout/error_log.txt
+bioscout/log.txt
+bioscout/utils/log.txt
+*.task
+*.pt
+
+# Runtime outputs — recordings, exports, temp files
+bioscout/outputs/
+outputs/
+*.mp4
+*.wav
+*.mp3
+*.kdenlive
+bioscout/requirements.txt
+bioscout/app/
+bioscout/executables/
+bioscout/src/
 log.txt
 cleanup_and_commit.ps1
 
 # Logs
 logs/
 *.log
-msk_modelling_python/logs/
+bioscout/logs/
+
+*Geometry/
+bioscout/outputs/

@@ -1,0 +1,9 @@
+{
+    "videos": [
+        "C:/path/to/video1.mp4",
+        "C:/path/to/video2.mp4"
+    ],
+    "model": "full_body",
+    "detect_interval": 1,
+    "output_dir": "C:/path/to/output"
+}
