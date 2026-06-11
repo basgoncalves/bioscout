@@ -103,6 +103,15 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.config_manager = config_manager
         self.update_status = update_status_callback or (lambda x: None)
 
+        # Player profiles (anthropometry, models, calibration, detection settings)
+        try:
+            from utils.player_profile import PlayerStore
+            self._player_store = PlayerStore()
+        except Exception as _e:
+            logger.warning(f"VideoAnalysisTab: player profiles unavailable: {_e}")
+            self._player_store = None
+        self._active_profile = None
+
         self._video_path: Optional[Path] = None
         self._process: Optional[subprocess.Popen] = None
         self._running = False
@@ -254,6 +263,63 @@ class VideoAnalysisTab(ctk.CTkFrame):
                      wraplength=410, justify="left").pack(
             anchor="w", padx=10, pady=(4, 4))
 
+        # --- Player profile selector ---------------------------------------
+        ctk.CTkLabel(sel_frame, text="Player profile:",
+                     font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
+        prof_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        prof_row.pack(fill="x", padx=10, pady=(0, 4))
+        self._NO_PLAYER = "— none —"
+        self.player_var = ctk.StringVar(value=self._NO_PLAYER)
+        self.player_menu = ctk.CTkOptionMenu(
+            prof_row, variable=self.player_var, values=[self._NO_PLAYER],
+            width=170, command=self._on_player_selected)
+        self.player_menu.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(prof_row, text="New…", width=48, height=26,
+                      fg_color="#335533", hover_color="#446644",
+                      command=self._new_player_profile).pack(side="left", padx=(4, 0))
+        ctk.CTkButton(prof_row, text="Edit…", width=48, height=26,
+                      fg_color="#334455", hover_color="#445566",
+                      command=self._edit_player_profile).pack(side="left", padx=(4, 0))
+        self.player_info_label = ctk.CTkLabel(
+            sel_frame, text="", font=("Segoe UI", 9),
+            text_color="#88aacc", wraplength=410, justify="left")
+        self.player_info_label.pack(anchor="w", padx=10, pady=(0, 4))
+        self._refresh_player_menu()
+
+        # --- Detection settings (shown BEFORE the action buttons so the user
+        #     reviews them before running anything) ---
+        ctk.CTkLabel(sel_frame, text="Pose detect interval (frames):",
+                     font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
+        interval_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        interval_row.pack(fill="x", padx=10, pady=(0, 4))
+        self.interval_var = ctk.IntVar(value=1)
+        self.interval_label = ctk.CTkLabel(interval_row, text="1", width=30)
+        self.interval_label.pack(side="right")
+        ctk.CTkSlider(
+            interval_row, from_=1, to=10, number_of_steps=9,
+            variable=self.interval_var,
+            command=lambda v: self.interval_label.configure(text=str(int(v)))
+        ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(sel_frame, text="Pose smoothing — max Δpx per frame:",
+                     font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
+        delta_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        delta_row.pack(fill="x", padx=10, pady=(0, 6))
+        try:
+            from settings import RecordingSettings as _RS2
+            _default_delta = int(_RS2.DEFAULT_POSE_MAX_DELTA_PX)
+        except Exception:
+            _default_delta = 50
+        self.delta_var = ctk.IntVar(value=_default_delta)
+        self.delta_label = ctk.CTkLabel(delta_row, text=str(_default_delta), width=36)
+        self.delta_label.pack(side="right")
+        ctk.CTkSlider(
+            delta_row, from_=0, to=200, number_of_steps=40,
+            variable=self.delta_var,
+            command=lambda v: self.delta_label.configure(
+                text="off" if int(v) == 0 else str(int(v)))
+        ).pack(side="left", fill="x", expand=True)
+
         self.player_btn = ctk.CTkButton(
             sel_frame, text="➕ Draw Player Box",
             fg_color="#555555", hover_color="#666666",
@@ -336,38 +402,6 @@ class VideoAnalysisTab(ctk.CTkFrame):
             wraplength=410, justify="left"
         )
         self.sel_status_label.pack(anchor="w", padx=10, pady=(0, 3))
-
-        ctk.CTkLabel(sel_frame, text="Pose detect interval (frames):",
-                     font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
-        interval_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
-        interval_row.pack(fill="x", padx=10, pady=(0, 4))
-        self.interval_var = ctk.IntVar(value=1)
-        self.interval_label = ctk.CTkLabel(interval_row, text="1", width=30)
-        self.interval_label.pack(side="right")
-        ctk.CTkSlider(
-            interval_row, from_=1, to=10, number_of_steps=9,
-            variable=self.interval_var,
-            command=lambda v: self.interval_label.configure(text=str(int(v)))
-        ).pack(side="left", fill="x", expand=True)
-
-        ctk.CTkLabel(sel_frame, text="Pose smoothing — max Δpx per frame:",
-                     font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
-        delta_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
-        delta_row.pack(fill="x", padx=10, pady=(0, 4))
-        try:
-            from settings import RecordingSettings as _RS2
-            _default_delta = int(_RS2.DEFAULT_POSE_MAX_DELTA_PX)
-        except Exception:
-            _default_delta = 50
-        self.delta_var = ctk.IntVar(value=_default_delta)
-        self.delta_label = ctk.CTkLabel(delta_row, text=str(_default_delta), width=36)
-        self.delta_label.pack(side="right")
-        ctk.CTkSlider(
-            delta_row, from_=0, to=200, number_of_steps=40,
-            variable=self.delta_var,
-            command=lambda v: self.delta_label.configure(
-                text="off" if int(v) == 0 else str(int(v)))
-        ).pack(side="left", fill="x", expand=True)
 
         self.lock_btn = ctk.CTkButton(
             sel_frame, text="🔓 Lock this frame",
@@ -457,14 +491,23 @@ class VideoAnalysisTab(ctk.CTkFrame):
         # ===== RIGHT PANEL =====
         right = ctk.CTkFrame(self._paned, fg_color="transparent")
         self._paned.add(right, minsize=400, sticky="nsew")
-        right.grid_columnconfigure(0, weight=1)
-        right.grid_columnconfigure(1, weight=0)
+        right.grid_columnconfigure(0, weight=1)   # video + controls
+        right.grid_columnconfigure(1, weight=0)   # landmark panel
         right.grid_rowconfigure(0, weight=1)
 
-        canvas_frame = ctk.CTkFrame(right, fg_color="#1a1a1a", corner_radius=8)
-        canvas_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
+        # Vertical paned window: drag the horizontal sash to grow / shrink the
+        # video relative to the controls underneath it.
+        self._vpaned = tk.PanedWindow(
+            right, orient=tk.VERTICAL,
+            sashwidth=6, sashcursor="sb_v_double_arrow",
+            background="#444444", bd=0, relief="flat", sashrelief="raised",
+        )
+        self._vpaned.grid(row=0, column=0, sticky="nsew")
+
+        canvas_frame = ctk.CTkFrame(self._vpaned, fg_color="#1a1a1a", corner_radius=8)
         canvas_frame.grid_rowconfigure(0, weight=1)
         canvas_frame.grid_columnconfigure(0, weight=1)
+        self._vpaned.add(canvas_frame, minsize=200, stretch="always", sticky="nsew")
 
         self.canvas = tk.Canvas(canvas_frame,
                                 bg="#1a1a1a", highlightthickness=0, cursor="crosshair")
@@ -495,36 +538,65 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.canvas.bind("<Control-ButtonRelease-1>", self._on_canvas_mid_release)
         self.canvas.focus_set()
 
+        # --- Bottom pane: compact controls block sitting under the video ---
+        # Lives in the lower half of the vertical paned window so it stays close
+        # to the timeline and the video can be expanded by dragging the sash.
+        bottom = ctk.CTkFrame(self._vpaned, fg_color="transparent", height=104)
+        # sticky="nsew" — without it tk.PanedWindow CENTRES the widget in the
+        # pane, which floated the buttons in a band of empty space.
+        # stretch="never" + the sash placement below keep this pane at content
+        # height; all extra space goes to the video pane above.
+        self._vpaned.add(bottom, minsize=88, height=104, stretch="never", sticky="nsew")
+        bottom.grid_columnconfigure(0, weight=1)
+
+        # Place the sash so the bottom pane starts at exactly its content
+        # height. Runs once, after the widget gets its real size.
+        self._vsash_inited = False
+
+        def _init_vsash(_event=None):
+            if self._vsash_inited:
+                return
+            h = self._vpaned.winfo_height()
+            if h <= 1:
+                return
+            need = max(96, bottom.winfo_reqheight())
+            if h > need + 200:
+                self._vsash_inited = True
+                self._vpaned.sash_place(0, 0, h - need - 8)
+
+        self._vpaned.bind("<Configure>", _init_vsash, add="+")
+        self.after(300, _init_vsash)
+
         # --- Under-video controls: step buttons + timeline bar ---
-        controls = ctk.CTkFrame(right, fg_color="#1a1a1a", corner_radius=8)
-        controls.grid(row=1, column=0, sticky="ew", pady=(2, 2))
+        controls = ctk.CTkFrame(bottom, fg_color="#1a1a1a", corner_radius=8)
+        controls.grid(row=0, column=0, sticky="ew", pady=(2, 2))
         controls.grid_columnconfigure(4, weight=1)
 
-        # Row 0 — step buttons + Set In/Out + time readout
+        # Row 0 — step buttons + Set In/Out + time readout (tight to the timeline)
         ctk.CTkButton(
             controls, text="◀", width=28, height=24,
             fg_color="#2a2a2a", hover_color="#444444",
             font=("Segoe UI", 11, "bold"),
             command=lambda: self._step_frame(-1)
-        ).grid(row=0, column=0, padx=(8, 2), pady=(3, 2))
+        ).grid(row=0, column=0, padx=(8, 2), pady=(4, 1))
         ctk.CTkButton(
             controls, text="▶", width=28, height=24,
             fg_color="#2a2a2a", hover_color="#444444",
             font=("Segoe UI", 11, "bold"),
             command=lambda: self._step_frame(1)
-        ).grid(row=0, column=1, padx=(0, 6), pady=(3, 2))
+        ).grid(row=0, column=1, padx=(0, 6), pady=(4, 1))
         ctk.CTkButton(
             controls, text="[ In", width=42, height=24,
             fg_color="#1a3a22", hover_color="#2a5a33",
             text_color="#44cc44", font=("Segoe UI", 10, "bold"),
             command=self._tl_set_in_here
-        ).grid(row=0, column=2, padx=(0, 2), pady=(3, 2))
+        ).grid(row=0, column=2, padx=(0, 2), pady=(4, 1))
         ctk.CTkButton(
             controls, text="Out ]", width=42, height=24,
             fg_color="#3a1a1a", hover_color="#5a2a2a",
             text_color="#ee4444", font=("Segoe UI", 10, "bold"),
             command=self._tl_set_out_here
-        ).grid(row=0, column=3, padx=(0, 6), pady=(3, 2))
+        ).grid(row=0, column=3, padx=(0, 6), pady=(4, 1))
         # spacer
         ctk.CTkFrame(controls, fg_color="transparent").grid(
             row=0, column=4, sticky="ew")
@@ -532,20 +604,20 @@ class VideoAnalysisTab(ctk.CTkFrame):
             controls, text="0.0 s", width=52,
             font=("Segoe UI", 10), text_color="#aaaaaa"
         )
-        self.scrub_time_label.grid(row=0, column=5, padx=(0, 4), pady=(3, 2))
+        self.scrub_time_label.grid(row=0, column=5, padx=(0, 4), pady=(4, 1))
         self.tl_dur_label = ctk.CTkLabel(
             controls, text="", width=80,
             font=("Segoe UI", 10), text_color="#888888"
         )
-        self.tl_dur_label.grid(row=0, column=6, padx=(0, 8), pady=(3, 2))
+        self.tl_dur_label.grid(row=0, column=6, padx=(0, 8), pady=(4, 1))
 
-        # Row 1 — timeline canvas
+        # Row 1 — timeline canvas (directly below the buttons)
         self._timeline = tk.Canvas(
-            controls, height=40, bg="#111111",
+            controls, height=36, bg="#111111",
             bd=0, highlightthickness=0
         )
         self._timeline.grid(row=1, column=0, columnspan=7,
-                            sticky="ew", padx=8, pady=(0, 4))
+                            sticky="ew", padx=8, pady=(0, 3))
         self._timeline.bind("<Configure>",       lambda e: self._tl_redraw())
         self._timeline.bind("<Button-1>",        self._tl_press)
         self._timeline.bind("<B1-Motion>",       self._tl_drag)
@@ -572,8 +644,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.end_time_display   = ctk.CTkLabel(controls, text="– s")
 
         # --- Mode hint + progress bar ---
-        hint_row = ctk.CTkFrame(right, fg_color="transparent")
-        hint_row.grid(row=2, column=0, sticky="ew", pady=0)
+        hint_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        hint_row.grid(row=1, column=0, sticky="ew", pady=0)
         hint_row.grid_columnconfigure(0, weight=1)
         self.mode_hint = ctk.CTkLabel(hint_row, text="", font=("Segoe UI", 10),
                                       text_color="#ffcc44")
@@ -585,7 +657,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         # ===== LANDMARK EDIT PANEL (right of canvas) =====
         lm_panel = ctk.CTkFrame(right, width=140, fg_color="#161620",
                                  corner_radius=6)
-        lm_panel.grid(row=0, column=1, rowspan=3, sticky="nsew",
+        lm_panel.grid(row=0, column=1, sticky="nsew",
                       padx=(4, 0), pady=0)
         lm_panel.grid_propagate(False)
         lm_panel.grid_rowconfigure(1, weight=1)
@@ -964,14 +1036,10 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 return
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             self._frame_img = self._apply_transform(Image.fromarray(frame_rgb))
-            thumb = self._get_display_thumb()
-            if thumb is None:
-                return
-            self._frame_photo = thumb
-            self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor="nw", image=self._frame_photo)
-            self._draw_pose_overlay(frame_idx)
-            self._redraw_rect()
+            # Use the shared centred redraw so the frame stays in the same place
+            # while scrubbing (previously drawn at (0,0), which made the video
+            # jump to the top-left corner on every slider move).
+            self._redraw_canvas_from_cache()
             self._refresh_landmark_panel()
             self._update_lock_btn_state(frame_idx)
         except Exception as e:
@@ -1553,10 +1621,13 @@ class VideoAnalysisTab(ctk.CTkFrame):
             return
         cw, ch = self._cw, self._ch
         txt = f"{pct}%"
+        # Tkinter canvas only accepts 6-digit (#rrggbb) colours, not 8-digit
+        # (#rrggbbaa) — use a solid dark badge with stipple for a subtle look.
         self.canvas.create_rectangle(cw - 46, ch - 20, cw - 2, ch - 2,
-                                     fill="#00000088", outline="", tags="zoom_badge")
+                                     fill="#000000", stipple="gray50",
+                                     outline="", tags="zoom_badge")
         self.canvas.create_text(cw - 24, ch - 11, text=txt,
-                                fill="#ffffffcc", font=("Segoe UI", 8, "bold"),
+                                fill="#ffffff", font=("Segoe UI", 8, "bold"),
                                 tags="zoom_badge")
 
     # ------------------------------------------------------------------
@@ -1801,6 +1872,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
             tracker.init(frame, (x1, y1, _roi_w, _roi_h))
             n_frames = max(end_frame - first_fi, 1)
 
+            # ROI position smoothing: exponential moving average + dead-zone.
+            # The raw tracker output jitters a few px every frame even on a
+            # stationary subject; the pose is detected inside the box so the
+            # jitter adds noise to the landmark coordinates.
+            _sm_x, _sm_y = float(x1), float(y1)
+            _SM_ALPHA = 0.45        # 0..1, lower = smoother
+            _SM_DEADZONE = 3.0      # ignore sub-3px tracker wobble
+
             for frame_idx in range(first_fi + 1, end_frame + 1):
                 if next_anchor is not None and frame_idx == next_anchor:
                     rx1, ry1, rx2, ry2 = self._frame_rects[next_anchor]
@@ -1810,6 +1889,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                     ret, frame = _read_transformed(cap)
                     if ret:
                         tracker.init(frame, (rx1, ry1, _roi_w, _roi_h))
+                    _sm_x, _sm_y = float(rx1), float(ry1)   # reset smoother at anchor
                     next_anchor = anchor_queue.pop(0) if anchor_queue else None
                     continue
 
@@ -1823,7 +1903,12 @@ class VideoAnalysisTab(ctk.CTkFrame):
                     break
                 ok, bbox = tracker.update(frame)
                 if ok:
-                    bx, by = int(bbox[0]), int(bbox[1])
+                    rawx, rawy = float(bbox[0]), float(bbox[1])
+                    # Dead-zone: keep the box still for sub-pixel/jitter moves
+                    if abs(rawx - _sm_x) > _SM_DEADZONE or abs(rawy - _sm_y) > _SM_DEADZONE:
+                        _sm_x += _SM_ALPHA * (rawx - _sm_x)
+                        _sm_y += _SM_ALPHA * (rawy - _sm_y)
+                    bx, by = int(round(_sm_x)), int(round(_sm_y))
                     # Use fixed dimensions — only the position is tracked
                     self._frame_rects[frame_idx] = (bx, by, bx + _roi_w, by + _roi_h)
 
@@ -1905,11 +1990,17 @@ class VideoAnalysisTab(ctk.CTkFrame):
         try:
             import mediapipe as mp
             from pathlib import Path as _Path
-            model_path = _Path(__file__).parent.parent / "record" / "pose_landmarker_full.task"
-            if not model_path.exists():
-                model_path = _Path(__file__).parent.parent / "record" / "pose_landmarker_lite.task"
-            if not model_path.exists():
-                model_path = _Path(__file__).parent.parent / "record" / "pose_landmarker_full.task"
+            _record_dir = _Path(__file__).parent.parent / "record"
+            full_path = _record_dir / "pose_landmarker_full.task"
+            lite_path = _record_dir / "pose_landmarker_lite.task"
+            # Prefer an already-downloaded model (full, else lite); only download
+            # the full model if neither is present.
+            if full_path.exists():
+                model_path = full_path
+            elif lite_path.exists():
+                model_path = lite_path
+            else:
+                model_path = full_path
                 _URL = (
                     "https://storage.googleapis.com/mediapipe-models/"
                     "pose_landmarker/pose_landmarker_full/float16/latest/"
@@ -2312,6 +2403,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
             text=f"✅ {self._scale_px_per_m:.1f} px/m",
             text_color="#44cc44")
         self.canvas.config(cursor="crosshair")
+        # Persist to the active player's profile so it's reused next time.
+        self._save_calibration_to_profile()
 
     def _clear_calibration(self):
         """Remove calibration data and markers."""
@@ -2322,6 +2415,229 @@ class VideoAnalysisTab(ctk.CTkFrame):
             text="Not calibrated", text_color="#888888")
         self.canvas.delete("calib_mark")
         self.canvas.delete("calib_line")
+
+    # ------------------------------------------------------------------
+    # Player profiles
+    # ------------------------------------------------------------------
+
+    def _refresh_player_menu(self, select_id: Optional[str] = None):
+        """Rebuild the dropdown from the store; optionally select a player id."""
+        if not getattr(self, "_player_store", None):
+            return
+        self._player_index = self._player_store.index()    # {label: id}
+        labels = [self._NO_PLAYER] + list(self._player_index.keys())
+        self.player_menu.configure(values=labels)
+        if select_id:
+            for lbl, pid in self._player_index.items():
+                if pid == select_id:
+                    self.player_var.set(lbl)
+                    return
+        if self.player_var.get() not in labels:
+            self.player_var.set(self._NO_PLAYER)
+
+    def _on_player_selected(self, label: str):
+        if not getattr(self, "_player_store", None):
+            return
+        if label == self._NO_PLAYER:
+            self._active_profile = None
+            self.player_info_label.configure(text="")
+            return
+        pid = getattr(self, "_player_index", {}).get(label)
+        prof = self._player_store.load(pid) if pid else None
+        if prof is None:
+            self.player_info_label.configure(
+                text="(could not load profile)", text_color="#cc6666")
+            return
+        self._active_profile = prof
+        self._apply_profile(prof)
+
+    def _apply_profile(self, prof):
+        """Apply a profile's saved settings to the UI / analysis state."""
+        bits = []
+        if prof.height_m:
+            bits.append(f"{prof.height_m:.2f} m")
+        if prof.mass_kg:
+            bits.append(f"{prof.mass_kg:.0f} kg")
+        if prof.sex:
+            bits.append(prof.sex)
+
+        # Saved calibration → live scale
+        if prof.px_per_m:
+            self._scale_px_per_m = prof.px_per_m
+            self.calib_status_label.configure(
+                text=f"✅ {prof.px_per_m:.1f} px/m (from profile)",
+                text_color="#44cc44")
+            bits.append(f"{prof.px_per_m:.0f} px/m")
+
+        # Detection settings
+        ds = prof.detect_settings or {}
+        try:
+            if "detect_interval" in ds:
+                self.interval_var.set(int(ds["detect_interval"]))
+                self.interval_label.configure(text=str(int(ds["detect_interval"])))
+            if "pose_max_delta_px" in ds:
+                self.delta_var.set(int(ds["pose_max_delta_px"]))
+                self.delta_label.configure(
+                    text="off" if int(ds["pose_max_delta_px"]) == 0
+                    else str(int(ds["pose_max_delta_px"])))
+        except Exception:
+            pass
+
+        # Preferred OpenSim template model
+        if prof.template_model and prof.template_model in (AVAILABLE_MODELS or {}):
+            self.model_var.set(prof.template_model)
+
+        self.player_info_label.configure(
+            text=("  ·  ".join(bits) if bits else "(no anthropometry set)"),
+            text_color="#88aacc")
+        self._log(f"Player profile applied: {prof.name} ({prof.id})")
+
+    def _new_player_profile(self):
+        if not getattr(self, "_player_store", None):
+            return
+        self._player_profile_dialog(None)
+
+    def _edit_player_profile(self):
+        if not getattr(self, "_player_store", None):
+            return
+        if self._active_profile is None:
+            from tkinter import messagebox
+            messagebox.showinfo("No Player",
+                                "Select a player first, or click New…", parent=self)
+            return
+        self._player_profile_dialog(self._active_profile)
+
+    def _player_profile_dialog(self, prof):
+        """Modal create/edit dialog for a player profile."""
+        from utils.player_profile import PlayerProfile
+        import tkinter as _tk
+
+        is_new = prof is None
+        if is_new:
+            prof = PlayerProfile()
+
+        win = ctk.CTkToplevel(self)
+        win.title("New Player" if is_new else f"Edit {prof.name}")
+        win.geometry("360x520")
+        win.transient(self.winfo_toplevel())
+        win.grab_set()
+
+        frm = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        frm.pack(fill="both", expand=True, padx=12, pady=12)
+
+        entries = {}
+
+        def _add(label, value, key):
+            ctk.CTkLabel(frm, text=label, font=("Segoe UI", 11),
+                         anchor="w").pack(fill="x", pady=(6, 0))
+            e = ctk.CTkEntry(frm)
+            if value not in (None, ""):
+                e.insert(0, str(value))
+            e.pack(fill="x")
+            entries[key] = e
+            return e
+
+        _add("Name", prof.name, "name")
+        _add("Sex (M/F)", prof.sex, "sex")
+        _add("Age (years)", prof.age, "age")
+        _add("Height (m)", prof.height_m, "height_m")
+        _add("Mass (kg)", prof.mass_kg, "mass_kg")
+        _add("Template model (OpenSim)", prof.template_model, "template_model")
+
+        # File pickers for model files
+        def _file_row(label, value, key, patterns):
+            ctk.CTkLabel(frm, text=label, font=("Segoe UI", 11),
+                         anchor="w").pack(fill="x", pady=(6, 0))
+            row = ctk.CTkFrame(frm, fg_color="transparent")
+            row.pack(fill="x")
+            e = ctk.CTkEntry(row)
+            if value:
+                e.insert(0, str(value))
+            e.pack(side="left", fill="x", expand=True)
+            entries[key] = e
+
+            def _pick():
+                from tkinter.filedialog import askopenfilename
+                p = askopenfilename(title=label, parent=win, filetypes=patterns)
+                if p:
+                    e.delete(0, "end")
+                    e.insert(0, p)
+            ctk.CTkButton(row, text="…", width=32, command=_pick).pack(
+                side="left", padx=(4, 0))
+
+        _file_row("OpenSim model (.osim)", prof.opensim_model, "opensim_model",
+                  [("OpenSim", "*.osim"), ("All", "*.*")])
+        _file_row("CEINMS model (.xml)", prof.ceinms_model, "ceinms_model",
+                  [("XML", "*.xml"), ("All", "*.*")])
+
+        ctk.CTkLabel(frm, text="Notes", font=("Segoe UI", 11),
+                     anchor="w").pack(fill="x", pady=(6, 0))
+        notes_box = _tk.Text(frm, height=3, bg="#222222", fg="#dddddd",
+                             insertbackground="#dddddd", bd=0)
+        if prof.notes:
+            notes_box.insert("1.0", prof.notes)
+        notes_box.pack(fill="x")
+
+        status = ctk.CTkLabel(frm, text="", font=("Segoe UI", 10),
+                              text_color="#cc6666")
+        status.pack(fill="x", pady=(6, 0))
+
+        def _save():
+            name = entries["name"].get().strip()
+            if not name:
+                status.configure(text="Name is required.")
+                return
+
+            def _f(key):
+                v = entries[key].get().strip()
+                if not v:
+                    return None
+                try:
+                    return float(v)
+                except ValueError:
+                    return None
+
+            prof.name = name
+            prof.sex = entries["sex"].get().strip().upper()[:1]
+            prof.age = _f("age")
+            prof.height_m = _f("height_m")
+            prof.mass_kg = _f("mass_kg")
+            prof.template_model = entries["template_model"].get().strip()
+            prof.opensim_model = entries["opensim_model"].get().strip()
+            prof.ceinms_model = entries["ceinms_model"].get().strip()
+            prof.notes = notes_box.get("1.0", "end").strip()
+            # Carry over current live calibration if profile has none
+            if not prof.px_per_m and self._scale_px_per_m:
+                prof.px_per_m = self._scale_px_per_m
+            # Current detection sliders
+            prof.detect_settings["detect_interval"] = int(self.interval_var.get())
+            prof.detect_settings["pose_max_delta_px"] = int(self.delta_var.get())
+
+            saved = self._player_store.save(prof)
+            self._log(f"Saved player profile → {saved}")
+            self._active_profile = prof
+            self._refresh_player_menu(select_id=prof.id)
+            self._apply_profile(prof)
+            win.destroy()
+
+        btn_row = ctk.CTkFrame(frm, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(btn_row, text="Save", fg_color="#28a745",
+                      hover_color="#218838", command=_save).pack(
+            side="left", expand=True, fill="x", padx=(0, 4))
+        ctk.CTkButton(btn_row, text="Cancel", fg_color="#555555",
+                      hover_color="#666666", command=win.destroy).pack(
+            side="left", expand=True, fill="x", padx=(4, 0))
+
+    def _save_calibration_to_profile(self):
+        """If a player is active, persist the current px/m to their profile."""
+        if self._active_profile is not None and self._scale_px_per_m:
+            self._active_profile.px_per_m = self._scale_px_per_m
+            try:
+                self._player_store.save(self._active_profile)
+                self._log(f"Calibration saved to profile {self._active_profile.id}")
+            except Exception as e:
+                self._log(f"Could not save calibration to profile: {e}")
 
     # ------------------------------------------------------------------
     # Video browsing + loading
@@ -2409,14 +2725,145 @@ class VideoAnalysisTab(ctk.CTkFrame):
             self.output_entry.insert(0, folder)
 
     def _run_analysis(self):
-        """Export poses CSV then attempt OpenSim analysis."""
+        """Export poses CSV, then run video_analyzer.py to generate the MOT file."""
         if not self._video_path or not self._video_path.exists():
             from tkinter import messagebox
             messagebox.showwarning("No Video", "Load a video file first.", parent=self)
             return
         if self._running:
             return
-        self._export_poses_csv(silent=False)
+
+        # 1) Poses CSV (silent — the MOT step reports at the end)
+        self._export_poses_csv(silent=True)
+
+        # 1b) Motion-type segmentation (movement_detector package):
+        #     classifies each frame (standing / walking / running / squatting /
+        #     jumping / side_cut / …) and saves the segments as JSON.
+        try:
+            from movement_detector.detector import detect_segments, segments_to_dict
+            if self._frame_poses:
+                segs = detect_segments(self._frame_poses, fps=self._video_fps or 30.0)
+                if segs:
+                    import json as _json2
+                    out_dir_str_ = self.output_entry.get().strip()
+                    seg_dir = Path(out_dir_str_) if out_dir_str_ else self._video_path.parent
+                    seg_dir.mkdir(parents=True, exist_ok=True)
+                    seg_path = seg_dir / f"{self._video_path.stem}_motion_segments.json"
+                    seg_path.write_text(_json2.dumps(segments_to_dict(segs), indent=2))
+                    summary = ", ".join(
+                        f"{s.task}[{s.start_frame}-{s.end_frame}]" for s in segs[:8])
+                    self._log(f"Motion segments → {seg_path}")
+                    self._log(f"  {summary}" + (" …" if len(segs) > 8 else ""))
+        except Exception as e:
+            self._log(f"Motion segmentation skipped: {e}")
+
+        # 1c) Player-profile snapshot — records which athlete this analysis
+        #     belongs to (anthropometry, model files, calibration) for traceability.
+        if self._active_profile is not None:
+            try:
+                import json as _json3
+                out_dir_str_ = self.output_entry.get().strip()
+                snap_dir = Path(out_dir_str_) if out_dir_str_ else self._video_path.parent
+                snap_dir.mkdir(parents=True, exist_ok=True)
+                snap = snap_dir / f"{self._video_path.stem}_player.json"
+                snap.write_text(_json3.dumps(self._active_profile.to_dict(), indent=2))
+                self._log(f"Player snapshot → {snap}  ({self._active_profile.name})")
+                # Persist any fresh calibration back to the profile.
+                self._save_calibration_to_profile()
+            except Exception as e:
+                self._log(f"Player snapshot skipped: {e}")
+
+        # 2) OpenSim MOT via record/video_analyzer.py
+        # __file__ = .../msk_modelling_python/gui/widgets/video_analysis.py
+        # analyzer = .../msk_modelling_python/record/video_analyzer.py  → up 3.
+        _pkg_root = Path(__file__).resolve().parent.parent.parent  # msk_modelling_python/
+        analyzer = _pkg_root / "record" / "video_analyzer.py"
+        if not analyzer.exists():
+            # Fallback: search the package tree in case the layout changes.
+            _hits = list(_pkg_root.rglob("video_analyzer.py"))
+            if _hits:
+                analyzer = _hits[0]
+        if not analyzer.exists():
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Analyzer Missing",
+                f"video_analyzer.py not found:\n{analyzer}", parent=self)
+            return
+
+        import sys as _sys
+        import json as _json
+        import tempfile
+
+        cmd = [_sys.executable, str(analyzer),
+               "--video", str(self._video_path),
+               "--detect-interval", str(max(1, self.interval_var.get()))]
+
+        model = self.model_var.get()
+        if model and AVAILABLE_MODELS and model in AVAILABLE_MODELS:
+            cmd += ["--model", model]
+
+        out_dir_str = self.output_entry.get().strip()
+        if out_dir_str:
+            cmd += ["--output-dir", out_dir_str]
+
+        t0 = self.start_entry.get().strip()
+        t1 = self.end_entry.get().strip()
+        if t0:
+            cmd += ["--start-time", t0]
+        if t1:
+            cmd += ["--end-time", t1]
+
+        if self._player_rect:
+            cmd += ["--player-rect", ",".join(str(int(v)) for v in self._player_rect)]
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="msk_video_"))
+        if self._frame_rects:
+            anchors_path = tmpdir / "frame_anchors.json"
+            anchors_path.write_text(_json.dumps(
+                {str(k): list(v) for k, v in self._frame_rects.items()}))
+            cmd += ["--frame-anchors", str(anchors_path)]
+        if self._frame_poses:
+            poses_path = tmpdir / "pose_data.json"
+            poses_path.write_text(_json.dumps(
+                {str(k): {n: [float(x), float(y)] for n, (x, y) in lms.items()}
+                 for k, lms in self._frame_poses.items()}))
+            cmd += ["--pose-data", str(poses_path)]
+
+        self._set_running(True)
+        self._log("Running: " + " ".join(cmd))
+        threading.Thread(target=self._run_analyzer_proc, args=(cmd,), daemon=True).start()
+
+    def _run_analyzer_proc(self, cmd: list):
+        """Background thread: run video_analyzer.py and stream its output."""
+        try:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self._process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=creationflags,
+            )
+            for line in self._process.stdout:
+                self._log("  " + line.rstrip())
+            rc = self._process.wait()
+            ok = (rc == 0)
+            def _done():
+                self._set_running(False)
+                self._refresh_output_files()
+                from tkinter import messagebox
+                if ok:
+                    messagebox.showinfo(
+                        "Export Complete",
+                        "Poses CSV and OpenSim MOT exported.\n"
+                        "See the Output Files list.", parent=self)
+                else:
+                    messagebox.showerror(
+                        "Export Failed",
+                        f"video_analyzer.py exited with code {rc}.\n"
+                        "Check the console/log for details.", parent=self)
+            self.after(0, _done)
+        except Exception as e:
+            self._log(f"Analyzer error: {e}")
+            self.after(0, lambda: self._set_running(False))
 
     def _export_poses_csv(self, silent: bool = False):
         """Write all pose data to a CSV file next to the video (or chosen output dir)."""

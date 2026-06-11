@@ -1,224 +1,134 @@
-# msk_modelling_python v0.4.2
+# msk_modelling_python
 
-A Python package for musculoskeletal modelling.
+A Python package for musculoskeletal modelling and biomechanical data analysis.  
+Inspired by [BOPS](https://simtk.org/projects/bops/) (Batch OpenSim Processing Scripts).
 
-This package includes a combination of other packages and custom functions to manipulate and analyze biomechanical data. Originally inspired by the MATLAB version of BOPS (Batch OpenSim Processing Scripts) - [BOPS](https://simtk.org/projects/bops/)
-
-**Author:** Basilio Goncalves, PhD, University of Vienna, 2024
-https://ufind.univie.ac.at/de/person.html?id=1004543
-https://github.com/basgoncalves
+**Author:** Basilio Goncalves, PhD — University of Vienna  
+[ufind.univie.ac.at](https://ufind.univie.ac.at/de/person.html?id=1004543) · [github.com/basgoncalves](https://github.com/basgoncalves)
 
 ---
 
-## Pre-requisites for Installation
+## Requirements
 
-1. **Download a Code Interpreter**  
-    I recommend [Visual Studio Code](https://code.visualstudio.com/download), but use your preferred one.
+- Python ≥ 3.8 (3.11 recommended)
+- [OpenSim ≥ 4.3](https://simtk.org/frs/?group_id=91)
+- Windows (primary target; Linux/macOS untested)
 
-2. **Download and Install Python (>= 3.8)**  
-    Make sure it is the correct bit version: [Python 3.8](https://www.python.org/downloads/release/python-380/)
-
-3. **Download and Install OpenSim (suggest >=4.3)**  
-    [OpenSim Downloads](https://simtk.org/frs/?group_id=91)
-
-4. **Install Rapid Env Editor (optional)**  
-    [Rapid Env Editor](https://www.rapidee.com/en/about)
-
-5. **MOKKA (optional / only Windows users)**
-    [Open-source and cross-platform software to easily analyze biomechanical data](https://biomechanical-toolkit.github.io/mokka/)
+Optional: [Visual Studio Code](https://code.visualstudio.com/download), [MOKKA](https://biomechanical-toolkit.github.io/mokka/)
 
 ---
 
+## Quick Start — pip install
 
-### Pip installation (works for python 3.8)
-(for later versions try [OpenSim using Conda](https://opensimconfluence.atlassian.net/wiki/spaces/OpenSim/pages/53085346/Scripting+in+Python))
-https://pypi.org/project/msk-modelling-python/0.4.0/ 
+**1. Create and activate a virtual environment**
 
-#### Activate your Virtual Environment**
-you can use [Python](https://docs.python.org/3/library/venv.html) or [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) 
 ```sh
-cd <your project folder>
+# Python venv
 python -m venv msk
-```
+.\msk\Scripts\activate          # Windows
+source msk/bin/activate         # Linux / macOS
 
-conda
-```sh
+# Or Conda / Miniconda
 conda create -n msk python=3.11
 conda activate msk
 ```
-or if using miniconda
-```
-C:\ProgramData\miniconda3\Scripts\activate.bat msk
-```
 
-Note: replace 'msk' if you want a different name
+**2. Install**
 
-```
-.\msk\Scripts\activate
-```
-#### Install uv package manager
-```
+```sh
 pip install uv
-```
-
-#### Install msk-modelling-python
-```
 uv pip install msk-modelling-python
 ```
 
-#### Test usage
+**3. Launch**
 
-This launches the GUI. 
-```cmd
+GUI interface (default):
+
+```sh
 python -m msk_modelling_python
 ```
 
-To run in batch mode:
-```cmd
+Batch mode:
+
+```sh
 python -m msk_modelling_python -b msk_modelling_python/settings.py
 ```
 
+Video batch mode:
 
----
-## Work with the code in edditing mode
+```sh
+python -m msk_modelling_python -b video_batch.json
+```
 
-1. **Activate your virtual enviroment (assume name 'msk')** 
-   ```
-   .\msk\Scripts\activate
-   ```
----
-
-2. **Clone this Module "msk_modelling_python" to your virtual environment**
-   ```
-   cd .\msk\Lib\site-packages
-   ```
-     ```
-     git clone https://github.com/basgoncalves/msk_modelling_python.git
-     ```
-     *Note: Ensure the name of the package is exactly "msk_modelling_python"*
----
-
-3. **Run OpenSim Setup from Installation Folder**  
-    See [OpenSim Scripting in Python](https://simtk-confluence.stanford.edu:8443/display/OpenSim/Scripting+in+Python)
-
-     ```sh
-     cd 'C:\OpenSim 4.5\sdk\Python'
-     ```
-     ```sh
-     python setup_win_python38.py
-     ```
-     ```sh
-     python -m pip install .
-     ```
-     Note: run commands from shell or terminal    
----
-
-4. **Add the Path to the OpenSim Libraries to Your Environment Variables**  
-    Add the following paths to your `PATH` variable:
-     ```
-     C:\OpenSim 4.5\bin
-     C:\OpenSim 4.5\lib
-     ```
-     Note: see for help https://answers.microsoft.com/en-us/windows/forum/all/change-system-variables-on-windows-11/f172c29e-fd9e-4f0b-949d-c4696bd656b8
----
-5. **Verify the OpenSim Installation.**
-     ```cmd
-     python 
-     ```
-     ```cmd
-     import opensim as osim
-     model = osim.Model()
-     ```
----
-6. **Install requirements (in the terminal)**
-     ```powershell
-     cd .\msk\Lib\site-packages\msk_modelling_python
-     pip install -r requirements.txt
-     ```
----
-7. **Launch msk_modelling_python**
-     ```cmd
-     python -m msk_modelling_python
-     ```
-     Note: to configure batch processing, edit `msk_modelling_python\settings.py` (see `BatchSettings` and `CEINMSSettings` classes)
----
-8. **Basic Usage**
-
-     **GUI mode (default):**
-     ```cmd
-     python -m msk_modelling_python
-     ```
-
-     **Batch mode** — configure `msk_modelling_python\settings.py` first, then:
-     ```cmd
-     python -m msk_modelling_python -b msk_modelling_python/settings.py
-     ```
-
-     Key settings to configure in `settings.py`:
-     
----
-9. **Use Example Scripts**
-     Use example scripts in the "ExampleScripts" directory to get started with common tasks and workflows.
+> Note: do not paste the descriptive text after these commands. On Windows
+> `cmd.exe`, `#` is not a comment character, so a trailing `# ...` is passed to
+> the program as arguments and causes `unrecognized arguments`.
 
 ---
 
+## Development Setup — work from source
 
-## Tools to be Included:
-- **BTK**  
-  [BTK Documentation](https://biomechanical-toolkit.github.io/docs/Wrapping/Python/_getting_started.html)
-- **c3dServer**  
-  [c3dServer](https://www.c3dserver.com/)
-- **OpenSim**  
-  [OpenSim Scripting in Python](https://simtk-confluence.stanford.edu:8443/display/OpenSim/Scripting+in+Python)
-- **3D Slicer**  
-  [3D Slicer](https://www.slicer.org/)
-- **FEbioStudio**  
-  [FEbioStudio](https://febio.org/)
-- **MeshLab 2023.12**  
-  [MeshLab](https://www.meshlab.net/)
-- **Genesis**  
-  [Genesis](https://genesis-embodied-ai.github.io/)
-  
+**1. Clone into your virtual environment's site-packages**
 
----
+```sh
+.\msk\Scripts\activate
+cd .\msk\Lib\site-packages
+git clone https://github.com/basgoncalves/msk_modelling_python.git
+```
 
-## Code Structure
+**2. Install dependencies**
 
-1. **msk_modelling_python** — main package entry point; run with `python -m msk_modelling_python`
+```sh
+cd msk_modelling_python
+pip install -r requirements.txt
+```
 
-2. **settings.py** — central configuration file; edit `BatchSettings`, `CEINMSSettings`, `UISettings`, and `RecordingSettings` classes to control all pipeline behaviour
+**3. Set up OpenSim Python bindings**
 
-3. **gui/** — PyQt-based graphical interface (launched by default); widgets for batch processing, C3D export, EMG, CEINMS calibration, and results viewing
+```sh
+cd "C:\OpenSim 4.5\sdk\Python"
+python setup_win_python38.py
+python -m pip install .
+```
 
-4. **utils/** — core processing functions: OpenSim (IK, ID, SO, MA), CEINMS, EMG normalisation, model scaling, C3D export, and XML helpers
+Add to your `PATH` environment variable:
+```
+C:\OpenSim 4.5\bin
+C:\OpenSim 4.5\lib
+```
 
-5. **core/** — session and analysis runner logic used by both GUI and batch modes
+Verify:
+```python
+import opensim as osim
+osim.Model()   # should not raise
+```
 
-6. **config/** — config manager for loading/saving settings
+**4. Launch**
 
-7. **record/** — video recording, camera utilities, and pose-estimation pipeline (`video_analyzer.py`) for motion capture sessions
-
-8. **models/** — bundled OpenSim model files (`.osim`) and geometry meshes
-
-9. **movement_detector/** — rule-based classifier that segments pose landmark time-series into labelled movement types (walking, running, jumping, etc.) with landmark gap-filling
-
----
-
-## Examples
-
-Launch the GUI for interactive use:
-```cmd
+```sh
 python -m msk_modelling_python
 ```
 
-For scripted/batch pipelines, configure `msk_modelling_python\settings.py` and run:
-```cmd
+---
+
+## Usage
+
+### GUI (default)
+```sh
+python -m msk_modelling_python
+```
+
+Opens the full interface with tabs for batch processing, video analysis, EMG, model scaling, and results viewing.
+
+### Batch mode
+Edit `msk_modelling_python/settings.py` (see `BatchSettings`, `CEINMSSettings`) then run:
+```sh
 python -m msk_modelling_python -b msk_modelling_python/settings.py
 ```
-The pipeline supports: C3D export → model scaling → IK → ID → SO → muscle analysis → CEINMS calibration → CEINMS execution.
+Pipeline: C3D export → model scaling → IK → ID → static optimisation → muscle analysis → CEINMS.
 
-For video-only batch processing, pass a JSON file with a `"videos"` key:
-```cmd
+### Video batch mode
+```sh
 python -m msk_modelling_python -b video_batch.json
 ```
 ```json
@@ -232,67 +142,94 @@ python -m msk_modelling_python -b video_batch.json
 
 ---
 
+## Code Structure
+
+| Package | Description |
+|---|---|
+| `gui/` | GUI widgets — batch processing, C3D export, EMG, CEINMS, video analysis |
+| `utils/` | Core processing — OpenSim (IK, ID, SO, MA), CEINMS, EMG, model scaling, C3D |
+| `core/` | Session and analysis runner (shared by GUI and batch modes) |
+| `config/` | Settings load/save |
+| `record/` | Screen/video recording, camera utilities, pose-estimation pipeline |
+| `models/` | Bundled OpenSim model files (`.osim`) and geometry meshes |
+| `movement_detector/` | Rule-based classifier: segments pose landmarks into labelled movement types |
+| `settings.py` | Central config — edit `BatchSettings`, `CEINMSSettings`, `UISettings`, `RecordingSettings` |
+
+---
+
 ## Contact
 
-For any questions or inquiries, please contact:
-
-- **Name:** Basilio Goncalves
-- **Email:** basilio.goncalves@univie.ac.at
-- **ResearchGate:** [Basilio Goncalves](https://www.researchgate.net/profile/Basilio-Goncalves)
+**Basilio Goncalves** — basilio.goncalves@univie.ac.at  
+[ResearchGate](https://www.researchgate.net/profile/Basilio-Goncalves)
 
 ---
 
 ## References
 
-Thelen, D. G. -2003- J. Biomech. Eng. 125, 70–77
-
-Lloyd, D. G. et al. -2003- J. Biomech. 36, 765–776
-
-Delp, S. L. et al. -2007- IEEE Trans. Biomed. Eng. 54, 1940–1950
-
-Pizzolato, C. et al. -2015- J. Biomech. 48, 3929–3936
-
-Hicks, J. L. et al. -2015- J. Biomech. Eng. 137,
-
-Rajagopal, A. et al. -2016- IEEE Trans. Biomed. Eng. 63, 2068–2079
-
-Goncalves, B. A. M. et al. -2023- Gait Posture 106, S68
-
-Goncalves, B. A. M. et al. -2024- Med. Sci. Sport. Exerc. 56, 402–410
+Thelen, D. G. (2003) J. Biomech. Eng. 125, 70–77  
+Lloyd, D. G. et al. (2003) J. Biomech. 36, 765–776  
+Delp, S. L. et al. (2007) IEEE Trans. Biomed. Eng. 54, 1940–1950  
+Pizzolato, C. et al. (2015) J. Biomech. 48, 3929–3936  
+Hicks, J. L. et al. (2015) J. Biomech. Eng. 137  
+Rajagopal, A. et al. (2016) IEEE Trans. Biomed. Eng. 63, 2068–2079  
+Goncalves, B. A. M. et al. (2023) Gait Posture 106, S68  
+Goncalves, B. A. M. et al. (2024) Med. Sci. Sport. Exerc. 56, 402–410  
 
 ---
 
 ## Changelog
 
-### v0.4.2 (2026-06-10)
+### v0.4.2 (2026-06-11)
+
+**Video Analysis tab**
+- Fix crash on scroll/zoom: invalid 8-digit colour `#00000088` (Tkinter accepts only 6-digit hex) broke the canvas redraw
+- Fix video frame jumping to the top-left corner while scrubbing the timeline (now uses the shared centred redraw)
+- Compact the under-video controls and add a draggable horizontal sash to resize the video pane
+- Move pose detection settings (interval, smoothing) **above** the action buttons
+- Reduce tracked ROI box jitter between frames (exponential smoothing + dead-zone)
+- Fix **Export Outputs**: now runs `record/video_analyzer.py` to generate the OpenSim `.mot` (path resolution was wrong), passing the GUI's poses/anchors to skip re-detection
+- Wire **`movement_detector`** into Export: writes `<video>_motion_segments.json` (standing / walking / running / squatting / jumping / …)
+
+**Player profiles**
+- Add `utils/player_profile.py`: per-player anthropometry, limb proportions, saved calibration, OpenSim/CEINMS model paths and detection settings, stored one folder per player
+- Add a **Player** dropdown (New/Edit) to the Video Analysis tab; selecting a player applies their calibration, models and detection settings, and Export writes a player snapshot
+
+**Batch / settings**
+- Add **multi-session batch**: process many sessions in one run via a single `SESSIONS = {session_folder: static_trial_name}` dict in `settings.py`
+- Tolerant static-trial matching (`static01` / `static_01` / `Static_01` all match; `None` auto-detects)
+- Remove `SESSION_DIR` / `session_folder` / `static_trial_name` from `BatchSettings` — `SESSIONS` is the single source of truth
+- Lenient `-b` settings-path handling so batch runs from any working directory
+
+**Logging**
+- One log file per run (`app_*.log` for GUI, `batch_*.log` for batch) — no more empty second log
+
+**Carried over from earlier 0.4.2 work**
 - Fix `utils/__init__.py` truncated `emg_normalise` import block (IndentationError on startup)
 - Fix `utils/openSim.py` truncated `_Tee` class in `__main__` block (SyntaxError)
 - Fix `utils/dev.py` truncated parallel worker error handler
-- Fix `utils/__init__.py` ceinms import collision: use `importlib.util` to load `ceinms.py` explicitly, bypassing `ceinms/` binary package
+- Fix `utils/__init__.py` CEINMS import collision: use `importlib.util` to load `ceinms.py` explicitly
 - Fix `settings.DOFs` → `settings.BatchSettings.dof_list` in `utils/__init__.py` and `utils/dev.py`
 - Fix IK NaN crash: interpolate missing marker values in TRC files before running `InverseKinematicsTool`
-- Add **Video Analysis GUI tab**: process pre-recorded videos to generate OpenSim MOT/TRC files using MediaPipe pose estimation
-- Add **video batch mode** (`-b video_batch.json`): run `video_analyzer.py` over a list of videos from a JSON config file — auto-detected by the presence of a `"videos"` key
-- Add **`movement_detector` module**: rule-based pose landmark classifier that segments video into labelled motion types (walking, running, jumping, squatting, side-cut, shuffle, deceleration, backward walking/running) with gap-filling for occluded landmarks
-- Move OpenSim model files (`*.osim`) from `record/` into a dedicated `models/` package for cleaner imports
-- Add `RecordingSettings.DEFAULT_VIDEO_ANALYSIS_MODEL` and `OUTPUT_DIR_TEMPLATE` to `settings.py`
+- Add **Video Analysis GUI tab**: process pre-recorded videos → OpenSim MOT/TRC via MediaPipe pose estimation
+- Add **video batch mode** (`-b video_batch.json`)
+- Add **`movement_detector` module**: rule-based pose landmark classifier with gap-filling
+- Move OpenSim model files into dedicated `models/` package
+- Add `RecordingSettings.DEFAULT_VIDEO_ANALYSIS_MODEL` and `OUTPUT_DIR_TEMPLATE`
 
 ### v0.4.1 (2026-06-09)
-- Fix GUI crash on startup: `model_scaling` widget now correctly imports `marker_weights` from `BatchSettings` class instead of the deprecated module-level variable
-- Fix `batch_c3d_export` widget to read EMG defaults from `BatchSettings` attributes instead of removed module-level constants
+- Fix GUI crash on startup: `model_scaling` widget imports `marker_weights` from `BatchSettings`
+- Fix `batch_c3d_export` widget to read EMG defaults from `BatchSettings` attributes
 
 ### v0.4.0
-- Improved app and batch processing with new settings and GUI entry point
-- Cleaned up stale files and moved CEINMS settings
-- Added n8n-inspired workflow pipeline system with a complete OpenSim batch processing example and quick-start guide
-- Batch pipeline fix, GUI stability improvements, OpenSim late-load
+- New settings and GUI entry point; cleaned up stale files
+- n8n-inspired workflow pipeline with full OpenSim batch processing example
+- Batch pipeline fixes, GUI stability improvements, OpenSim late-load
 
 ### v0.3.6
-- Updated utils
-- Added CEINMS support with troubleshooting functions and executables for hybrid and synergy calibrations
+- Updated utils; added CEINMS support with troubleshooting and calibration executables
 
 ### v0.0.20
-- Attempted CEINMS2 integration via pip packaging
+- CEINMS2 integration via pip packaging
 
 ### v0.0.17
-- Version bump with new images and path adjustments in classes
+- Version bump with new images and path adjustments

@@ -82,21 +82,19 @@ class AppLogger:
         )
         simple_formatter = logging.Formatter('%(levelname)s: %(message)s')
 
-        # Skip file logging when running in batch mode (-b / --batch flag),
-        # which has its own batch_*.log via helpers.setup_logging.
+        # Single application log file for every run (GUI or batch). Batch runs
+        # are identified by their headings/prints inside this same file rather
+        # than a separate batch_*.log, which previously left one file empty.
         import sys
-        _batch_mode = '-b' in sys.argv or '--batch' in sys.argv
-        if not _batch_mode:
-            log_file = self.log_dir / f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-            file_handler = logging.FileHandler(log_file, encoding='utf-8', errors='replace')
-            file_handler.setLevel(logging.INFO)
-            file_handler.setFormatter(detailed_formatter)
-            self.logger.addHandler(file_handler)
-            self.file_handler = file_handler
-            self.current_log_file = str(log_file)
-        else:
-            self.file_handler = None
-            self.current_log_file = None
+        self._batch_mode = '-b' in sys.argv or '--batch' in sys.argv
+        prefix = "batch" if self._batch_mode else "app"
+        log_file = self.log_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        file_handler = logging.FileHandler(log_file, encoding='utf-8', errors='replace')
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(detailed_formatter)
+        self.logger.addHandler(file_handler)
+        self.file_handler = file_handler
+        self.current_log_file = str(log_file)
 
         # Console handler with UTF-8 encoding and error handling
         console_handler = logging.StreamHandler()
@@ -110,7 +108,7 @@ class AppLogger:
         self.logger.addHandler(console_handler)
 
         # Tee stdout/stderr so print() calls also appear in the log file
-        if not _batch_mode and self.file_handler is not None:
+        if self.file_handler is not None:
             import sys as _sys
             _sys.stdout = _TeeStream(_sys.stdout, self.file_handler.stream)
             _sys.stderr = _TeeStream(_sys.stderr, self.file_handler.stream)

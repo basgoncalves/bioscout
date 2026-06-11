@@ -12,15 +12,16 @@ Batch mode:
 
 import sys
 import os
+import re
 import argparse
 import traceback
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from settings import BatchSettings, CEINMSSettings
 from utils.model_scaler import ModelScaler
-from utils.helpers import setup_logging
 import utils
 
 # Ensure utils.openSim is loaded — the deferred-import block at the bottom of
@@ -52,7 +53,10 @@ args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
 log_dir.mkdir(exist_ok=True)
-logger = setup_logging(log_dir)
+# Use the single application logger (AppLogger). It writes one timestamped file
+# per run — app_*.log for GUI, batch_*.log for batch (-b/--batch) — so we no
+# longer create an empty second log via helpers.setup_logging.
+from utils.logger import logger
 
 
 # ---------------------------------------------------------------------------
@@ -85,22 +89,130 @@ def _should_skip(trial_name: str, config) -> bool:
     return any(s in trial_name for s in skip_list)
 
 
+def _norm(s: str) -> str:
+    """Lowercase and strip non-alphanumerics so 'Static_01' == 'static01'."""
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower())
+
+
+def _is_static(trial_stem: str, static_name: Optional[str]) -> bool:
+    """
+    Tolerant static-trial match. Handles naming variants like 'static01',
+    'static_01', 'Static_01' by normalising both sides.
+
+    - If static_name is given, matches stems whose normalised form contains it.
+    - If static_name is None/empty, matches any stem that starts with 'static'.
+    """
+    stem_n = _norm(trial_stem)
+    if static_name:
+        return _norm(static_name) in stem_n
+    return stem_n.startswith('static')
+
+
+def _resolve_static_name(session_dir: Path, requested: Optional[str]) -> Optional[str]:
+    """
+    Return the actual static trial stem found in a session, or the requested
+    name if no C3D match is found (so downstream errors are still clear).
+    """
+    c3d = sorted(session_dir.glob('*.c3d'))
+    for f in c3d:
+        if _is_static(f.stem, requested):
+            return f.stem
+    return requested
+
+
 # ---------------------------------------------------------------------------
 # Main batch function
 # ---------------------------------------------------------------------------
+def _discover_sessions(config) -> list:
+    """
+    Resolve sessions to process as a list of (session_dir, static_name) from
+    config.sessions — the single source of truth.
+
+    config.sessions may be:
+      • a dict {session_path: static_trial_name}   (static_name None = auto-detect)
+      • a list/tuple [session_path, ...]           (static auto-detected each)
+
+    Static matching is tolerant (case/underscores ignored). When static_name is
+    None, any trial whose name starts with 'static' (static01 / static_01 /
+    Static_01) is used.
+    """
+    sessions = getattr(config, "sessions", None)
+    if not sessions:
+        return []
+    if isinstance(sessions, dict):
+        return [(Path(p), sn or None) for p, sn in sessions.items()]
+    # plain list/tuple of session paths
+    return [(Path(p), None) for p in sessions]
+
+
 def run_batch_mode(settings_path: str) -> bool:
+    """Run the pipeline for one session or for every session inside a folder."""
+    # Settings come from the imported BatchSettings; the path argument is a
+    # convenience pointer. Resolve it leniently so running from any working
+    # directory (e.g. the Desktop) still works.
+    if settings_path and not os.path.exists(settings_path):
+        _pkg_settings = Path(__file__).parent / "settings.py"
+        if _pkg_settings.exists():
+            logger.warning(
+                f"Settings path '{settings_path}' not found; using package "
+                f"settings: {_pkg_settings}")
+        else:
+            logger.warning(
+                f"Settings path '{settings_path}' not found; using the "
+                f"already-imported BatchSettings.")
+
+    config = BatchSettings
+    sessions = _discover_sessions(config)
+    if not sessions:
+        logger.error(
+            "No sessions to process. Add entries to SESSIONS in settings.py "
+            "(a dict of {session_folder: static_trial_name}).")
+        return False
+
+    logger.info("=" * 70)
+    logger.info("Biomechanical Analysis - Batch Processing")
+    logger.info(f"Sessions to process : {len(sessions)}")
+    for s, static_name in sessions:
+        resolved = _resolve_static_name(s, static_name)
+        logger.info(f"   • {s}   (static: {resolved or '??? not found'})")
+    logger.info("=" * 70)
+
+    all_ok = True
+    for i, (session_dir, static_name) in enumerate(sessions, 1):
+        resolved_static = _resolve_static_name(session_dir, static_name)
+        logger.info("")
+        logger.info("#" * 70)
+        logger.info(f"# SESSION {i}/{len(sessions)} : {session_dir.name}")
+        logger.info("#" * 70)
+        try:
+            ok = _run_one_session(session_dir, config, session_dir.name,
+                                  resolved_static)
+            all_ok = all_ok and ok
+        except Exception as e:
+            logger.critical(f"Session {session_dir.name} crashed: {e}")
+            logger.debug(traceback.format_exc())
+            all_ok = False
+
+    logger.info("=" * 70)
+    logger.info(f"[OK] ALL SESSIONS FINISHED ({len(sessions)} processed)"
+                if all_ok else "[WARN] Batch finished with some failures")
+    logger.info("=" * 70)
+    logger.info("Batch processing finished.")
+    return all_ok
+
+
+def _run_one_session(session_dir: Path, config, subject_name: str,
+                     static_name: Optional[str] = None) -> bool:
+    """Run the full pipeline for a single session folder.
+
+    static_name is this session's static-trial stem (already resolved); falls
+    back to config.static_trial_name when None.
+    """
+    if static_name is None:
+        static_name = getattr(config, "static_trial_name", None)
     try:
-        if not os.path.exists(settings_path):
-            logger.error(f"Settings file not found: {settings_path}")
-            return False
-
-        config = BatchSettings
-        session_dir = Path(config.session_folder)
-
-        logger.info("=" * 70)
-        logger.info("Biomechanical Analysis - Batch Processing")
         logger.info(f"Session folder : {session_dir}")
-        logger.info("=" * 70)
+        logger.info(f"Static trial   : {static_name or '(auto: starts with static)'}")
 
         # ------------------------------------------------------------------ #
         # DISCOVERY
@@ -109,11 +221,9 @@ def run_batch_mode(settings_path: str) -> bool:
         # which may contain copies created by the export step).
         c3d_files = sorted(session_dir.glob("*.c3d"))
         if not c3d_files:
-            logger.warning("No C3D files found — aborting")
+            logger.warning(f"No C3D files found in {session_dir} — skipping")
             return False
         logger.info(f"Found {len(c3d_files)} C3D file(s)")
-
-        subject_name = session_dir.name
 
         # ------------------------------------------------------------------ #
         # PHASE 1: C3D EXPORT  (all trials — must happen before scaling)
@@ -132,7 +242,7 @@ def run_batch_mode(settings_path: str) -> bool:
             logger.info("C3D EXPORT  (all trials)")
             logger.info("=" * 70)
             for trial in trial_objects:
-                is_static = config.static_trial_name in trial.trial
+                is_static = _is_static(trial.trial, static_name)
                 if _should_skip(trial.trial, config) and not is_static:
                     logger.info(f"  Skipping {trial.trial} (in trials_to_skip)")
                     continue
@@ -155,10 +265,11 @@ def run_batch_mode(settings_path: str) -> bool:
             logger.info("MODEL SCALING")
             logger.info("-" * 70)
             try:
-                statics = [f for f in c3d_files if config.static_trial_name in f.stem]
+                statics = [f for f in c3d_files if _is_static(f.stem, static_name)]
                 if not statics:
                     raise RuntimeError(
-                        f"Static trial '{config.static_trial_name}' not found")
+                        f"Static trial '{static_name or 'static*'}' not found "
+                        f"in {session_dir}")
 
                 static_subdir = _trial_subdir(statics[0])
                 trc_file = os.path.join(static_subdir, "marker_experimental.trc")
@@ -275,11 +386,11 @@ def run_batch_mode(settings_path: str) -> bool:
         return True
 
     except Exception as e:
-        logger.critical(f"Fatal error: {e}")
+        logger.critical(f"Fatal error in session {subject_name}: {e}")
         traceback.print_exc()
         return False
     finally:
-        logger.info("Batch processing finished.")
+        logger.info(f"Session {subject_name} finished.")
 
 
 # ---------------------------------------------------------------------------

@@ -8,9 +8,19 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).parent
 LOG_DIR = MODULE_PATH / "logs"
 MODELS_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Models'
-SESSION_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05'
 SETUP_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\setup_files'
 PROJECT_NAME = 'squatting_fais'
+
+# Sessions to batch-process: {session_folder: static_trial_name}.
+# This is the ONE place to list what gets run. Add or remove lines as needed.
+# Static names are matched leniently (case/underscores ignored); use None to
+# auto-detect a trial whose name starts with "static".
+SESSIONS = {
+    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P03': 'static_01',
+    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05': 'static_01',
+    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P08': 'static_01',
+    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P09': 'static_01',
+}
 
 # ============================================================================
 # BATCH SETTINGS
@@ -19,11 +29,13 @@ class BatchSettings:
     """Unified batch processing settings for motion capture session analysis."""
 
     # SESSION CONFIGURATION
-    session_folder = SESSION_DIR
+    # Edit SESSIONS at the top of this file to choose what to batch-process.
+    # (Each session's static-trial name lives in SESSIONS; a None value there
+    #  auto-detects any trial whose name starts with "static".)
+    sessions = SESSIONS
     setup_files_folder = SETUP_DIR
     generic_model = os.path.join(MODELS_DIR, 'Catelli-V4.0_pyCGM_pelvis.osim')
     markerset = os.path.join(SETUP_DIR, "markers.xml")
-    static_trial_name = 'static01'
     trials_to_skip: list = []
 
     auto_create_dirs = True
@@ -93,13 +105,13 @@ class BatchSettings:
     c3d_markers_height = 40
 
     # ANALYSIS PIPELINE - OPENSIM
-    enable_c3d_export = False
-    enable_scale_model = False
+    enable_c3d_export = True
+    enable_scale_model = True
     enable_muscle_scaling = False
     muscle_force_factor = 3
-    enable_inverse_kinematics = False
-    enable_inverse_dynamics = False
-    enable_static_optimization = False
+    enable_inverse_kinematics = True
+    enable_inverse_dynamics = True
+    enable_static_optimization = True
     enable_muscle_analysis = True
 
     # session-amplitude-normalise EMG after C3D export
@@ -107,8 +119,8 @@ class BatchSettings:
 
     @property
     def results_dir(self) -> Path:
-        """Results directory (same as session folder)."""
-        return Path(self.session_folder)
+        """First session folder (kept for backward compatibility)."""
+        return Path(next(iter(self.sessions))) if self.sessions else Path('.')
 
 
 # ============================================================================
