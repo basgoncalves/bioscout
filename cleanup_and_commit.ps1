@@ -17,10 +17,10 @@ $toDelete = @(
     "yolov8n.pt",
     "pose_landmarker_lite.task",
     "pose_landmarker_full.task",
-    "msk_modelling_python\pose_landmarker_lite.task",
-    "msk_modelling_python\record\pose_landmarker_full.task",
-    "msk_modelling_python\core\test_reset_settings.py",
-    "msk_modelling_python\utils\log.txt",
+    "bioscout\pose_landmarker_lite.task",
+    "bioscout\record\pose_landmarker_full.task",
+    "bioscout\core\test_reset_settings.py",
+    "bioscout\utils\log.txt",
     "cd",
     "rmdir"
 )
@@ -39,8 +39,8 @@ foreach ($f in $toDelete) {
 Write-Host "`nUntracking gitignored files..." -ForegroundColor Cyan
 
 $toUntrack = @(
-    "msk_modelling_python/logs",                          # logs dir (already gitignored)
-    "msk_modelling_python/record/pose_landmarker_full.task"  # 9 MB model file
+    "bioscout/logs",                          # logs dir (already gitignored)
+    "bioscout/record/pose_landmarker_full.task"  # 9 MB model file
 )
 
 foreach ($path in $toUntrack) {

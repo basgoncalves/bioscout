@@ -1,2 +1,2 @@
-recursive-include msk_modelling_python/utils/ceinms *.exe *.dll *.txt
-recursive-include msk_modelling_python/config *.yaml *.xml
+recursive-include bioscout/utils/ceinms *.exe *.dll *.txt
+recursive-include bioscout/config *.yaml *.xml

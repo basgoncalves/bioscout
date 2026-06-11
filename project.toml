@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "msk_modelling_python"
+name = "bioscout"
 version = "0.4.0"
 authors = [
   { name="Bas", email="basilio_goncalves7@gmail.com" },
 ]
-description = "A Python package for musculoskeletal modelling (Beta)"
+description = "BioScout — Biomechanical analysis and movement scouting for coaches and athletes"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [

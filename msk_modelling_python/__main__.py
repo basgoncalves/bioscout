@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Biomechanical Analysis — entry point
+BioScout — Biomechanical analysis and movement scouting for coaches and athletes.
 
 GUI mode (default):
-    python msk_modelling_python
-    python msk_modelling_python --gui
+    python -m bioscout
+    python -m bioscout --gui
 
 Batch mode:
-    python msk_modelling_python -b settings.py
+    python -m bioscout -b settings.py
 """
 
 import sys
