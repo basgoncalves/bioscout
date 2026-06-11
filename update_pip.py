@@ -103,6 +103,31 @@ def clean_dist_folder():
         # print(f"'{DIST_FOLDER}' directory created.")
         return True # Not an error if it doesn't exist
 
+def clean_egg_info():
+    """Delete any *.egg-info folders.
+
+    setuptools merges an existing egg-info/SOURCES.txt into each build, so a
+    stale entry (e.g. a bare directory) gets carried forward and can break the
+    wheel build with 'can't copy ...: not a regular file'. Removing egg-info
+    forces a clean regeneration every time.
+    """
+    print("\n🧹 Cleaning '*.egg-info' directories...")
+    removed = False
+    for name in os.listdir(CURRENT_DIR):
+        if name.endswith(".egg-info"):
+            path = os.path.join(CURRENT_DIR, name)
+            if os.path.isdir(path):
+                try:
+                    shutil.rmtree(path)
+                    print(f"   Deleted: {path}")
+                    removed = True
+                except Exception as e:
+                    print(f"❌ Failed to delete {path}. Reason: {e}")
+                    return False
+    if not removed:
+        print("   No .egg-info directories found. No cleaning needed.")
+    return True
+
 def update_version_in_setup_py():
     """Prompts for new version and updates it in setup.py."""
     print(f"\n🔢 Updating version in '{SETUP_PY_FILE}'...")
@@ -170,6 +195,12 @@ if not success:
 success = clean_dist_folder()
 if not success:
     print("\n🛑 Script stopped due to error cleaning dist folder.")
+    sys.exit(1)
+
+# Step 6c: Delete stale *.egg-info so SOURCES.txt regenerates cleanly (Automated)
+success = clean_egg_info()
+if not success:
+    print("\n🛑 Script stopped due to error cleaning egg-info.")
     sys.exit(1)
 
 # Step 7: Update the version number in the setup.py file (Automated with prompt)

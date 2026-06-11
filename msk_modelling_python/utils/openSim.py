@@ -1763,34 +1763,40 @@ def validate_markers_used(osim_modelPath, ikTool, markers_path):
     markers_in_task = [task.getName() for task in task_set_template if isinstance(task, osim.IKMarkerTask)]
     markers_parent_frames = get_all_marker_parent_frames(osim_modelPath)
 
+    # Marker IK weights are keyed by the parent BODY (e.g. 'pelvis', 'femur_r',
+    # 'calcn_l') in BatchSettings.marker_weights. NOTE: the value lives on the
+    # BatchSettings *class*, not the settings module — `settings.marker_weights`
+    # raised AttributeError and silently forced every weight to 1.0. Markers
+    # whose body isn't listed default to 1.0.
+    try:
+        _marker_weights = dict(getattr(settings.BatchSettings, 'marker_weights', {}) or {})
+    except Exception:
+        _marker_weights = {}
+
+    def _weight_for(_mname):
+        _pf = (markers_parent_frames.get(_mname) or "").replace("/bodyset/", "")
+        return float(_marker_weights.get(_pf, 1.0)), _pf
+
     for marker_name in markers_model:
+        _w, _pf = _weight_for(marker_name)
+        _in_trc = marker_name in markers_trc
         if marker_name in markers_in_task:
-            if marker_name in markers_trc:
-                task = task_set_template.get(marker_name)
-                task.setApply(True)
-            else:
-                task = task_set_template.get(marker_name)
-                task.setApply(False)
+            task = task_set_template.get(marker_name)
+            task.setWeight(_w)                 # apply weight to template markers too
+            task.setApply(_in_trc)
+            if not _in_trc:
                 print(f"Marker '{marker_name}' not found in TRC file. Disabling task.")
+            else:
+                print(f"Marker '{marker_name}' weight={_w} (body '{_pf}').")
         else:
             newTask = osim.IKMarkerTask()
             newTask.setName(marker_name)
-            parent_frame = markers_parent_frames.get(marker_name).replace("/bodyset/", "")
-            
-            try:
-                newTask.setWeight(settings.marker_weights.get(parent_frame))
-                print(f"Set weight for marker '{marker_name}' (parent frame: '{parent_frame}') to {settings.marker_weights.get(parent_frame)}")
-            except Exception as e:
-                newTask.setWeight(1.0)
-                print(f"Warning: No weight found for parent frame '{parent_frame}' of marker '{marker_name}'. Setting weight to 1.0")
-
-            if marker_name in markers_trc:
-                newTask.setApply(True)
-                print(f"Marker '{marker_name}' found in TRC file. Adding and applying with weight 1.0.")
+            newTask.setWeight(_w)
+            newTask.setApply(_in_trc)
+            if _in_trc:
+                print(f"Marker '{marker_name}' added with weight={_w} (body '{_pf}').")
             else:
-                newTask.setApply(False)
                 print(f"Marker '{marker_name}' in Model not found in TRC file. Disabling task.")
-                
             task_set_template.adoptAndAppend(newTask)
 
 
@@ -2570,36 +2576,95 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
         ikTool.setModel(model)
 
         # --- NaN interpolation: fill missing marker data before IK ---
-        # A single NaN in the TRC causes AssemblySolver to return -nan(ind)
-        # and crash with "Required condition 'goalValue >= 0' was not met."
+        # Gaps in the TRC can make AssemblySolver return -nan and crash. We fill
+        # them by linear interpolation, but the TRC format MUST be preserved
+        # exactly: a .trc has a fixed 5-line header where line 3 is the numeric
+        # DataRate row and line 4 ("Frame#  Time  ...") + line 5 (X1 Y1 Z1 ...)
+        # are the column headers. Data begins on line 6. We anchor on the
+        # 'Frame#' row, interpolate only the numeric data block, keep the header
+        # verbatim, and restore the original file on any error.
         try:
             import xml.etree.ElementTree as _ET
-            import pandas as _pd
+            import numpy as _np
             _tree = _ET.parse(setup_xml)
             _mf = _tree.getroot().findtext('.//marker_file') or ''
-            # resolve relative path the same way OpenSim does (relative to cwd)
             if _mf and not os.path.isabs(_mf):
                 _mf = os.path.join(resultsDir, _mf)
             if _mf and os.path.isfile(_mf):
-                _trc_lines = open(_mf, 'r').readlines()
-                _header = []
-                _data_start = 0
-                for _i, _line in enumerate(_trc_lines):
-                    if _line.strip() and _line.split('\t')[0].replace('.', '', 1).lstrip('-').isdigit():
-                        _data_start = _i
-                        break
-                    _header.append(_line)
-                _df = _pd.read_csv(_mf, sep='\t', skiprows=len(_header), header=0)
-                _numeric = _df.select_dtypes(include='number')
-                _nan_count = int(_numeric.isna().sum().sum())
-                if _nan_count > 0:
-                    print(f"[IK] Interpolating {_nan_count} NaN values in TRC marker data...")
-                    _df[_numeric.columns] = _numeric.interpolate(method='linear', limit_direction='both')
-                    _df.fillna(0, inplace=True)  # fallback for columns that are entirely NaN
-                    with open(_mf, 'w') as _f:
-                        _f.writelines(_header)
-                        _df.to_csv(_f, sep='\t', index=False, lineterminator='\n')
-                    print(f"[IK] TRC NaN interpolation complete → {_mf}")
+                _orig = open(_mf, 'r').read()
+                try:
+                    _lines = _orig.splitlines(keepends=True)
+                    # Locate the 'Frame#' column-header row; data starts 2 lines
+                    # below it (after the X1/Y1/Z1 axis-label row).
+                    _fr = next((i for i, l in enumerate(_lines)
+                                if l.lstrip().lower().startswith('frame#')), None)
+                    if _fr is not None and _fr + 2 < len(_lines):
+                        _hdr = _lines[:_fr + 2]
+                        _data = [l for l in _lines[_fr + 2:] if l.strip()]
+                        _rows = []
+                        for _l in _data:
+                            _cells = _l.rstrip('\r\n').split('\t')
+                            _rows.append([
+                                float(_c) if _c.strip() not in ('', 'nan', 'NaN')
+                                else _np.nan for _c in _cells])
+                        _w = max(len(r) for r in _rows)
+                        _A = _np.full((len(_rows), _w), _np.nan)
+                        for _i, _r in enumerate(_rows):
+                            _A[_i, :len(_r)] = _r
+                        # Columns 0,1 are Frame# and Time; only fill SHORT
+                        # interior gaps in the marker columns (2..end). Long gaps,
+                        # leading/trailing gaps, and fully-missing markers are left
+                        # EMPTY so OpenSim treats them as 'marker absent' and skips
+                        # them — filling those (e.g. with 0,0,0 or a long straight
+                        # line) plants markers far from the body and makes IK
+                        # diverge / fail.
+                        _MAX_GAP = 20  # frames; gaps longer than this stay empty
+                        _nan_count = int(_np.isnan(_A[:, 2:]).sum())
+                        if _nan_count > 0:
+                            _filled = 0
+                            for _c in range(2, _w):
+                                _col = _A[:, _c]
+                                _isn = _np.isnan(_col)
+                                if not _isn.any():
+                                    continue
+                                _valid = _np.where(~_isn)[0]
+                                if _valid.size < 2:
+                                    continue  # nothing reliable to interpolate from
+                                _first, _last = int(_valid[0]), int(_valid[-1])
+                                _i2 = _first + 1
+                                while _i2 <= _last:
+                                    if _isn[_i2]:
+                                        _j = _i2
+                                        while _j <= _last and _isn[_j]:
+                                            _j += 1
+                                        _gap = _j - _i2
+                                        if _gap <= _MAX_GAP:
+                                            _x0, _x1 = _i2 - 1, _j
+                                            _y0, _y1 = _col[_x0], _col[_x1]
+                                            for _k in range(_i2, _j):
+                                                _col[_k] = _y0 + (_y1 - _y0) * (_k - _x0) / (_x1 - _x0)
+                                                _filled += 1
+                                        _i2 = _j
+                                    else:
+                                        _i2 += 1
+                                _A[:, _c] = _col
+                            print(f"[IK] Filled {_filled} of {_nan_count} marker NaNs "
+                                  f"(short gaps only; longer gaps left as missing)...")
+                            _out = list(_hdr)
+                            for _i in range(_A.shape[0]):
+                                _v = _A[_i]
+                                _frame = int(round(_v[0])) if not _np.isnan(_v[0]) else _i + 1
+                                _cells = [str(_frame)] + [
+                                    ("" if _np.isnan(_x) else f"{_x:.5f}") for _x in _v[1:]]
+                                _out.append('\t'.join(_cells) + '\n')
+                            with open(_mf, 'w', newline='') as _f:
+                                _f.writelines(_out)
+                            print(f"[IK] TRC gap-fill complete → {_mf}")
+                except Exception as _ie:
+                    # Any problem → put the original TRC back so IK still runs.
+                    with open(_mf, 'w', newline='') as _f:
+                        _f.write(_orig)
+                    print(f"[IK] NaN interpolation skipped, original TRC restored ({_ie})")
         except Exception as _nan_e:
             print(f"[IK] Warning: NaN interpolation step failed (continuing): {_nan_e}")
 
@@ -2612,6 +2677,18 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
     except Exception as e:
         utils.print_to_log(f"Error running IK: {e}")
         print(f"Error running IK: {e}")
+        # OpenSim writes the real failure detail to opensim.log (in cwd); surface
+        # the tail so the actual cause is visible instead of the generic message.
+        try:
+            for _logp in ('opensim.log', os.path.join(resultsDir, 'opensim.log')):
+                if os.path.isfile(_logp):
+                    _tail = open(_logp, 'r', errors='replace').read().splitlines()[-25:]
+                    print("----- opensim.log (last 25 lines) -----")
+                    print("\n".join(_tail))
+                    print("---------------------------------------")
+                    break
+        except Exception:
+            pass
         import traceback
         traceback.print_exc()
         raise

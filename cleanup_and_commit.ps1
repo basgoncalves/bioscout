@@ -12,14 +12,17 @@ if (Test-Path $lock) {
     Write-Host "Removed stale $lock" -ForegroundColor Yellow
 }
 
-# 2. Delete files that should not be in the repo
+# 2. Delete files that should not be in the repo (disk cleanup)
 $toDelete = @(
     "yolov8n.pt",
     "pose_landmarker_lite.task",
     "pose_landmarker_full.task",
     "msk_modelling_python\pose_landmarker_lite.task",
+    "msk_modelling_python\record\pose_landmarker_full.task",
     "msk_modelling_python\core\test_reset_settings.py",
-    "msk_modelling_python\utils\log.txt"
+    "msk_modelling_python\utils\log.txt",
+    "cd",
+    "rmdir"
 )
 
 foreach ($f in $toDelete) {
@@ -31,13 +34,31 @@ foreach ($f in $toDelete) {
     }
 }
 
-# 3. Stage everything
+# 3. Stop tracking files covered by .gitignore that were previously committed
+#    (safe to re-run — no-ops if already untracked)
+Write-Host "`nUntracking gitignored files..." -ForegroundColor Cyan
+
+$toUntrack = @(
+    "msk_modelling_python/logs",                          # logs dir (already gitignored)
+    "msk_modelling_python/record/pose_landmarker_full.task"  # 9 MB model file
+)
+
+foreach ($path in $toUntrack) {
+    git rm -r --cached $path 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Untracked: $path" -ForegroundColor Green
+    } else {
+        Write-Host "Already untracked: $path" -ForegroundColor DarkGray
+    }
+}
+
+# 4. Stage everything
 git add -A
 Write-Host "`nStaged changes:" -ForegroundColor Cyan
 git status --short
 
-# 4. Commit
-$msg = "Clean up: remove stale model files, fix timeline scrub, add resizable panel, AR crop buttons"
+# 5. Commit
+$msg = "Clean up: untrack logs dir + pose_landmarker model, remove stale files, project-level analysis architecture"
 git commit -m $msg
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`nCommitted." -ForegroundColor Green
@@ -45,7 +66,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "`nNothing new to commit, or commit failed." -ForegroundColor Yellow
 }
 
-# 5. Push
+# 6. Push
 git push
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Pushed successfully." -ForegroundColor Green

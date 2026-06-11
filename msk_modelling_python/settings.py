@@ -3,24 +3,75 @@ Unified Settings Module
 """
 
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List
 
 MODULE_PATH = Path(__file__).parent
-LOG_DIR = MODULE_PATH / "logs"
-MODELS_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\Models'
-SETUP_DIR = r'C:\Users\Basilio\ucloud\Squat_Width\setup_files'
-PROJECT_NAME = 'squatting_fais'
 
-# Sessions to batch-process: {session_folder: static_trial_name}.
-# This is the ONE place to list what gets run. Add or remove lines as needed.
-# Static names are matched leniently (case/underscores ignored); use None to
-# auto-detect a trial whose name starts with "static".
-SESSIONS = {
-    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P03': 'static_01',
-    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P05': 'static_01',
-    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P08': 'static_01',
-    r'C:\Users\Basilio\ucloud\Squat_Width\Simulations\P09': 'static_01',
+# ============================================================================
+# PROJECT ROOT — the only absolute path you need to change per project.
+# All other paths are derived from it.
+# ============================================================================
+PROJECT_ROOT    = Path(r'C:\Users\Basilio\ucloud\Squat_Width')
+PROJECT_NAME    = 'squatting_fais'
+
+MODELS_DIR      = PROJECT_ROOT / 'Models'
+SETUP_DIR       = PROJECT_ROOT / 'setup_files'
+SIMULATIONS_DIR = PROJECT_ROOT / 'Simulations'
+LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install dir)
+
+
+# ============================================================================
+# PLAYER REGISTRY
+# Each key is the player ID, which doubles as the session folder name under
+# SIMULATIONS_DIR unless you override `sessions` in the PlayerConfig.
+# ============================================================================
+@dataclass
+class PlayerConfig:
+    """Per-player batch-processing configuration."""
+    group: str = ''                                     # e.g. 'fais', 'control'
+    sessions: List[str] = field(default_factory=list)  # session folder names under SIMULATIONS_DIR;
+                                                        # leave empty to use [player_id]
+    static_trial: str = 'static_01'                    # static/calibration trial name
+    notes: str = ''
+
+
+PLAYERS = {
+    'P03': PlayerConfig(group='fais'),
+    'P05': PlayerConfig(group='fais'),
+    'P08': PlayerConfig(group='control'),
+    'P09': PlayerConfig(group='control'),
 }
+
+
+def build_sessions(players: dict = None, simulations_dir: Path = None) -> dict:
+    """Build the {abs_session_path: static_trial_name} dict that BatchSettings expects.
+
+    When a player has multiple sessions, each session folder gets its own entry.
+    For teaching or alternative datasets, pass custom players/simulations_dir.
+
+    Args:
+        players: {player_id: PlayerConfig}. Defaults to PLAYERS.
+        simulations_dir: folder that contains session sub-folders. Defaults to SIMULATIONS_DIR.
+
+    Returns:
+        {str(abs_path): static_trial_name}
+    """
+    if players is None:
+        players = PLAYERS
+    if simulations_dir is None:
+        simulations_dir = SIMULATIONS_DIR
+    out = {}
+    for pid, cfg in players.items():
+        sess_names = cfg.sessions if cfg.sessions else [pid]
+        for sess in sess_names:
+            out[str(simulations_dir / sess)] = cfg.static_trial
+    return out
+
+
+# Backward-compatible flat dict — BatchSettings.sessions still reads this.
+SESSIONS = build_sessions()
 
 # ============================================================================
 # BATCH SETTINGS
@@ -97,6 +148,25 @@ class BatchSettings:
     trc_lateral_axis  = 'Z'   # column used to tell left foot from right foot
     trc_vertical_axis = 'Y'   # column representing height
     trc_ap_axis       = 'X'   # column representing anterior-posterior direction
+
+    # GRF AXIS CONVERSION: mocap/C3D lab frame (Z-up) -> OpenSim frame (Y-up).
+    # This is a 90-degree rotation about X, NOT a plain Y/Z swap. Each entry maps
+    # an OpenSim axis to (source mocap axis, sign):
+    #     OpenSim x =  mocap x        (x -> x)
+    #     OpenSim y =  mocap z        (z -> y)  vertical, positive up
+    #     OpenSim z = -mocap y        (y -> z, sign flipped to stay right-handed)
+    # Applied to forces, CoP positions and free moments. Matches the Vicon export.
+    grf_axis_map = {
+        'x': ('x',  1.0),
+        'y': ('z',  1.0),
+        'z': ('y', -1.0),
+    }
+    # Unit scaling applied AFTER the rotation (C3D points/moments are in mm):
+    grf_cop_scale_to_m = 0.001   # centre-of-pressure  mm   -> m
+    grf_moment_scale   = 0.001   # free moment         N*mm -> N*m
+    # Some systems export the free (vertical) moment with the opposite sign to a
+    # plain rotation of the C3D moment; flip the whole moment vector if so.
+    grf_moment_sign    = -1.0
 
     # UI Layout settings
     c3d_file_col_weight = 3
@@ -362,11 +432,6 @@ class Inputs:
         """Return all attributes as a dictionary."""
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
 
-
-# ============================================================================
-# BACKWARD COMPATIBILITY
-# ============================================================================
-Config = BatchSettings
 
 # ============================================================================
 # BACKWARD COMPATIBILITY

@@ -459,6 +459,20 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
 
     # replace . and spaces in labels with underscores
     analog_labels = [re.sub(r'[.\s]', '_', lbl) for lbl in analog_labels]
+    # Make labels unique — C3D files frequently repeat a placeholder name
+    # (e.g. 'Voltage_not_used' x11). Duplicate column names create a DataFrame
+    # where label selection returns a 2-D frame, which breaks write_mot /
+    # filter_emg downstream. Suffix repeats with _2, _3, ...
+    _seen: dict = {}
+    _uniq_labels = []
+    for _lbl in analog_labels:
+        if _lbl in _seen:
+            _seen[_lbl] += 1
+            _uniq_labels.append(f"{_lbl}_{_seen[_lbl]}")
+        else:
+            _seen[_lbl] = 1
+            _uniq_labels.append(_lbl)
+    analog_labels = _uniq_labels
     analog_df = pd.DataFrame(rows, columns=analog_labels)
     analog_df.insert(0, 'time', time)
 
@@ -488,10 +502,15 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
         write_mot(analog_df, emg_labels, emg_mot_path)
         print(f"Successfully exported {emg_mot_path}")
 
-        # Filter emg mot only if it was created
-        fs = 1 / (analog_df['time'].iloc[1] - analog_df['time'].iloc[0])
-        highcut_bp = fs/2 * 0.9
-        filter_emg(emg_path=emg_mot_path, highcut_bp=highcut_bp, lowcut_bp=20, lowcut_lp=6, order_bp=4, order_lp=4)
+        # Filter emg mot only if it was created. Keep the raw emg.mot even if
+        # filtering fails (e.g. non-physiological 'Voltage_*' channels), and
+        # report the real reason instead of silently failing.
+        try:
+            fs = 1 / (analog_df['time'].iloc[1] - analog_df['time'].iloc[0])
+            highcut_bp = fs/2 * 0.9
+            filter_emg(emg_path=emg_mot_path, highcut_bp=highcut_bp, lowcut_bp=20, lowcut_lp=6, order_bp=4, order_lp=4)
+        except Exception as _fe:
+            print(f"Warning: EMG filtering skipped ({type(_fe).__name__}: {_fe}); raw emg.mot kept.")
     else:
         print("Warning: No EMG channels found among available analog channels.")
         print(f"[DEBUG] Searched for {len(emg_strings_list)} patterns in {len(analog_labels)} available channels")
@@ -535,6 +554,60 @@ def export_markers(c3d_filepath, strings_to_remove=[]):
         else:
             print(f"  [OK] No NaN rows to remove (data is clean)")
     
+def _remap_grf_axes(grf_file, axis_map=None, cop_scale=0.001,
+                    moment_scale=0.001, moment_sign=-1.0):
+    """Convert GRF columns from the mocap/C3D lab frame to the OpenSim frame.
+
+    axis_map maps each OpenSim axis to (source_mocap_axis, sign), e.g.
+        {'x': ('x', 1.0), 'y': ('z', 1.0), 'z': ('y', -1.0)}   (90 deg about X)
+    applied to every plate's force (v), CoP position (p) and moment (m) vectors.
+    Then:
+      - CoP positions  are scaled by `cop_scale`     (mm -> m),
+      - free moments   are scaled by `moment_scale`  (N*mm -> N*m) and multiplied
+        by `moment_sign` (some systems flip the free-moment sign).
+    Column names/order are preserved — only the values change.
+    """
+    if not axis_map:
+        axis_map = {'x': ('x', 1.0), 'y': ('z', 1.0), 'z': ('y', -1.0)}
+
+    with open(grf_file, 'r', errors='replace') as f:
+        lines = f.readlines()
+
+    hi = 0
+    for i, ln in enumerate(lines):
+        if ln.strip().lower() == 'endheader':
+            hi = i + 1
+            break
+    while hi < len(lines) and not lines[hi].strip():
+        hi += 1
+    cols = lines[hi].split()
+    df = pd.read_csv(grf_file, sep=r'\s+', skiprows=hi + 1, names=cols, engine='python')
+    new = df.copy()
+
+    # Group columns by '<prefix>_<type><axis>', type in {v,p,m}, axis in {x,y,z}.
+    # v = force (no scale), p = CoP position (mm->m), m = free moment (N*mm->N*m).
+    type_scale = {'v': 1.0, 'p': float(cop_scale), 'm': float(moment_scale) * float(moment_sign)}
+    patt = re.compile(r'^(.*_)([vpm])([xyz])$')
+    bases = {(m.group(1), m.group(2)) for c in cols
+             for m in [patt.match(c)] if m}
+    for prefix, typ in bases:
+        scale = type_scale.get(typ, 1.0)
+        for osim_axis, (src_axis, sign) in axis_map.items():
+            out_col = f"{prefix}{typ}{osim_axis}"
+            src_col = f"{prefix}{typ}{src_axis}"
+            if out_col in df.columns and src_col in df.columns:
+                new[out_col] = (sign * scale) * df[src_col]
+
+    def _fmt(v):
+        return f"{v:.8f}" if v == v else "nan"   # v==v is False for NaN
+
+    new = new[cols]
+    with open(grf_file, 'w', newline='') as f:
+        f.writelines(lines[:hi + 1])             # header + column-names line
+        for _row in new.itertuples(index=False):
+            f.write('\t'.join(_fmt(v) for v in _row) + '\n')
+
+
 def export_grf(c3d_filepath):
 
     def transform_labels(labels):
@@ -578,7 +651,10 @@ def export_grf(c3d_filepath):
 
     c3d_data = adapter.read(c3d_filepath)
     forces_table = adapter.getForcesTable(c3d_data)
-    rotate_data_table(forces_table, [1, 0, 0], 180)
+    # NOTE: do NOT rotate here. The previous `rotate_data_table([1,0,0],180)`
+    # negated Y and Z, which flipped the vertical force sign and left the data
+    # in the mocap frame. Instead we export in the raw mocap/C3D frame and then
+    # remap to the OpenSim frame below using BatchSettings.grf_axis_map.
     time = forces_table.getIndependentColumn()
     forces_table = forces_table.flatten(['x', 'y', 'z'])
 
@@ -591,6 +667,27 @@ def export_grf(c3d_filepath):
     grf_file = os.path.join(output_dir, 'grf.mot')
     force_sto.printResult(force_sto, 'grf', output_dir, 0.01, '.mot')
     print(f"Successfully exported {grf_file}")
+
+    # Convert force/CoP/moment vectors from the mocap/C3D frame to the OpenSim
+    # frame using the configurable mapping (mocap is Z-up, OpenSim is Y-up).
+    _axis_map = None
+    _cop_scale, _moment_scale, _moment_sign = 0.001, 0.001, -1.0
+    try:
+        import settings as _settings_mod
+        _bs = _settings_mod.BatchSettings
+        _axis_map = getattr(_bs, 'grf_axis_map', None)
+        _cop_scale = getattr(_bs, 'grf_cop_scale_to_m', _cop_scale)
+        _moment_scale = getattr(_bs, 'grf_moment_scale', _moment_scale)
+        _moment_sign = getattr(_bs, 'grf_moment_sign', _moment_sign)
+    except Exception:
+        pass
+    try:
+        _remap_grf_axes(grf_file, _axis_map, cop_scale=_cop_scale,
+                        moment_scale=_moment_scale, moment_sign=_moment_sign)
+        print(f"  [OK] Remapped GRF to OpenSim frame "
+              f"(map: {_axis_map or 'default'}, CoP*{_cop_scale}, moment*{_moment_scale})")
+    except Exception as _re_err:
+        print(f"  [WARN] GRF axis remap skipped: {_re_err}")
 
     # Clean NaN rows from exported GRF file
     print(f"Cleaning NaN rows from GRF data...")
@@ -631,7 +728,9 @@ def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
     try:
         export_emg(c3d_output_path, emg_strings_list=emg_string_list)
     except Exception as e:
-        print(f"An error occurred while exporting EMG data")
+        import traceback as _tb
+        print(f"An error occurred while exporting EMG data: {type(e).__name__}: {e}")
+        _tb.print_exc()
 
 def transform_labels(labels):
         """

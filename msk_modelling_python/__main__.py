@@ -58,6 +58,15 @@ log_dir.mkdir(exist_ok=True)
 # longer create an empty second log via helpers.setup_logging.
 from utils.logger import logger
 
+# In batch mode redirect logs to the project's LOG_DIR (PROJECT_ROOT/logs)
+# so analysis logs don't accumulate inside the app install directory.
+if args.batch:
+    try:
+        from settings import LOG_DIR as _PROJECT_LOG_DIR
+        logger.set_project_log_dir(_PROJECT_LOG_DIR)
+    except Exception as _log_err:
+        logger.warning(f"Could not redirect to project log dir: {_log_err}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -145,21 +154,56 @@ def _discover_sessions(config) -> list:
     return [(Path(p), None) for p in sessions]
 
 
+def _load_settings_from_path(settings_path: str):
+    """Load BatchSettings / CEINMSSettings from an arbitrary settings .py file.
+
+    Lets `-b path/to/settings_xyz.py` actually use that file (e.g.
+    settings_teaching.py) instead of always the default settings.py. Falls back
+    to the already-imported defaults if the path is missing or lacks the classes.
+    """
+    global BatchSettings, CEINMSSettings
+    try:
+        p = Path(settings_path)
+        if not (p.suffix == '.py' and p.is_file()):
+            # Try resolving relative to the package directory.
+            alt = Path(__file__).parent / p.name
+            if alt.is_file():
+                p = alt
+            else:
+                logger.warning(
+                    f"Settings file '{settings_path}' not found; using default "
+                    f"settings.py.")
+                return
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location('_batch_settings_module', str(p))
+        mod = _ilu.module_from_spec(spec)
+        sys.modules['_batch_settings_module'] = mod
+        spec.loader.exec_module(mod)
+        if hasattr(mod, 'BatchSettings'):
+            BatchSettings = mod.BatchSettings
+        if hasattr(mod, 'CEINMSSettings'):
+            CEINMSSettings = mod.CEINMSSettings
+        # Propagate into the `settings` module so other modules that read
+        # `settings.BatchSettings` (e.g. utils/openSim.py for marker weights)
+        # use the loaded config, not the default settings.py.
+        try:
+            import settings as _settings_mod
+            if hasattr(mod, 'BatchSettings'):
+                _settings_mod.BatchSettings = mod.BatchSettings
+            if hasattr(mod, 'CEINMSSettings'):
+                _settings_mod.CEINMSSettings = mod.CEINMSSettings
+        except Exception as _pe:
+            logger.warning(f"Could not propagate settings to 'settings' module: {_pe}")
+        logger.info(f"Loaded batch settings from: {p}")
+    except Exception as e:
+        logger.warning(f"Could not load settings from '{settings_path}': {e}; "
+                       f"using default settings.py.")
+
+
 def run_batch_mode(settings_path: str) -> bool:
     """Run the pipeline for one session or for every session inside a folder."""
-    # Settings come from the imported BatchSettings; the path argument is a
-    # convenience pointer. Resolve it leniently so running from any working
-    # directory (e.g. the Desktop) still works.
-    if settings_path and not os.path.exists(settings_path):
-        _pkg_settings = Path(__file__).parent / "settings.py"
-        if _pkg_settings.exists():
-            logger.warning(
-                f"Settings path '{settings_path}' not found; using package "
-                f"settings: {_pkg_settings}")
-        else:
-            logger.warning(
-                f"Settings path '{settings_path}' not found; using the "
-                f"already-imported BatchSettings.")
+    # Load the settings module specified by -b (e.g. settings_teaching.py).
+    _load_settings_from_path(settings_path)
 
     config = BatchSettings
     sessions = _discover_sessions(config)

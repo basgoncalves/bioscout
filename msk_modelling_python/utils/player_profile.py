@@ -77,6 +77,14 @@ class PlayerProfile:
     # Saved calibration (pixels per metre). Reused across that player's videos.
     px_per_m: Optional[float] = None
 
+    # Group / study classification (for group analysis and comparisons).
+    group: str = ""               # e.g. "fais", "control", "athlete_a"
+
+    # MoCap session folder names for this player (relative to SIMULATIONS_DIR).
+    # Used by project_analysis.py to load data across multiple sessions.
+    # If empty, project_analysis falls back to settings.PLAYERS[player_id].sessions.
+    mocap_sessions: List[str] = field(default_factory=list)
+
     # OpenSim / CEINMS model files for this player (absolute or relative paths).
     template_model: str = ""      # AVAILABLE_MODELS key used as scaling template
     opensim_model: str = ""       # player-specific scaled .osim

@@ -1509,8 +1509,10 @@ class Analyse(settings.Inputs):
         emg_normalised = emg_normalised[(emg_normalised['time'] >= time_range[0]) & (emg_normalised['time'] <= time_range[1])]
 
 
+        # Coordinate names must match the OpenSim model (knee is 'knee_angle',
+        # and the model has no 'knee_adduction').
         coordinates = {'hip_flexion': None, 'hip_adduction': None, 'hip_rotation': None,
-                        'knee_flexion': None, 'knee_adduction': None,
+                        'knee_angle': None,
                         'ankle_angle': None}
         
         muscleGroups = {}
@@ -4159,9 +4161,19 @@ def filter_emg(emg_path=None, highcut_bp=95, lowcut_bp=20, order_bp=4, lowcut_lp
 
     data = load_any_data_file(emg_path)
 
-    
-    # Calculate sampling frequency
-
+    # Calculate sampling frequency from the time column (default 1000 Hz).
+    sampling_freq = 1000.0
+    if 'time' in data.columns and len(data['time']) > 1:
+        try:
+            dt = float(data['time'].iloc[1]) - float(data['time'].iloc[0])
+            if dt > 0:
+                sampling_freq = 1.0 / dt
+        except Exception:
+            sampling_freq = 1000.0
+        if not (100 <= sampling_freq <= 10000):
+            print(f"Warning: unusual EMG sampling freq ({sampling_freq:.1f} Hz) — defaulting to 1000 Hz")
+            sampling_freq = 1000.0
+    print(f"EMG Sampling Frequency: {sampling_freq:.1f} Hz")
 
     emg_cols = [col for col in data.columns if col.startswith('emg')]
 

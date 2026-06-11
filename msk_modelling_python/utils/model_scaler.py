@@ -37,6 +37,11 @@ class ModelScaler:
         # Optional: custom output filename (if not set, will use default)
         self.output_model_filename = None
 
+        # Optional: path to a real ScaleTool setup XML (with a MeasurementSet).
+        # If None, one is auto-discovered next to the markerset, else the bundled
+        # example template is used.
+        self.scale_setup_xml = None
+
         if not self.template_model.exists():
             raise FileNotFoundError(f"Template model not found: {self.template_model}")
         if not self.trc_file.exists():
@@ -358,73 +363,128 @@ class ModelScaler:
         Returns:
             Tuple of (scaled_model_path, scale_factors_dict)
         """
+        logger.info("Starting model scaling process...")
+
+        # Real measurement-based scaling needs a ScaleTool setup XML (which
+        # carries the MeasurementSet + marker-pairs). Locate one, then run
+        # OpenSim's ScaleTool with this subject's paths substituted in.
+        setup_xml = self._locate_scale_setup(markerset_path)
+        if setup_xml is not None:
+            try:
+                scaled_model = self._scale_with_setup_xml(setup_xml, markerset_path)
+                if scaled_model:
+                    logger.info(f"Scaling complete! Scaled model: {scaled_model}")
+                    return scaled_model, {}
+            except Exception as e:
+                logger.warning(f"ScaleTool execution failed: {e}")
+
+        # Could not scale properly — fall back to an UNSCALED template copy so
+        # the pipeline can continue, but make it loud (results use generic model).
+        return self._fallback_template_copy(), {}
+
+    def _output_model_path(self) -> Path:
+        if self.output_model_filename:
+            return self.output_model_dir / self.output_model_filename
+        return self.output_model_dir / f"scaled_{self.template_model.stem}.osim"
+
+    def _locate_scale_setup(self, markerset_path) -> Optional[Path]:
+        """Find a real ScaleTool setup XML (one containing a MeasurementSet)."""
+        candidates = []
+        if self.scale_setup_xml:
+            candidates.append(Path(self.scale_setup_xml))
+        if markerset_path:
+            # The user's setup_files folder usually holds the markerset + setup.
+            candidates.append(Path(markerset_path).parent / "setup_scale.xml")
+        # Bundled example as a last resort (matches the LASI/RASI marker protocol).
+        candidates.append(Path(__file__).parent.parent / "example_data" /
+                          "running" / "setupFiles" / "setup_scale.xml")
+        for c in candidates:
+            try:
+                if c and Path(c).is_file():
+                    logger.info(f"Using ScaleTool setup: {c}")
+                    return Path(c)
+            except Exception:
+                continue
+        logger.warning(
+            "No ScaleTool setup XML found (need one with a MeasurementSet). "
+            "Place a 'setup_scale.xml' in your setup_files folder for real scaling.")
+        return None
+
+    def _scale_with_setup_xml(self, setup_xml: Path, markerset_path) -> Optional[str]:
+        """Run OpenSim's ScaleTool from an existing setup, overriding paths.
+
+        Preserves the setup's MeasurementSet / marker-pairs (the part that makes
+        scaling correct) and only swaps in this subject's model, markerset, TRC,
+        time range and output path — all as absolute paths.
+        """
+        import opensim as osim
+
+        out_model = self._output_model_path()
+        out_model.parent.mkdir(parents=True, exist_ok=True)
+
+        scale_tool = osim.ScaleTool(str(setup_xml))
+
+        # Generic (unscaled) model + the model marker set used for scaling.
+        gmm = scale_tool.getGenericModelMaker()
+        gmm.setModelFileName(str(self.template_model.resolve()))
+        if markerset_path and Path(markerset_path).is_file():
+            gmm.setMarkerSetFileName(str(Path(markerset_path).resolve()))
+
+        # Time range from the static TRC (markers are averaged over this range).
         try:
-            logger.info("Starting model scaling process...")
+            md = osim.MarkerData(str(self.trc_file.resolve()))
+            t0, t1 = md.getStartFrameTime(), md.getLastFrameTime()
+        except Exception:
+            t0, t1 = 0.0, 1.0
+        tr = osim.ArrayDouble()
+        tr.append(t0)
+        tr.append(t1)
 
-            # Step 1: Calculate scale factors
-            scale_factors = self.calculate_scale_factors(marker_weights, markerset_path)
+        trc_abs = str(self.trc_file.resolve())
 
-            # Step 2: Create setup XML
-            setup_xml = self.create_scale_setup_xml(marker_weights, scale_factors, markerset_path)
+        ms = scale_tool.getModelScaler()
+        ms.setApply(True)
+        ms.setMarkerFileName(trc_abs)
+        ms.setTimeRange(tr)
+        ms.setOutputModelFileName(str(out_model.resolve()))
+        ms.setOutputScaleFileName(str((self.destination_dir / "scale_set.xml").resolve()))
 
-            # Step 3: Run OpenSim Scale Tool (placeholder for actual implementation)
-            logger.info("Attempting to run OpenSim Scale Tool...")
-            scaled_model = self._run_opensim_scale_tool(setup_xml)
+        mp = scale_tool.getMarkerPlacer()
+        mp.setApply(True)
+        mp.setMarkerFileName(trc_abs)
+        mp.setTimeRange(tr)
+        mp.setOutputModelFileName(str(out_model.resolve()))
+        try:
+            mp.setOutputMotionFileName(
+                str((self.destination_dir / "static_output.mot").resolve()))
+        except Exception:
+            pass
 
-            logger.info(f"Scaling complete! Scaled model: {scaled_model}")
-            return scaled_model, scale_factors
+        # Save the resolved setup next to the trial for inspection/repro.
+        try:
+            scale_tool.printToXML(str((self.destination_dir / "scale_setup.xml").resolve()))
+        except Exception:
+            pass
 
-        except Exception as e:
-            logger.error(f"Scaling failed: {e}")
-            raise
+        logger.info("Running OpenSim ScaleTool (measurement-based)...")
+        # ScaleTool.run() return value is inconsistent across OpenSim builds, so
+        # the file's existence is the source of truth.
+        ret = scale_tool.run()
+        if out_model.exists():
+            logger.info(f"Scaled model created: {out_model}")
+            return str(out_model)
+        logger.warning(f"ScaleTool ran (returned {ret}) but no model at {out_model}")
+        return None
 
-    def _run_opensim_scale_tool(self, setup_xml_path: str) -> str:
-        """
-        Run OpenSim's Scale Tool using the generated setup XML.
-
-        Args:
-            setup_xml_path: Path to generated setup XML
-
-        Returns:
-            Path to scaled model file
-
-        Raises:
-            RuntimeError: If OpenSim is not available or scaling fails
-        """
+    def _fallback_template_copy(self) -> str:
+        """Copy the unscaled template so the pipeline can proceed (loud warning)."""
         import shutil
-
-        try:
-            import opensim as osim
-
-            logger.info(f"Loading ScaleTool from: {setup_xml_path}")
-            scale_tool = osim.ScaleTool(setup_xml_path)
-
-            logger.info("Running ScaleTool...")
-            scale_tool.run()
-
-            # Get the output model path from the setup XML
-            # First try to use custom output filename if set
-            if self.output_model_filename:
-                scaled_model_path = self.output_model_dir / self.output_model_filename
-            else:
-                scaled_model_path = self.output_model_dir / f"scaled_{self.template_model.stem}.osim"
-
-            if not scaled_model_path.exists():
-                raise RuntimeError(f"Scaled model was not created at {scaled_model_path}")
-
-            logger.info(f"Scaled model created: {scaled_model_path}")
-            return str(scaled_model_path)
-
-        except Exception as e:
-            # Fallback: copy template model with subject-based naming
-            logger.warning(f"ScaleTool execution failed: {e}")
-            logger.info("Falling back to template model copy (full ScaleTool implementation pending)...")
-
-            if self.output_model_filename:
-                scaled_model_path = self.output_model_dir / self.output_model_filename
-            else:
-                scaled_model_path = self.output_model_dir / f"scaled_{self.template_model.stem}.osim"
-
-            shutil.copy(self.template_model, scaled_model_path)
-            logger.warning(f"Created scaled model at {scaled_model_path} (template copy - not fully optimized)")
-            return str(scaled_model_path)
+        out_model = self._output_model_path()
+        out_model.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.template_model, out_model)
+        logger.warning(
+            f"[SCALING FALLBACK] Wrote an UNSCALED copy of the generic model to "
+            f"{out_model}. Downstream results use the generic (non-subject-scaled) "
+            f"model. Add a 'setup_scale.xml' (with a MeasurementSet) to your "
+            f"setup_files folder for real scaling.")
+        return str(out_model)
