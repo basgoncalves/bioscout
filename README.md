@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="bioscout/utils/logo.png" width="140" alt="BioScout Logo"/>
+  <img src="https://raw.githubusercontent.com/basgoncalves/bioscout/main/bioscout/utils/logo.png" width="140" alt="BioScout Logo"/>
 </p>
 
 <h1 align="center">BioScout</h1>
@@ -17,7 +17,7 @@ see <a href="LICENSE">License</a>
 
 ## App Preview
 
-![BioScout Video Analysis — pose estimation on a sprinting athlete](bioscout/utils/app_window.png)
+![BioScout Video Analysis — pose estimation on a sprinting athlete](https://raw.githubusercontent.com/basgoncalves/bioscout/main/bioscout/utils/app_window.png)
 
 ---
 
