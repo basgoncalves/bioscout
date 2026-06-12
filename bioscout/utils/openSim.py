@@ -2416,23 +2416,11 @@ def create_setup_IK(osim_modelPath=None, marker_trc=None,
     Create an Inverse Kinematics (IK) setup XML file for OpenSim.
     """
     if not osim_modelPath:
-        osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
-    
+        raise ValueError("create_setup_IK: osim_modelPath is required")
+
     if not marker_trc:
-        marker_trc = input("Enter the path to the marker TRC file (.trc): ").strip('"')
+        raise ValueError("create_setup_IK: marker_trc is required")
         
-    if time_range is None:
-        time_range_input = input("Enter the time range for IK calculation as 'start,end' (or press Enter to use full range): ").strip('"').strip("'")
-        if time_range_input:
-            try:
-                start_str, end_str = time_range_input.split(',')
-                time_range = (float(start_str), float(end_str))
-            except ValueError:
-                print("Invalid time range format. Using full range.")
-                time_range = None
-        else:
-            time_range = None
-            
     if not os.path.exists(osim_modelPath):
         print(f"OpenSim model file not found: {osim_modelPath}")
         return

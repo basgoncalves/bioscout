@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<ceinms xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <subjectFile>..\subjectCalibrated_hybrid.xml</subjectFile>
+  <inputDataFile>inputData.xml</inputDataFile>
+  <executionFile>ceinms_cfg_optimise.xml</executionFile>
+  <excitationGeneratorFile>..\excitationGenerator.xml</excitationGeneratorFile>
+  <outputDirectory>.\Optimised</outputDirectory>
+  <betaMin>1</betaMin>
+  <betaMax>10</betaMax>
+  <betaDelta>2</betaDelta>
+  <gammaMin>1</gammaMin>
+  <gammaMax>300</gammaMax>
+  <gammaDelta>50</gammaDelta>
+</ceinms>

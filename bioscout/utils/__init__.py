@@ -815,6 +815,12 @@ class Analyse(settings.Inputs):
         os.chdir(os.path.abspath(self.path))
         self.load_settings(self.settingsXML)
 
+        # Guard: IK requires a TRC file. If marker export failed (e.g. C3D has no 3D point data),
+        # skip IK rather than hanging on an input() prompt or crashing inside osim.Storage().
+        if not os.path.exists(self.markers):
+            self._log(f'[SKIP] IK skipped — marker TRC not found: {self.markers}')
+            return
+
         # Refresh time_range from data — TRC may not have existed when settings XML was first written.
         # Also catches the 'None' string produced when the XML was saved before export.
         _tr = getattr(self, 'time_range', None)
@@ -3484,7 +3490,7 @@ def load_sto(path=None, output=0):
         offset = -3
         while 'time' not in columns:
             try:    
-                data = pd.read_csv(path, sep= '\s+', header=i+offset)
+                data = pd.read_csv(path, sep=r'\s+', header=i+offset)
                 columns = data.columns
                 offset += 1
                 if offset > 100:
@@ -3519,7 +3525,7 @@ def load_grf_mot(path=None, output=0):
 
     # read the file into a pandas DataFrame, skipping the header
     try:
-        data = pd.read_csv(path, sep= '\s+', header=i+1)
+        data = pd.read_csv(path, sep=r'\s+', header=i+1)
     except Exception as e:
         print(f"Error: Could not read the file at {path}. Please check the file format and try again.")
         print(f"Details: {e}")

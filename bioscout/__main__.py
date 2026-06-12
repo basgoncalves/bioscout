@@ -55,6 +55,10 @@ parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file
 parser.add_argument('-g', '--gui',   action='store_true', help="Launch GUI (default when no flags given)")
 parser.add_argument('--init', type=str, metavar='PROJECT_PATH',
                     help="Initialise a new project: create folder structure and copy settings template")
+parser.add_argument('--add_player', type=str, nargs='?', const='.', metavar='PROJECT_PATH',
+                    help="Interactively add a player to players.json in PROJECT_PATH (default: cwd)")
+parser.add_argument('--install', action='store_true',
+                    help="Check dependencies and install missing ones (opensim via conda, others via pip)")
 args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
@@ -592,13 +596,13 @@ def run_init_mode(project_path: str) -> int:
 
     Actions
     -------
-    1. Create standard subdirectories (simulations/, Models/, setup_files/, logs/)
-       if they do not exist.
-    2. Copy the package settings.py template to <project_path>/settings.py,
-       updating PROJECT_ROOT to the given path (skipped if settings.py already exists).
-    3. If simulations/ already contains participant sub-folders, compare them
-       against the PLAYERS registry in the existing settings.py and warn about
-       any mismatches.
+    1. Create standard subdirectories (simulations/, Models/, setup_files/, logs/).
+    2. Copy bundled setup_files templates (XML) into <project>/setup_files/ —
+       skips files that already exist so re-running is safe.
+    3. Copy the package settings.py template to <project_path>/settings.py,
+       updating PROJECT_ROOT to the given path (skipped if already exists).
+    4. If simulations/ already contains participant sub-folders, compare them
+       against PLAYERS in the existing settings.py and warn about mismatches.
     """
     import shutil
     import re as _re
@@ -621,7 +625,44 @@ def run_init_mode(project_path: str) -> int:
             print(f"  [exists]   {target}")
 
     # ---------------------------------------------------------------------- #
-    # 2. Copy settings template
+    # 2. Copy bundled templates (setup_files and models)
+    # ---------------------------------------------------------------------- #
+    def _copy_template_dir(src: Path, dst: Path, extensions: tuple) -> tuple:
+        """Copy files matching *extensions* from src → dst, skipping existing.
+        Returns (copied_count, skipped_count).
+        """
+        if not src.exists():
+            return 0, 0
+        copied, skipped = 0, 0
+        for item in sorted(src.rglob('*')):
+            if item.is_file() and (not extensions or item.suffix in extensions):
+                rel = item.relative_to(src)
+                target = dst / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    skipped += 1
+                else:
+                    shutil.copy2(item, target)
+                    copied += 1
+        return copied, skipped
+
+    for tmpl_name, dst_name, exts in [
+        ('setup_files', 'setup_files', ('.xml', '.txt')),
+        ('models',      'Models',      ()),       # () = copy all (includes Geometry/ meshes)
+    ]:
+        src_dir = Path(__file__).parent / tmpl_name
+        dst_dir = project / dst_name
+        c, s = _copy_template_dir(src_dir, dst_dir, exts)
+        label = f"  [{dst_name}]"
+        if c:
+            print(f"\n{label} {c} file(s) copied to {dst_dir}")
+        if s:
+            print(f"{label} {s} file(s) already existed — not overwritten")
+        if not c and not s:
+            print(f"\n{label} No bundled templates found at {src_dir}")
+
+    # ---------------------------------------------------------------------- #
+    # 3. Copy settings template
     # ---------------------------------------------------------------------- #
     settings_dest = project / 'settings.py'
     settings_src  = Path(__file__).parent / 'settings.py'
@@ -634,10 +675,14 @@ def run_init_mode(project_path: str) -> int:
             content = settings_src.read_text(encoding='utf-8')
             # Replace PROJECT_ROOT with the actual project path (forward slashes
             # work on all platforms; raw string keeps backslashes on Windows).
-            path_repr = repr(str(project)).replace("\\\\", "\\")
+            # Use a lambda replacement so re never interprets the path string
+            # as a regex escape sequence (e.g. \U on Windows would raise
+            # re.PatternError in Python 3.12+).
+            path_str = str(project).replace('\\', '/')
+            repl = f"PROJECT_ROOT    = Path(r'{path_str}')"
             content = _re.sub(
                 r"PROJECT_ROOT\s*=\s*.*",
-                f"PROJECT_ROOT    = Path({path_repr})",
+                lambda _: repl,
                 content,
                 count=1,
             )
@@ -711,7 +756,27 @@ def _is_video_batch_settings(settings_path: str) -> bool:
         return False
 
 
+def run_add_player_mode(project_path: str) -> int:
+    """Interactively add a player to players.json in *project_path*."""
+    from utils.player_registry import PlayerRegistry, prompt_add_player
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        print(f"[error] Project path does not exist: {root}")
+        return 1
+    registry = PlayerRegistry(root)
+    existing = registry.all_ids()
+    if existing:
+        print(f"  {len(existing)} player(s) already registered: {', '.join(existing)}")
+    pid = prompt_add_player(registry)
+    return 0 if pid else 1
+
+
 def main() -> int:
+    if args.install:
+        from utils.dependency_installer import install_missing
+        return 0 if install_missing(interactive=True) else 1
+    if args.add_player is not None:
+        return run_add_player_mode(args.add_player)
     if args.init:
         return run_init_mode(args.init)
     if args.batch:

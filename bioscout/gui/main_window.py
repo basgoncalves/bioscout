@@ -1,4 +1,4 @@
-"""Main application window for the Powerlifting Model Analysis App."""
+"""Main application window for BioScout."""
 
 import customtkinter as ctk
 from tkinter import messagebox
@@ -102,7 +102,19 @@ class MainWindow(ctk.CTk):
 
         super().__init__()
 
-        self.title("Powerlifting Model Analysis App")
+        self.title("BioScout")
+        # Set window / taskbar icon
+        try:
+            from PIL import Image as _PILImg
+            import tempfile, os
+            _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
+            if _logo_path.exists():
+                _img = _PILImg.open(_logo_path).convert("RGBA")
+                _ico_path = Path(tempfile.gettempdir()) / "bioscout_icon.ico"
+                _img.save(str(_ico_path), format="ICO", sizes=[(32, 32), (48, 48), (64, 64)])
+                self.iconbitmap(str(_ico_path))
+        except Exception:
+            pass
         self.fullscreen = fullscreen
         self.target_x = 0
         self.target_y = 0
@@ -304,8 +316,22 @@ class MainWindow(ctk.CTk):
         sidebar.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         sidebar.grid_rowconfigure(10, weight=1)
 
-        title_label = ctk.CTkLabel(sidebar, text="Analysis App", font=("Segoe UI", 16, "bold"))
-        title_label.grid(row=0, column=0, padx=20, pady=20, sticky="ew")
+        # Logo + title at top of sidebar
+        try:
+            from PIL import Image as _PILImage
+            _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
+            _pil = _PILImage.open(_logo_path).convert("RGBA").resize((48, 48), _PILImage.LANCZOS)
+            _ctk_logo = ctk.CTkImage(light_image=_pil, dark_image=_pil, size=(48, 48))
+            title_label = ctk.CTkLabel(
+                sidebar,
+                text="BioScout",
+                image=_ctk_logo,
+                compound="top",
+                font=("Segoe UI", 16, "bold"),
+            )
+        except Exception:
+            title_label = ctk.CTkLabel(sidebar, text="BioScout", font=("Segoe UI", 16, "bold"))
+        title_label.grid(row=0, column=0, padx=20, pady=(16, 8), sticky="ew")
 
         self.nav_buttons = {}
         _all_tabs = [
@@ -569,7 +595,7 @@ class MainWindow(ctk.CTk):
 
     def show_help(self) -> None:
         """Show help dialog."""
-        help_text = "Powerlifting Model Analysis App\n\n"
+        help_text = "BioScout\n\n"
         help_text += "QUICK START:\n"
         help_text += "1. C3D Export - Convert motion capture files\n"
         help_text += "2. Batch C3D - Batch process multiple C3D files\n"
@@ -621,7 +647,7 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Powerlifting Model Analysis App")
+    parser = argparse.ArgumentParser(description="BioScout")
     parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode")
     parser.add_argument("--screen-x", type=int, help="Force window X position (e.g., 1920 for secondary screen)")
     parser.add_argument("--screen-y", type=int, help="Force window Y position")

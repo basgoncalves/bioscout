@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ceinms xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+   <subjectFile>..\subjectCalibrated_hybrid.xml</subjectFile>
+   <inputDataFile>inputData.xml</inputDataFile>
+   <executionFile>ceinms_cfg.xml</executionFile>
+   <excitationGeneratorFile>..\excitationGenerator.xml</excitationGeneratorFile>
+   <outputDirectory>.\ceinmsOutput</outputDirectory>
+</ceinms>

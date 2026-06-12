@@ -458,6 +458,22 @@ class VideoAnalysisTab(ctk.CTkFrame):
             anchor="w", padx=10, pady=(0, 4)
         )
 
+        # --- Trial name ---
+        self._section(scroll, "\U0001f3f7️ Trial Name")
+        trial_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        trial_row.pack(fill="x", padx=10, pady=(0, 4))
+        trial_row.grid_columnconfigure(0, weight=1)
+        trial_row.grid_columnconfigure(1, weight=0)
+        self.trial_name_entry = ctk.CTkEntry(
+            trial_row, placeholder_text="e.g. running001 (auto-filled)")
+        self.trial_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(
+            trial_row, text="Auto-Detect ▶",
+            width=100, height=26,
+            fg_color="#2a4a6a", hover_color="#3a5a80",
+            command=self._auto_detect_trial_type
+        ).grid(row=0, column=1)
+
         # --- Export / Cancel ---
         self.run_btn = ctk.CTkButton(
             scroll, text="\U0001f4e4  Export Outputs",
@@ -493,21 +509,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self._paned.add(right, minsize=400, sticky="nsew")
         right.grid_columnconfigure(0, weight=1)   # video + controls
         right.grid_columnconfigure(1, weight=0)   # landmark panel
-        right.grid_rowconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)      # video canvas — gets all extra height
+        right.grid_rowconfigure(1, weight=0)      # controls — fixed at content height
 
-        # Vertical paned window: drag the horizontal sash to grow / shrink the
-        # video relative to the controls underneath it.
-        self._vpaned = tk.PanedWindow(
-            right, orient=tk.VERTICAL,
-            sashwidth=6, sashcursor="sb_v_double_arrow",
-            background="#444444", bd=0, relief="flat", sashrelief="raised",
-        )
-        self._vpaned.grid(row=0, column=0, sticky="nsew")
-
-        canvas_frame = ctk.CTkFrame(self._vpaned, fg_color="#1a1a1a", corner_radius=8)
+        # Video canvas frame (fills all available vertical space)
+        canvas_frame = ctk.CTkFrame(right, fg_color="#1a1a1a", corner_radius=8)
+        canvas_frame.grid(row=0, column=0, sticky="nsew")
         canvas_frame.grid_rowconfigure(0, weight=1)
         canvas_frame.grid_columnconfigure(0, weight=1)
-        self._vpaned.add(canvas_frame, minsize=200, stretch="always", sticky="nsew")
 
         self.canvas = tk.Canvas(canvas_frame,
                                 bg="#1a1a1a", highlightthickness=0, cursor="crosshair")
@@ -538,39 +547,22 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.canvas.bind("<Control-ButtonRelease-1>", self._on_canvas_mid_release)
         self.canvas.focus_set()
 
-        # --- Bottom pane: compact controls block sitting under the video ---
-        # Lives in the lower half of the vertical paned window so it stays close
-        # to the timeline and the video can be expanded by dragging the sash.
-        bottom = ctk.CTkFrame(self._vpaned, fg_color="transparent", height=104)
-        # sticky="nsew" — without it tk.PanedWindow CENTRES the widget in the
-        # pane, which floated the buttons in a band of empty space.
-        # stretch="never" + the sash placement below keep this pane at content
-        # height; all extra space goes to the video pane above.
-        self._vpaned.add(bottom, minsize=88, height=104, stretch="never", sticky="nsew")
+        # Controls container — sits directly below the video canvas, no gap
+        bottom = ctk.CTkFrame(right, fg_color="transparent")
+        bottom.grid(row=1, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=1)
 
-        # Place the sash so the bottom pane starts at exactly its content
-        # height. Runs once, after the widget gets its real size.
-        self._vsash_inited = False
-
-        def _init_vsash(_event=None):
-            if self._vsash_inited:
-                return
-            h = self._vpaned.winfo_height()
-            if h <= 1:
-                return
-            need = max(96, bottom.winfo_reqheight())
-            if h > need + 200:
-                self._vsash_inited = True
-                self._vpaned.sash_place(0, 0, h - need - 8)
-
-        self._vpaned.bind("<Configure>", _init_vsash, add="+")
-        self.after(300, _init_vsash)
+        # Explicitly prevent bottom rows from expanding
+        bottom.grid_rowconfigure(0, weight=0)
+        bottom.grid_rowconfigure(1, weight=0)
 
         # --- Under-video controls: step buttons + timeline bar ---
         controls = ctk.CTkFrame(bottom, fg_color="#1a1a1a", corner_radius=8)
         controls.grid(row=0, column=0, sticky="ew", pady=(2, 2))
         controls.grid_columnconfigure(4, weight=1)
+        # Lock controls rows — no vertical expansion
+        controls.grid_rowconfigure(0, weight=0)
+        controls.grid_rowconfigure(1, weight=0)
 
         # Row 0 — step buttons + Set In/Out + time readout (tight to the timeline)
         ctk.CTkButton(
@@ -611,46 +603,46 @@ class VideoAnalysisTab(ctk.CTkFrame):
         )
         self.tl_dur_label.grid(row=0, column=6, padx=(0, 8), pady=(4, 1))
 
-        # Row 1 — timeline canvas (directly below the buttons)
+        # Row 1 — timeline canvas (expands to fill whatever space remains)
         self._timeline = tk.Canvas(
-            controls, height=36, bg="#111111",
+            controls, height=28, bg="#111111",
             bd=0, highlightthickness=0
         )
         self._timeline.grid(row=1, column=0, columnspan=7,
-                            sticky="ew", padx=8, pady=(0, 3))
+                            sticky="ew", padx=8, pady=(0, 6))
         self._timeline.bind("<Configure>",       lambda e: self._tl_redraw())
         self._timeline.bind("<Button-1>",        self._tl_press)
         self._timeline.bind("<B1-Motion>",       self._tl_drag)
         self._timeline.bind("<ButtonRelease-1>", self._tl_release)
 
-        # Hidden backing sliders — keep API compat (fire callbacks when .set() is called)
-        self.scrub_slider = ctk.CTkSlider(
-            controls, from_=0, to=100, number_of_steps=1000,
-            command=self._on_scrub_slider
-        )
-        self.start_slider = ctk.CTkSlider(
-            controls, from_=0, to=100, number_of_steps=1000,
-            button_color="#44cc44", command=self._on_start_slider
-        )
-        self.end_slider = ctk.CTkSlider(
-            controls, from_=0, to=100, number_of_steps=1000,
-            button_color="#ee4444", command=self._on_end_slider
-        )
-        self.scrub_slider.set(0)
-        self.start_slider.set(0)
-        self.end_slider.set(100)
-        # Hidden labels kept for backward compat
-        self.start_time_display = ctk.CTkLabel(controls, text="0.0 s")
-        self.end_time_display   = ctk.CTkLabel(controls, text="– s")
+        # Lightweight backing objects — zero GUI footprint.
+        # CTkSlider.set() is silent (no callback fire); we match that exactly.
+        class _SliderProxy:
+            """No-op slider: .set() stores the value silently, .get() returns it."""
+            def __init__(self): self._v = 0.0
+            def set(self, value): self._v = float(value)
+            def get(self): return self._v
+
+        class _LabelProxy:
+            """No-op label: .configure() is a no-op."""
+            def configure(self, **_kw): pass
+
+        self.scrub_slider       = _SliderProxy()
+        self.start_slider       = _SliderProxy()
+        self.end_slider         = _SliderProxy()
+        self.start_time_display = _LabelProxy()
+        self.end_time_display   = _LabelProxy()
 
         # --- Mode hint + progress bar ---
         hint_row = ctk.CTkFrame(bottom, fg_color="transparent")
         hint_row.grid(row=1, column=0, sticky="ew", pady=0)
         hint_row.grid_columnconfigure(0, weight=1)
+        hint_row.grid_rowconfigure(0, weight=0)
+        hint_row.grid_rowconfigure(1, weight=0)
         self.mode_hint = ctk.CTkLabel(hint_row, text="", font=("Segoe UI", 10),
                                       text_color="#ffcc44")
         self.mode_hint.grid(row=0, column=0, sticky="w")
-        self.progress_bar = ctk.CTkProgressBar(hint_row)
+        self.progress_bar = ctk.CTkProgressBar(hint_row, height=8)
         self.progress_bar.set(0)
         self.progress_bar.grid(row=1, column=0, sticky="ew")
 
@@ -2518,7 +2510,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
         win = ctk.CTkToplevel(self)
         win.title("New Player" if is_new else f"Edit {prof.name}")
-        win.geometry("360x520")
+        win.geometry("380x640")
         win.transient(self.winfo_toplevel())
         win.grab_set()
 
@@ -2527,17 +2519,19 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
         entries = {}
 
-        def _add(label, value, key):
+        def _add(label, value, key, placeholder=""):
             ctk.CTkLabel(frm, text=label, font=("Segoe UI", 11),
                          anchor="w").pack(fill="x", pady=(6, 0))
-            e = ctk.CTkEntry(frm)
+            e = ctk.CTkEntry(frm, placeholder_text=placeholder)
             if value not in (None, ""):
                 e.insert(0, str(value))
             e.pack(fill="x")
             entries[key] = e
             return e
 
-        _add("Name", prof.name, "name")
+        _add("ID *", prof.id, "id", placeholder="unique identifier, e.g. 012")
+        _add("Name *", prof.name, "name")
+        _add("Group", prof.group, "group", placeholder="e.g. fais, control, athlete")
         _add("Sex (M/F)", prof.sex, "sex")
         _add("Age (years)", prof.age, "age")
         _add("Height (m)", prof.height_m, "height_m")
@@ -2583,9 +2577,21 @@ class VideoAnalysisTab(ctk.CTkFrame):
         status.pack(fill="x", pady=(6, 0))
 
         def _save():
+            player_id = entries["id"].get().strip()
             name = entries["name"].get().strip()
+            if not player_id:
+                status.configure(text="ID is required.")
+                return
             if not name:
                 status.configure(text="Name is required.")
+                return
+            # Reject duplicate IDs when creating a new profile
+            if is_new and any(
+                p.id == player_id
+                for p in (self._player_store._profiles.values()
+                          if hasattr(self._player_store, "_profiles") else [])
+            ):
+                status.configure(text=f"ID '{player_id}' already exists.")
                 return
 
             def _f(key):
@@ -2597,7 +2603,9 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 except ValueError:
                     return None
 
+            prof.id = player_id
             prof.name = name
+            prof.group = entries["group"].get().strip()
             prof.sex = entries["sex"].get().strip().upper()[:1]
             prof.age = _f("age")
             prof.height_m = _f("height_m")
@@ -2724,6 +2732,116 @@ class VideoAnalysisTab(ctk.CTkFrame):
             self.output_entry.delete(0, "end")
             self.output_entry.insert(0, folder)
 
+    # ------------------------------------------------------------------
+    # Trial name helpers
+    # ------------------------------------------------------------------
+
+    def _athlete_slug(self) -> str:
+        """Return a filesystem-safe slug for the active athlete."""
+        if self._active_profile and self._active_profile.id:
+            return self._active_profile.id
+        if self._active_profile and self._active_profile.name:
+            import re
+            return re.sub(r"[^\w\-]", "_", self._active_profile.name).strip("_").lower()
+        return "unknown_athlete"
+
+    def _base_output_dir(self) -> Path:
+        """Return the base directory for simulations (from output_entry or video parent)."""
+        s = self.output_entry.get().strip()
+        if s:
+            return Path(s)
+        if self._video_path:
+            return self._video_path.parent
+        return Path.cwd()
+
+    def _next_trial_number(self, athlete_slug: str, trial_prefix: str) -> int:
+        """Scan existing trial folders and return the next increment number."""
+        import re
+        base = self._base_output_dir() / "simulations" / athlete_slug
+        if not base.exists():
+            return 1
+        pattern = re.compile(rf"^{re.escape(trial_prefix)}(\d+)$", re.IGNORECASE)
+        max_n = 0
+        for entry in base.iterdir():
+            if entry.is_dir():
+                for sub in entry.iterdir():   # walk date subdirs
+                    if sub.is_dir():
+                        m = pattern.match(sub.name)
+                        if m:
+                            max_n = max(max_n, int(m.group(1)))
+        return max_n + 1
+
+    def _detect_dominant_motion(self) -> str:
+        """Detect the dominant motion type from In/Out crop frames. Returns task label."""
+        try:
+            from movement_detector.detector import detect_segments
+        except ImportError:
+            return "trial"
+
+        if not self._frame_poses:
+            return "trial"
+
+        fps = self._video_fps or 30.0
+        t_in  = self._start_time if self._start_time  is not None else 0.0
+        t_out = self._end_time   if self._end_time    is not None else self._video_duration
+
+        f_in  = int(t_in  * fps)
+        f_out = int(t_out * fps) if t_out > 0 else max(self._frame_poses.keys())
+
+        # Filter to only frames inside the crop window
+        cropped = {fi: v for fi, v in self._frame_poses.items()
+                   if f_in <= fi <= f_out}
+        if not cropped:
+            cropped = self._frame_poses   # fall back to all frames
+
+        try:
+            segs = detect_segments(cropped, fps=fps)
+        except Exception:
+            return "trial"
+
+        if not segs:
+            return "trial"
+
+        # Tally frame counts per task label and pick the dominant one
+        from collections import Counter
+        counts: Counter = Counter()
+        for s in segs:
+            counts[s.task] += s.end_frame - s.start_frame
+        return counts.most_common(1)[0][0]
+
+    def _build_trial_output_dir(self) -> Path:
+        """Build simulations/<athlete>/<YYYY-MM-DD>/<trial_name>/ path."""
+        import datetime
+        name = self.trial_name_entry.get().strip()
+        if not name:
+            # Fall back: auto-detect on the fly
+            task = self._detect_dominant_motion()
+            slug = self._athlete_slug()
+            n    = self._next_trial_number(slug, task)
+            name = f"{task}{n:03d}"
+        slug  = self._athlete_slug()
+        date  = datetime.date.today().strftime("%Y-%m-%d")
+        return self._base_output_dir() / "simulations" / slug / date / name
+
+    def _auto_detect_trial_type(self):
+        """Button callback: detect motion type and populate the trial name entry."""
+        if not self._frame_poses:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "No Pose Data",
+                "Run pose estimation first so there are frames to analyse.",
+                parent=self)
+            return
+
+        task = self._detect_dominant_motion()
+        slug = self._athlete_slug()
+        n    = self._next_trial_number(slug, task)
+        name = f"{task}{n:03d}"
+
+        self.trial_name_entry.delete(0, "end")
+        self.trial_name_entry.insert(0, name)
+        self._log(f"Auto-detected trial type: {task}  →  {name}")
+
     def _run_analysis(self):
         """Export poses CSV, then run video_analyzer.py to generate the MOT file."""
         if not self._video_path or not self._video_path.exists():
@@ -2732,6 +2850,16 @@ class VideoAnalysisTab(ctk.CTkFrame):
             return
         if self._running:
             return
+
+        # Resolve trial output directory
+        # Structure: simulations/<athlete_slug>/<YYYY-MM-DD>/<trial_name>/
+        trial_dir = self._build_trial_output_dir()
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        self._log(f"Trial output → {trial_dir}")
+
+        # Populate output_entry so the rest of the pipeline uses this path
+        self.output_entry.delete(0, "end")
+        self.output_entry.insert(0, str(trial_dir))
 
         # 1) Poses CSV (silent — the MOT step reports at the end)
         self._export_poses_csv(silent=True)
@@ -2745,8 +2873,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 segs = detect_segments(self._frame_poses, fps=self._video_fps or 30.0)
                 if segs:
                     import json as _json2
-                    out_dir_str_ = self.output_entry.get().strip()
-                    seg_dir = Path(out_dir_str_) if out_dir_str_ else self._video_path.parent
+                    seg_dir = trial_dir
                     seg_dir.mkdir(parents=True, exist_ok=True)
                     seg_path = seg_dir / f"{self._video_path.stem}_motion_segments.json"
                     seg_path.write_text(_json2.dumps(segments_to_dict(segs), indent=2))
@@ -2762,8 +2889,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         if self._active_profile is not None:
             try:
                 import json as _json3
-                out_dir_str_ = self.output_entry.get().strip()
-                snap_dir = Path(out_dir_str_) if out_dir_str_ else self._video_path.parent
+                snap_dir = trial_dir
                 snap_dir.mkdir(parents=True, exist_ok=True)
                 snap = snap_dir / f"{self._video_path.stem}_player.json"
                 snap.write_text(_json3.dumps(self._active_profile.to_dict(), indent=2))

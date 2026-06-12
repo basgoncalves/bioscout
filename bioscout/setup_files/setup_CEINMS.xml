@@ -1,0 +1,5 @@
+<ceinms>
+	<uncalibratedSubjectFile>uncalibratedSubject.xml</uncalibratedSubjectFile>
+	<calibrationSubjectFile>subjectCalibrated_hybrid-nn_driven.xml</calibrationSubjectFile>
+	<excitation
+</ceinms>

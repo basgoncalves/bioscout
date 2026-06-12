@@ -1,0 +1,218 @@
+<?xml version="1.0" ?>
+<excitationGenerator>
+  <inputSignals type="EMG">Voltage_EMG1_vast_lat_l Voltage_EMG2_vast_lat_r 
+    Voltage_EMG3_rect_fem_l Voltage_EMG4_rect_fem_r 
+    Voltage_EMG5_bic_fem_l Voltage_EMG6_bic_fem_r 
+    Voltage_EMG7_glut_max_l Voltage_EMG8_glut_max_r 
+    Voltage_EMG9_gast_med_l Voltage_EMG10_gast_med_r
+    Voltage_EMG11_lat_dor_l Voltage_EMG12_lat_dor_r
+    Voltage_EMG13_add_mag_l Voltage_EMG14_add_mag_r 
+    Voltage_EMG15_free Voltage_EMG16_free
+  </inputSignals>
+  <mapping>
+    <excitation id="addbrev_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="addlong_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="addmagDist_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="addmagIsch_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="addmagMid_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="addmagProx_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="bflh_r">
+      <input weight="1">Voltage_EMG6_bic_fem_r</input>
+    </excitation>
+    <excitation id="bfsh_r">
+      <input weight="1">Voltage_EMG6_bic_fem_r</input>
+    </excitation>
+    <excitation id="edl_r"/>
+    <excitation id="ehl_r"/>
+    <excitation id="fdl_r"/>
+    <excitation id="fhl_r"/>
+    <excitation id="gaslat_r">
+      <input weight="1">Voltage_EMG10_gast_med_r</input>
+    </excitation>
+    <excitation id="gasmed_r">
+      <input weight="1">Voltage_EMG10_gast_med_r</input>
+    </excitation>
+    <excitation id="glmax1_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmax2_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmax3_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmed1_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmed2_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmed3_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmin1_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmin2_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="glmin3_r">
+      <input weight="1">Voltage_EMG8_glut_max_r</input>
+    </excitation>
+    <excitation id="grac_r">
+      <input weight="1">Voltage_EMG14_add_mag_r</input>
+    </excitation>
+    <excitation id="iliacus_r">
+      <input weight="1">Voltage_EMG4_rect_fem_r</input>
+    </excitation>
+    <excitation id="perbrev_r"/>
+    <excitation id="perlong_r"/>
+    <excitation id="piri_r"/>
+    <excitation id="psoas_r">
+      <input weight="1">Voltage_EMG4_rect_fem_r</input>
+    </excitation>
+    <excitation id="recfem_r">
+      <input weight="1">Voltage_EMG4_rect_fem_r</input>
+    </excitation>
+    <excitation id="sart_r">
+      <input weight="1">Voltage_EMG4_rect_fem_r</input>
+    </excitation>
+    <excitation id="semimem_r">
+      <input weight="1">Voltage_EMG6_bic_fem_r</input>
+    </excitation>
+    <excitation id="semiten_r">
+      <input weight="1">Voltage_EMG6_bic_fem_r</input>
+    </excitation>
+    <excitation id="soleus_r">
+      <input weight="1">Voltage_EMG10_gast_med_r</input>
+    </excitation>
+    <excitation id="tfl_r">
+      <input weight="1">Voltage_EMG4_rect_fem_r</input>
+    </excitation>
+    <excitation id="tibant_r"/>
+    <excitation id="tibpost_r"/>
+    <excitation id="vasint_r">
+      <input weight="1">Voltage_EMG2_vast_lat_r</input>
+    </excitation>
+    <excitation id="vaslat_r">
+      <input weight="1">Voltage_EMG2_vast_lat_r</input>
+    </excitation>
+    <excitation id="vasmed_r">
+      <input weight="1">Voltage_EMG2_vast_lat_r</input>
+    </excitation>
+        <excitation id="addbrev_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="addlong_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="addmagDist_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="addmagIsch_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="addmagMid_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="addmagProx_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="bflh_l">
+      <input weight="1">Voltage_EMG5_bic_fem_l</input>
+    </excitation>
+    <excitation id="bfsh_l">
+      <input weight="1">Voltage_EMG5_bic_fem_l</input>
+    </excitation>
+    <excitation id="edl_l"/>
+    <excitation id="ehl_l"/>
+    <excitation id="fdl_l"/>
+    <excitation id="fhl_l"/>
+    <excitation id="gaslat_l">
+      <input weight="1">Voltage_EMG9_gast_med_l</input>
+    </excitation>
+    <excitation id="gasmed_l">
+      <input weight="1">Voltage_EMG9_gast_med_l</input>
+    </excitation>
+    <excitation id="glmax1_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmax2_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmax3_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmed1_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmed2_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmed3_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmin1_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmin2_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="glmin3_l">
+      <input weight="1">Voltage_EMG7_glut_max_l</input>
+    </excitation>
+    <excitation id="grac_l">
+      <input weight="1">Voltage_EMG13_add_mag_l</input>
+    </excitation>
+    <excitation id="iliacus_l">
+      <input weight="1">Voltage_EMG3_rect_fem_l</input>
+    </excitation>
+    <excitation id="perbrev_l"/>
+    <excitation id="perlong_l"/>
+    <excitation id="piri_l"/>
+    <excitation id="psoas_l">
+      <input weight="1">Voltage_EMG3_rect_fem_l</input>
+    </excitation>
+    <excitation id="recfem_l">
+      <input weight="1">Voltage_EMG3_rect_fem_l</input>
+    </excitation>
+    <excitation id="sart_l">
+      <input weight="1">Voltage_EMG3_rect_fem_l</input>
+    </excitation>
+    <excitation id="semimem_l">
+      <input weight="1">Voltage_EMG5_bic_fem_l</input>
+    </excitation>
+    <excitation id="semiten_l">
+      <input weight="1">Voltage_EMG5_bic_fem_l</input>
+    </excitation>
+    <excitation id="soleus_l">
+      <input weight="1">Voltage_EMG9_gast_med_l</input>
+    </excitation>
+    <excitation id="tfl_l">
+      <input weight="1">Voltage_EMG3_rect_fem_l</input>
+    </excitation>
+    <excitation id="tibant_l"/>
+    <excitation id="tibpost_l"/>
+    <excitation id="vasint_l">
+      <input weight="1">Voltage_EMG1_vast_lat_l</input>
+    </excitation>
+    <excitation id="vaslat_l">
+      <input weight="1">Voltage_EMG1_vast_lat_l</input>
+    </excitation>
+    <excitation id="vasmed_l">
+      <input weight="1">Voltage_EMG1_vast_lat_l</input>
+    </excitation>
+  </mapping>
+</excitationGenerator>

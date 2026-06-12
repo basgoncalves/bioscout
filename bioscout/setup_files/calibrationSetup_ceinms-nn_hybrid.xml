@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ceinmsCalibration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <subjectFile>subjectUncalibrated.xml</subjectFile>
+    <excitationGeneratorFile>excitationGenerator.xml</excitationGeneratorFile>
+    <calibrationFile>calibrationCfg_ceinms-nn_hybrid.xml</calibrationFile>
+    <outputSubjectFile>subjectCalibrated_hybrid.xml</outputSubjectFile>
+    <outputDirectory>calibration_hybrid</outputDirectory>
+</ceinmsCalibration>

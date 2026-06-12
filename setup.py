@@ -54,6 +54,8 @@ setup(
         'bioscout.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
         'bioscout.tests': ['*.xml'],
         'bioscout.models': ['*.osim'],
+        'bioscout.setup_files': ['*.xml', '*.txt'],
+        'bioscout.models': ['*.osim', '*.txt'],
     },
     entry_points={
         'console_scripts': [

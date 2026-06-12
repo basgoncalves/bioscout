@@ -1,407 +1,240 @@
 """
-Dependency installer for Powerlifting Model Analysis App.
+dependency_installer.py
+-----------------------
+Checks and installs bioscout dependencies.
 
-Automatically detects, downloads, and installs missing dependencies like OpenSim.
+Dependency categories
+---------------------
+  pip      — standard PyPI packages; handled by `pip install bioscout`
+  conda    — opensim; NOT on PyPI, must be installed via conda
+  optional — opencv / mediapipe; needed only for video/recording tabs
+
+Usage
+-----
+  python -m bioscout --install          # interactive check + install
+  python -m bioscout --install --quiet  # non-interactive, just report
 """
 
+from __future__ import annotations
+
+import importlib.util
 import subprocess
 import sys
-import json
-from typing import List, Dict, Optional
-from urllib.request import urlopen
-import importlib.util
-
-# Handle packaging import gracefully
-try:
-    from packaging import version as pkg_version
-except ImportError:
-    # Fallback: simple version comparison
-    pkg_version = None
+from dataclasses import dataclass, field
+from typing import Literal
 
 
-class DependencyInstaller:
-    """Manages installation of Python and system dependencies."""
+@dataclass
+class Dep:
+    import_name: str
+    pip_name: str = ""          # PyPI package name ("" = not on PyPI)
+    conda_channel: str = ""     # conda channel if needed (e.g. "opensim-org")
+    conda_name: str = ""        # conda package name
+    optional: bool = False
+    description: str = ""
 
-    # Define key dependencies with their package names and PyPI URLs
-    DEPENDENCIES = {
-        'opensim': {
-            'package_name': 'opensim-core',
-            'import_name': 'opensim',
-            'pypi_url': 'https://pypi.org/pypi/opensim-core/json',
-            'critical': True,  # App won't work without this
-            'description': 'OpenSim biomechanics modeling library'
-        },
-        'customtkinter': {
-            'package_name': 'customtkinter',
-            'import_name': 'customtkinter',
-            'pypi_url': 'https://pypi.org/pypi/customtkinter/json',
-            'critical': True,
-            'description': 'Modern GUI framework'
-        },
-        'pyyaml': {
-            'package_name': 'pyyaml',
-            'import_name': 'yaml',
-            'pypi_url': 'https://pypi.org/pypi/pyyaml/json',
-            'critical': True,
-            'description': 'YAML configuration file support'
-        },
-        'matplotlib': {
-            'package_name': 'matplotlib',
-            'import_name': 'matplotlib',
-            'pypi_url': 'https://pypi.org/pypi/matplotlib/json',
-            'critical': False,
-            'description': 'Data visualization library'
-        },
-        'pandas': {
-            'package_name': 'pandas',
-            'import_name': 'pandas',
-            'pypi_url': 'https://pypi.org/pypi/pandas/json',
-            'critical': True,
-            'description': 'Data analysis library (required for analysis)'
-        },
-        'numpy': {
-            'package_name': 'numpy',
-            'import_name': 'numpy',
-            'pypi_url': 'https://pypi.org/pypi/numpy/json',
-            'critical': True,
-            'description': 'Numerical computing library'
-        },
-        'scipy': {
-            'package_name': 'scipy',
-            'import_name': 'scipy',
-            'pypi_url': 'https://pypi.org/pypi/scipy/json',
-            'critical': False,
-            'description': 'Scientific computing library'
-        },
-        'cv2': {
-            'package_name': 'opencv-python',
-            'import_name': 'cv2',
-            'pypi_url': 'https://pypi.org/pypi/opencv-python/json',
-            'critical': True,
-            'description': 'OpenCV computer vision library (required for video recording)'
-        },
-        'mediapipe': {
-            'package_name': 'mediapipe',
-            'import_name': 'mediapipe',
-            'pypi_url': 'https://pypi.org/pypi/mediapipe/json',
-            'critical': True,
-            'description': 'Pose estimation library (required for video analysis)'
-        }
-    }
 
-    def __init__(self, verbose: bool = True):
-        """
-        Initialize dependency installer.
+# ---------------------------------------------------------------------------
+# Dependency catalogue
+# ---------------------------------------------------------------------------
+DEPS: list[Dep] = [
+    # ── opensim: pip (4.6+) preferred, conda fallback ────────────────────
+    Dep(
+        import_name="opensim",
+        pip_name="opensim",
+        conda_channel="opensim-org",
+        conda_name="opensim",
+        description="OpenSim biomechanics modelling (pip opensim>=4.6 or conda)",
+    ),
+    # ── optional pip (video / recording features) ─────────────────────────
+    Dep(
+        import_name="cv2",
+        pip_name="opencv-python",
+        optional=True,
+        description="OpenCV — required for video recording and pose estimation",
+    ),
+    Dep(
+        import_name="mediapipe",
+        pip_name="mediapipe",
+        optional=True,
+        description="MediaPipe — required for real-time pose estimation",
+    ),
+    # ── pip (should already be installed via setup.py install_requires) ───
+    Dep(import_name="numpy",        pip_name="numpy",         description="Numerical arrays"),
+    Dep(import_name="pandas",       pip_name="pandas",        description="Data analysis"),
+    Dep(import_name="scipy",        pip_name="scipy",         description="Scientific computing"),
+    Dep(import_name="matplotlib",   pip_name="matplotlib",    description="Plotting"),
+    Dep(import_name="sklearn",      pip_name="scikit-learn",  description="Machine learning"),
+    Dep(import_name="customtkinter",pip_name="customtkinter", description="Modern GUI"),
+    Dep(import_name="PIL",          pip_name="Pillow",        description="Image processing"),
+    Dep(import_name="yaml",         pip_name="pyyaml",        description="YAML config files"),
+    Dep(import_name="c3d",          pip_name="c3d",           description="C3D motion capture files"),
+]
 
-        Args:
-            verbose: Print detailed information
-        """
-        self.verbose = verbose
 
-    def _log(self, message: str, level: str = "INFO") -> None:
-        """Log message if verbose mode enabled."""
-        if self.verbose:
-            print(f"[{level}] {message}")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    def is_installed(self, package: str) -> bool:
-        """
-        Check if a package is installed.
+def _is_installed(import_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(import_name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
-        Args:
-            package: Package import name
 
-        Returns:
-            True if installed and importable
-        """
-        try:
-            importlib.util.find_spec(package)
-            return True
-        except (ImportError, ModuleNotFoundError, ValueError):
-            return False
+def _pip_install(package: str) -> bool:
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", package],
+        capture_output=True, text=True, timeout=300,
+    )
+    return result.returncode == 0
 
-    def get_available_versions(self, package_name: str) -> List[str]:
-        """
-        Fetch available versions from PyPI.
 
-        Args:
-            package_name: PyPI package name
+def _conda_available() -> bool:
+    return subprocess.run(
+        ["conda", "--version"], capture_output=True
+    ).returncode == 0
 
-        Returns:
-            List of available versions, newest first
-        """
-        try:
-            pypi_url = f'https://pypi.org/pypi/{package_name}/json'
-            with urlopen(pypi_url, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                versions = list(data['releases'].keys())
-                # Filter out pre-releases
-                stable_versions = [
-                    v for v in versions
-                    if not any(pre in v for pre in ['a', 'b', 'rc', 'dev'])
-                ]
-                # Sort by version number (newest first)
-                if pkg_version:
-                    stable_versions.sort(key=lambda x: pkg_version.parse(x), reverse=True)
-                else:
-                    # Fallback: simple string sort
-                    stable_versions.sort(reverse=True)
-                return stable_versions[:10]  # Return top 10 versions
-        except Exception as e:
-            self._log(f"Could not fetch versions for {package_name}: {e}", "WARNING")
-            return []
 
-    def install_package(self, package_name: str, version: Optional[str] = None) -> bool:
-        """
-        Install a package using pip.
+def _conda_install(channel: str, package: str) -> bool:
+    result = subprocess.run(
+        ["conda", "install", "-c", channel, package, "-y"],
+        capture_output=True, text=True, timeout=600,
+    )
+    return result.returncode == 0
 
-        Args:
-            package_name: Package name on PyPI
-            version: Specific version to install (if None, installs latest)
 
-        Returns:
-            True if installation successful
-        """
-        try:
-            self._log(f"Installing {package_name}" + (f" version {version}" if version else ""))
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
-            install_spec = f"{package_name}=={version}" if version else package_name
+def check() -> dict[str, bool]:
+    """Return {import_name: is_installed} for all tracked deps."""
+    return {d.import_name: _is_installed(d.import_name) for d in DEPS}
 
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", install_spec],
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
 
-            if result.returncode == 0:
-                self._log(f"✓ Successfully installed {package_name}", "SUCCESS")
-                return True
-            else:
-                self._log(f"✗ Failed to install {package_name}", "ERROR")
-                self._log(f"Error: {result.stderr}", "ERROR")
+def report() -> None:
+    """Print a dependency status table."""
+    status = check()
+    print("\n── Dependency status ──────────────────────────────────────────")
+    for d in DEPS:
+        ok = status[d.import_name]
+        tag = "✓" if ok else ("· optional" if d.optional else "✗ MISSING")
+        print(f"  {tag:12s}  {d.import_name:20s}  {d.description}")
+    print()
+
+
+def install_missing(interactive: bool = True) -> bool:
+    """Check all deps and offer to install missing ones.
+
+    Returns True if all non-optional deps are satisfied after the run.
+    """
+    status = check()
+
+    missing_critical  = [d for d in DEPS if not status[d.import_name] and not d.optional]
+    missing_optional  = [d for d in DEPS if not status[d.import_name] and d.optional]
+
+    if not missing_critical and not missing_optional:
+        print("✓ All dependencies are satisfied.")
+        return True
+
+    report()
+
+    # ── critical ──────────────────────────────────────────────────────────
+    if missing_critical:
+        print(f"✗ {len(missing_critical)} required dependency/ies missing:\n")
+        for d in missing_critical:
+            print(f"  {d.import_name}: {d.description}")
+
+        if interactive:
+            ans = input("\nAttempt to install them now? [y/N] ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("Skipped. Re-run with --install when ready.")
                 return False
 
-        except subprocess.TimeoutExpired:
-            self._log(f"Installation timeout for {package_name}", "ERROR")
-            return False
-        except Exception as e:
-            self._log(f"Installation error for {package_name}: {e}", "ERROR")
-            return False
+        for d in missing_critical:
+            if d.conda_name:
+                _install_conda_dep(d)
+            elif d.pip_name:
+                print(f"  pip install {d.pip_name} …")
+                ok = _pip_install(d.pip_name)
+                print(f"  {'✓' if ok else '✗'} {d.pip_name}")
 
-    def check_and_install_opensim(self, interactive: bool = True) -> bool:
-        """
-        Check if OpenSim is installed, and install if needed.
+    # ── optional ──────────────────────────────────────────────────────────
+    if missing_optional:
+        print(f"\n⚠  {len(missing_optional)} optional dependency/ies missing "
+              f"(video / recording features):\n")
+        for d in missing_optional:
+            print(f"  {d.import_name}: {d.description}")
 
-        Args:
-            interactive: If True, ask user which version to install
+        if interactive:
+            ans = input("\nInstall optional deps? [y/N] ").strip().lower()
+            if ans in ("y", "yes"):
+                for d in missing_optional:
+                    print(f"  pip install {d.pip_name} …")
+                    ok = _pip_install(d.pip_name)
+                    print(f"  {'✓' if ok else '✗'} {d.pip_name}")
 
-        Returns:
-            True if OpenSim is available (either was installed or already present)
-        """
-        if self.is_installed('opensim'):
-            self._log("OpenSim is already installed ✓")
-            return True
-
-        self._log("OpenSim is not installed")
-
-        if not interactive:
-            self._log("Installing latest OpenSim version...")
-            return self.install_package('opensim-core')
-
-        # Interactive mode - show available versions
-        print("\n" + "="*70)
-        print("OpenSim Installation Helper")
-        print("="*70)
-        print("\nFetching available OpenSim versions from PyPI...")
-
-        available_versions = self.get_available_versions('opensim-core')
-
-        if not available_versions:
-            print("\nCould not fetch available versions from PyPI.")
-            print("Installing latest version from PyPI...")
-            return self.install_package('opensim-core')
-
-        print(f"\nAvailable OpenSim versions ({len(available_versions)} shown):\n")
-        for i, ver in enumerate(available_versions, 1):
-            print(f"  {i}. {ver}")
-
-        print(f"  {len(available_versions) + 1}. Latest (auto-select)")
-        print(f"  {len(available_versions) + 2}. Cancel installation")
-
-        while True:
-            try:
-                choice = input(f"\nSelect version to install (1-{len(available_versions) + 2}): ").strip()
-                choice_num = int(choice)
-
-                if choice_num == len(available_versions) + 2:
-                    print("\nInstallation cancelled.")
-                    return False
-
-                if choice_num == len(available_versions) + 1:
-                    selected_version = None
-                    print(f"\nInstalling latest version...")
-                    break
-
-                if 1 <= choice_num <= len(available_versions):
-                    selected_version = available_versions[choice_num - 1]
-                    print(f"\nInstalling version {selected_version}...")
-                    break
-
-                print(f"Invalid choice. Please enter a number between 1 and {len(available_versions) + 2}")
-
-            except ValueError:
-                print("Invalid input. Please enter a number.")
-                continue
-
-        # Perform installation
-        success = self.install_package('opensim-core', selected_version)
-
-        if success:
-            # Verify installation
-            if self.is_installed('opensim'):
-                print("\n✓ OpenSim installed successfully!")
-                return True
-            else:
-                print("\n✗ OpenSim installation completed but import failed.")
-                print("  This may be a compatibility issue with your Python version.")
-                return False
-        else:
-            print("\n✗ Failed to install OpenSim")
-            print("\nFor manual installation, see: https://opensim.stanford.edu/")
-            return False
-
-    def check_all_dependencies(self) -> Dict[str, bool]:
-        """
-        Check all dependencies.
-
-        Returns:
-            Dictionary of package_name: is_installed
-        """
-        results = {}
-        for key, info in self.DEPENDENCIES.items():
-            results[key] = self.is_installed(info['import_name'])
-        return results
-
-    def install_missing_dependencies(self, interactive: bool = True) -> bool:
-        """
-        Install all missing dependencies.
-
-        Args:
-            interactive: Show interactive prompts
-
-        Returns:
-            True if all critical dependencies are satisfied
-        """
-        status = self.check_all_dependencies()
-
-        missing_critical = {
-            k: v for k, v in status.items()
-            if not v and self.DEPENDENCIES[k]['critical']
-        }
-
-        missing_optional = {
-            k: v for k, v in status.items()
-            if not v and not self.DEPENDENCIES[k]['critical']
-        }
-
-        if not missing_critical and not missing_optional:
-            self._log("All dependencies are satisfied ✓")
-            return True
-
-        print("\n" + "="*70)
-        print("Dependency Check")
-        print("="*70)
-
-        if missing_critical:
-            print(f"\n✗ Missing {len(missing_critical)} critical dependencies:")
-            for key in missing_critical:
-                info = self.DEPENDENCIES[key]
-                print(f"  - {key}: {info['description']}")
-
-        if missing_optional:
-            print(f"\n⚠ Missing {len(missing_optional)} optional dependencies:")
-            for key in missing_optional:
-                info = self.DEPENDENCIES[key]
-                print(f"  - {key}: {info['description']}")
-
-        if missing_critical:
-            if interactive:
-                response = input("\nInstall missing critical dependencies? (yes/no): ").strip().lower()
-                if response not in ['yes', 'y']:
-                    print("Cannot proceed without critical dependencies.")
-                    return False
-
-            print("\nInstalling critical dependencies...")
-            for key in missing_critical:
-                info = self.DEPENDENCIES[key]
-                if key == 'opensim':
-                    # Special handling for OpenSim
-                    if not self.check_and_install_opensim(interactive=False):
-                        self._log(f"Failed to install {key}", "ERROR")
-                        return False
-                else:
-                    if not self.install_package(info['package_name']):
-                        self._log(f"Failed to install {key}", "ERROR")
-                        return False
-
-        if missing_optional and interactive:
-            response = input("\nInstall optional dependencies? (yes/no): ").strip().lower()
-            if response in ['yes', 'y']:
-                print("\nInstalling optional dependencies...")
-                for key in missing_optional:
-                    info = self.DEPENDENCIES[key]
-                    self.install_package(info['package_name'])
-
-        # Final check
-        final_status = self.check_all_dependencies()
-        critical_satisfied = all(
-            final_status[k] for k in missing_critical
-        )
-
-        if critical_satisfied:
-            print("\n✓ All critical dependencies installed successfully!")
-            return True
-        else:
-            print("\n✗ Some critical dependencies still missing.")
-            return False
+    # final verdict
+    final = check()
+    all_ok = all(final[d.import_name] for d in DEPS if not d.optional)
+    if all_ok:
+        print("\n✓ All required dependencies are satisfied.")
+    else:
+        still_missing = [d.import_name for d in DEPS
+                         if not d.optional and not final[d.import_name]]
+        print(f"\n✗ Still missing: {', '.join(still_missing)}")
+    return all_ok
 
 
-def check_dependencies_and_install_if_needed():
+def _install_conda_dep(d: Dep) -> None:
+    """Install a dependency that has both pip (4.6+) and conda options.
+
+    Strategy for opensim:
+      1. Try  pip install opensim  (works for opensim >=4.6 on PyPI)
+      2. If pip fails, fall back to conda install
+      3. If conda not available either, print manual instructions
     """
-    Main function to check and install dependencies.
-    Call this at application startup.
-    """
-    installer = DependencyInstaller(verbose=True)
+    # ── Step 1: try pip if a pip_name is set ──────────────────────────────
+    if d.pip_name:
+        print(f"\n  Trying: pip install {d.pip_name}  (opensim 4.6+ is on PyPI) …")
+        ok = _pip_install(d.pip_name)
+        if ok and _is_installed(d.import_name):
+            print(f"  ✓ {d.pip_name} installed via pip.")
+            return
+        print(f"  pip install failed (may need Python ≤3.11). Trying conda …")
 
-    # Check all dependencies
-    status = installer.check_all_dependencies()
+    # ── Step 2: try conda ─────────────────────────────────────────────────
+    print(f"\n  Running: conda install -c {d.conda_channel} {d.conda_name}")
+    if not _conda_available():
+        print("  conda not found.")
+        _print_opensim_manual_instructions()
+        return
 
-    # If OpenSim is missing, offer interactive installation
-    if not status['opensim']:
-        print("\n" + "="*70)
-        print("OpenSim Missing - Installation Required")
-        print("="*70)
-        print("\nThe Powerlifting Model Analysis App requires OpenSim.")
-        print("OpenSim is a free, open-source musculoskeletal modeling software.")
-        print("Homepage: https://opensim.stanford.edu/")
-
-        if not installer.check_and_install_opensim(interactive=True):
-            print("\n✗ Cannot proceed without OpenSim installed.")
-            print("Please install OpenSim manually or try again.")
-            sys.exit(1)
-
-    # Check other critical dependencies
-    installer.install_missing_dependencies(interactive=True)
-
-    # Final verification
-    if not installer.is_installed('opensim'):
-        print("\n✗ Critical dependency check failed: OpenSim")
-        sys.exit(1)
-
-    print("\n✓ All dependencies ready. Launching application...\n")
+    ok = _conda_install(d.conda_channel, d.conda_name)
+    if ok:
+        print(f"  ✓ {d.conda_name} installed via conda.")
+    else:
+        print(f"  ✗ conda install failed.")
+        _print_opensim_manual_instructions()
 
 
-if __name__ == "__main__":
-    # Test the installer
-    installer = DependencyInstaller(verbose=True)
-    check_dependencies_and_install_if_needed()
+def _print_opensim_manual_instructions() -> None:
+    print("""
+  ── Manual OpenSim install options ─────────────────────────────────
+  Option A — pip (opensim 4.6+, Python 3.11):
+      pip install opensim
+
+  Option B — conda (any supported version):
+      conda install -c opensim-org opensim
+
+  Option C — clone a working conda env (fastest if you have one):
+      conda create --name new_env --clone msk311b
+      conda activate new_env
+      pip install -e /path/to/bioscout
+
+  Option D — download from opensim.stanford.edu and follow the
+      Python bindings setup guide.
+  ────────────────────────────────────────────────────────────────────
+""")

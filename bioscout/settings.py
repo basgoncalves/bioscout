@@ -3,9 +3,7 @@ Unified Settings Module
 """
 
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
 
 MODULE_PATH = Path(__file__).parent
 
@@ -23,36 +21,36 @@ LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install
 
 
 # ============================================================================
-# PLAYER REGISTRY
-# Each key is the player ID, which doubles as the session folder name under
-# SIMULATIONS_DIR unless you override `sessions` in the PlayerConfig.
+# PLAYERS — list of player IDs to process in this batch.
+#
+# Full player data (height, mass, group, etc.) lives in players.json at the
+# project root.  Add players with:  python -m bioscout --add_player .
+#
+# Two formats are supported:
+#
+#   Simple (recommended) — IDs only, all data from players.json:
+#       PLAYERS = ['012', '078']
+#
+#   With overrides — dict where values override players.json fields for that run:
+#       PLAYERS = {
+#           '012': {},                         # no overrides, use registry as-is
+#           '078': {'static_trial': 'static2'} # override one field
+#       }
 # ============================================================================
-@dataclass
-class PlayerConfig:
-    """Per-player batch-processing configuration."""
-    group: str = ''                                     # e.g. 'fais', 'control'
-    sessions: List[str] = field(default_factory=list)  # session folder names under SIMULATIONS_DIR;
-                                                        # leave empty to use [player_id]
-    static_trial: str = 'static1'                    # static/calibration trial name
-    notes: str = ''
+PLAYERS = ['012', '078']
 
 
-PLAYERS = {
-    '012': PlayerConfig(group='fais'),
-    '078': PlayerConfig(group='control'),
-}
+def build_sessions(players=None, simulations_dir: Path = None,
+                   project_root: Path = None) -> dict:
+    """Build the {abs_session_path: static_trial_name} dict BatchSettings expects.
 
-
-def build_sessions(players: dict = None, simulations_dir: Path = None) -> dict:
-    """Build the {abs_session_path: static_trial_name} dict that BatchSettings expects.
-
-    When a player has multiple sessions, each session folder gets its own entry.
-    For teaching or alternative datasets, pass custom players/simulations_dir.
+    Loads per-player data (static_trial, etc.) from players.json.
+    Falls back to 'static1' if the registry doesn't exist yet.
 
     Args:
-        players: {player_id: PlayerConfig}. Defaults to PLAYERS.
-        simulations_dir: folder that contains session sub-folders. Defaults to SIMULATIONS_DIR.
-
+        players:        list of IDs or {id: override_dict}. Defaults to PLAYERS.
+        simulations_dir: parent folder of session sub-folders. Defaults to SIMULATIONS_DIR.
+        project_root:   folder containing players.json. Defaults to PROJECT_ROOT.
     Returns:
         {str(abs_path): static_trial_name}
     """
@@ -60,15 +58,38 @@ def build_sessions(players: dict = None, simulations_dir: Path = None) -> dict:
         players = PLAYERS
     if simulations_dir is None:
         simulations_dir = SIMULATIONS_DIR
+    if project_root is None:
+        project_root = PROJECT_ROOT
+
+    # Normalise to {pid: override_dict}
+    if isinstance(players, (list, tuple)):
+        player_map = {pid: {} for pid in players}
+    elif isinstance(players, dict):
+        player_map = {
+            pid: (vars(v) if not isinstance(v, dict) else v)
+            for pid, v in players.items()
+        }
+    else:
+        player_map = {}
+
+    # Try loading the registry; degrade gracefully when it doesn't exist yet.
+    registry = {}
+    try:
+        from utils.player_registry import PlayerRegistry
+        reg = PlayerRegistry(project_root)
+        registry = reg.all_players()
+    except Exception:
+        pass
+
     out = {}
-    for pid, cfg in players.items():
-        sess_names = cfg.sessions if cfg.sessions else [pid]
-        for sess in sess_names:
-            out[str(simulations_dir / sess)] = cfg.static_trial
+    for pid, overrides in player_map.items():
+        rec = {**registry.get(pid, {}), **overrides}
+        static = rec.get('static_trial') or 'static1'
+        out[str(simulations_dir / pid)] = static
     return out
 
 
-# Backward-compatible flat dict — BatchSettings.sessions still reads this.
+# Flat dict consumed by BatchSettings.sessions.
 SESSIONS = build_sessions()
 
 # ============================================================================
