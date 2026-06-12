@@ -7,6 +7,10 @@ from pathlib import Path
 
 MODULE_PATH = Path(__file__).parent
 
+# Version of the settings schema.  Project settings.py files are checked
+# against this at runtime; a mismatch triggers a warning in the UI.
+SETTINGS_VERSION = "2.0"
+
 # ============================================================================
 # PROJECT ROOT — the only absolute path you need to change per project.
 # All other paths are derived from it.

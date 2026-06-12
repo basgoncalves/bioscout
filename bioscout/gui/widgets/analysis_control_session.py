@@ -26,11 +26,13 @@ class AnalysisControlSessionTab(ctk.CTkFrame):
 
     VERSION = "2.1.0"
 
-    def __init__(self, parent, config_manager: ConfigManager, status_callback):
+    def __init__(self, parent, config_manager: ConfigManager, status_callback,
+                 session_broadcast_cb=None):
         """Initialize Session Analysis Control Tab."""
         super().__init__(parent)
         self.config_manager = config_manager
         self.status_callback = status_callback
+        self._session_broadcast_cb = session_broadcast_cb  # notifies other tabs
         self.session_manager = None
         self.runner = AnalysisRunner(progress_callback=self._on_progress)
         self.analysis_thread = None
@@ -44,26 +46,64 @@ class AnalysisControlSessionTab(ctk.CTkFrame):
         self._create_widgets()
 
     def set_session_dir(self, session_dir: str):
-        """Receive session directory from main window."""
+        """Receive session directory broadcast from main window (other tabs may trigger this)."""
         if session_dir:
+            self._session_path_var.set(session_dir)
             self._load_session(session_dir)
+
+    def _do_load_session(self, session_dir: str) -> None:
+        """Load a session chosen from this tab's own Browse button, and notify other tabs."""
+        if not session_dir:
+            return
+        self._load_session(session_dir)
+        # Broadcast to other tabs (EMG normalisation, batch C3D, etc.)
+        if self._session_broadcast_cb:
+            try:
+                self._session_broadcast_cb(session_dir)
+            except Exception as e:
+                logger.warning(f"Session broadcast error: {e}")
 
     def _create_widgets(self) -> None:
         """Create UI widgets."""
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # TOP SECTION: Session Label (shows current session from main window)
+        # TOP SECTION: heading + session path Browse row
         top_frame = ctk.CTkFrame(self)
         top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         top_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(top_frame, text="Session-Level Analysis", font=("Segoe UI", 14, "bold")).pack(
-            anchor="w", pady=(0, 5)
-        )
+        ctk.CTkLabel(top_frame, text="Session-Level Analysis",
+                     font=("Segoe UI", 14, "bold")).grid(
+            row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
 
-        self.session_label = ctk.CTkLabel(top_frame, text="Session: Not set", font=("Segoe UI", 10, "bold"), text_color="#28a745")
-        self.session_label.pack(anchor="w")
+        # Session path row (moved from global topbar into this tab)
+        ctk.CTkLabel(top_frame, text="Session:",
+                     font=("Segoe UI", 10, "bold")).grid(
+            row=1, column=0, sticky="w", padx=(10, 6), pady=(0, 6))
+
+        self._session_path_var = ctk.StringVar(value="")
+        ctk.CTkEntry(top_frame, textvariable=self._session_path_var,
+                     placeholder_text="Select session folder…"
+                     ).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 6))
+
+        def _browse_sess():
+            folder = filedialog.askdirectory(title="Select Session Folder")
+            if folder:
+                self._session_path_var.set(folder)
+                self._do_load_session(folder)
+
+        ctk.CTkButton(top_frame, text="Browse", width=76,
+                      command=_browse_sess).grid(row=1, column=2, padx=4, pady=(0, 6))
+        ctk.CTkButton(top_frame, text="Load", width=56,
+                      command=lambda: self._do_load_session(self._session_path_var.get())
+                      ).grid(row=1, column=3, padx=(0, 10), pady=(0, 6))
+
+        self.session_label = ctk.CTkLabel(top_frame, text="Session: Not set",
+                                          font=("Segoe UI", 10, "bold"),
+                                          text_color="#28a745")
+        self.session_label.grid(row=2, column=0, columnspan=4, sticky="w",
+                                padx=10, pady=(0, 6))
 
         # PATHS SECTION: Template Folder and Model Path
         paths_frame = ctk.CTkFrame(self)

@@ -4,7 +4,7 @@ Update versions here when releasing new features.
 """
 
 # Application Version
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_NAME = "bioscout"
 
 # Module Versions
@@ -42,6 +42,20 @@ DEPENDENCY_VERSIONS = {
 
 # Version History
 VERSION_HISTORY = {
+    "1.1.0": {
+        "date": "2026-06-12",
+        "changes": [
+            "Full Results tab rewrite — cascading dropdowns, channel tickboxes, matplotlib subplots, time-normalise, colour picker, series queue",
+            "Topbar: project path with red/green SETTINGS_VERSION check indicator",
+            "Topbar: 'Update Settings' button — migrates project settings.py preserving all user values",
+            "Added SETTINGS_VERSION to bioscout/settings.py",
+            "Added bioscout/utils/settings_updater.py — AST-precise settings migration",
+            "Session Analysis tab: session Browse/Load moved into tab (removed from topbar)",
+            "Recording tab: enabled=False → no camera auto-start, placeholder shown, source must be selected",
+            "Recording tab: IP camera 'Connect' button with HTTP reachability pre-check and MJPEG endpoint auto-detection",
+            "README: fixed typo in License link",
+        ]
+    },
     "1.0.0": {
         "date": "2026-06-11",
         "changes": [

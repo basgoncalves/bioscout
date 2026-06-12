@@ -662,6 +662,73 @@ class ScreenRecorder:
         self.root.protocol("WM_DELETE_WINDOW", self._on_quit)
         self.root.mainloop()
 
+    def open_panel(self, parent=None):
+        """Launch the control panel as a Toplevel (when called from another Tk app)."""
+        if parent is None:
+            self.run()
+            return
+
+        win = tk.Toplevel(parent)
+        win.title("Screen Recorder")
+        win.resizable(False, False)
+        win.attributes('-topmost', True)
+
+        # Temporarily redirect self.root so existing methods work unchanged
+        self.root = win
+
+        self._area_label_var = tk.StringVar(master=win, value="No area selected")
+        self._status_var     = tk.StringVar(master=win, value="Select an area to begin")
+
+        pad = dict(padx=12, pady=5)
+
+        tk.Label(win, textvariable=self._area_label_var,
+                 font=('Arial', 10, 'bold')).pack(**pad)
+
+        fps_frame = tk.Frame(win)
+        fps_frame.pack(padx=12, pady=(0, 2))
+        tk.Label(fps_frame, text="FPS:", font=('Arial', 9)).pack(side=tk.LEFT)
+        self._fps_var = tk.StringVar(master=win, value='20')
+        fps_spin = tk.Spinbox(fps_frame, textvariable=self._fps_var,
+                              values=(5, 10, 15, 20, 24, 30, 60),
+                              width=5, font=('Arial', 9), state='readonly')
+        fps_spin.pack(side=tk.LEFT, padx=4)
+
+        tk.Label(fps_frame, text="Audio:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(12, 0))
+        self._audio_var = tk.StringVar(master=win, value='Off')
+        from tkinter import ttk
+        ttk.Combobox(fps_frame, textvariable=self._audio_var,
+                     values=['Off', 'System audio', 'Microphone'],
+                     width=13, state='readonly').pack(side=tk.LEFT, padx=4)
+
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(padx=12, pady=4)
+
+        tk.Button(btn_frame, text="Select Area", width=13,
+                  command=self._on_select).grid(row=0, column=0, padx=4)
+
+        self._btn_start = tk.Button(btn_frame, text="▶  Start", width=11,
+                                    state=tk.DISABLED, command=self._on_start,
+                                    bg='#2e7d32', fg='white',
+                                    activebackground='#1b5e20', activeforeground='white')
+        self._btn_start.grid(row=0, column=1, padx=4)
+
+        self._btn_stop = tk.Button(btn_frame, text="■  Stop", width=11,
+                                   state=tk.DISABLED, command=self._on_stop,
+                                   bg='#c62828', fg='white',
+                                   activebackground='#7f0000', activeforeground='white')
+        self._btn_stop.grid(row=0, column=2, padx=4)
+
+        tk.Button(btn_frame, text="Close", width=8,
+                  command=win.destroy).grid(row=0, column=3, padx=4)
+
+        tk.Button(btn_frame, text="✂  Trim Video", width=15,
+                  command=self._on_trim).grid(row=1, column=0, columnspan=4, pady=(6, 0))
+
+        tk.Label(win, textvariable=self._status_var,
+                 font=('Arial', 9), fg='gray').pack(**pad)
+
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
 
 if __name__ == "__main__":
     recorder = ScreenRecorder()

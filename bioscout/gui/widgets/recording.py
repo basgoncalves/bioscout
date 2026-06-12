@@ -57,13 +57,27 @@ class RecordingTab(ctk.CTkFrame):
 
         self._create_ui()
 
-        # Start camera preview thread
+        # Auto-start camera only when enabled=True in settings
+        if RecordingSettings.enabled:
+            self._start_camera_thread()
+
+    def __del__(self):
+        """Cleanup when tab is destroyed."""
+        self.camera_running = False
+        if self.camera_cap is not None:
+            self.camera_cap.release()
+            self.camera_cap = None
+
+    def _start_camera_thread(self):
+        """Start the background camera capture thread (idempotent)."""
+        if self.camera_running:
+            return
         self.camera_running = True
         self.camera_thread = threading.Thread(target=self._camera_capture_loop, daemon=True)
         self.camera_thread.start()
 
-    def __del__(self):
-        """Cleanup when tab is destroyed."""
+    def _stop_camera_thread(self):
+        """Stop the capture thread and release the capture device."""
         self.camera_running = False
         if self.camera_cap is not None:
             self.camera_cap.release()
@@ -145,6 +159,62 @@ class RecordingTab(ctk.CTkFrame):
             print(f"Error capturing frame: {e}")
             return None
 
+    # ── IP camera helpers ────────────────────────────────────────────────────
+
+    def _ip_status(self, text: str, ok: bool = False):
+        """Thread-safe update of the IP status label."""
+        if hasattr(self, "ip_status_label"):
+            self.after(0, lambda: self.ip_status_label.configure(
+                text=text,
+                text_color="#44ff44" if ok else "#ff4444",
+            ))
+
+    @staticmethod
+    def _http_reachable(url: str, timeout: float = 3.0) -> tuple[bool, str]:
+        """Return (ok, message).  Does a quick HTTP GET to check reachability."""
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, method="GET")
+            req.add_header("User-Agent", "BioScout/1.0")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                code = resp.getcode()
+                ct   = resp.headers.get("Content-Type", "")
+                return True, f"HTTP {code}  ({ct})"
+        except OSError as e:
+            # Connection refused / timeout / no route
+            msg = str(e)
+            if "timed out" in msg.lower():
+                return False, "Connection timed out — phone not on same network or app not running"
+            if "refused" in msg.lower():
+                return False, "Connection refused — app may be running but on a different port"
+            if "no route" in msg.lower() or "network" in msg.lower():
+                return False, "No route to host — check phone IP address"
+            return False, f"Network error: {msg[:80]}"
+        except Exception as e:
+            return False, str(e)[:80]
+
+    @staticmethod
+    def _candidate_urls(base: str) -> list[str]:
+        """Return a list of MJPEG endpoint candidates for common IP-camera apps."""
+        base = base.rstrip("/")
+        # Already looks like a full endpoint — try it first, then common variants
+        candidates = [base]
+        # IP Webcam (Android) — the standard endpoints
+        for ep in ("/video", "/video?dummy=.mjpg", "/?action=stream",
+                   "/shot.jpg", "/stream", "/mjpeg"):
+            url = base.split("?")[0].split("#")[0].rstrip("/")
+            # Strip any existing endpoint path before adding a new one
+            if not url.endswith(ep):
+                candidates.append(url + ep)
+        # Deduplicate while preserving order
+        seen: set = set()
+        out: list = []
+        for u in candidates:
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+
     def _init_camera(self):
         """Initialize camera capture (webcam or IP MJPEG stream)."""
         try:
@@ -152,72 +222,76 @@ class RecordingTab(ctk.CTkFrame):
                 self.camera_cap.release()
                 self.camera_cap = None
 
-            if self.camera_var.get() == "webcam":
+            src = self.camera_var.get()
+            if src == "none":
+                return
+
+            if src == "webcam":
                 self.camera_cap = cv2.VideoCapture(0)
                 self.camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 self.camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 self.camera_cap.set(cv2.CAP_PROP_FPS, 30)
             else:
-                ip_addr = self.ip_entry.get().strip()
-                if ip_addr:
-                    # Remove trailing slash for consistency
-                    ip_addr = ip_addr.rstrip('/')
+                # ── IP camera ────────────────────────────────────────────
+                ip_addr = self.ip_entry.get().strip().rstrip("/")
+                if not ip_addr:
+                    self._ip_status("⚠  No URL configured")
+                    return
 
-                    # For IP MJPEG streams, suppress ffmpeg warnings about content-length
-                    # These are harmless for streaming video
-                    import os
-                    old_fflags = os.environ.get('FFLAGS', '')
-                    os.environ['FFLAGS'] = '-hide_banner -loglevel warning'
+                self._ip_status("⏳ Testing connection…")
 
-                    # Try to open IP camera with ffmpeg backend for better MJPEG support
-                    # OpenCV will auto-detect MJPEG format
-                    self.camera_cap = cv2.VideoCapture(ip_addr, cv2.CAP_FFMPEG)
+                # 1. Quick HTTP reachability check
+                ok, http_msg = self._http_reachable(ip_addr)
+                if not ok:
+                    self._ip_status(f"✗ {http_msg}")
+                    print(f"⚠  IP camera unreachable: {http_msg}")
+                    print(f"   URL tried: {ip_addr}")
+                    print(f"   • Is the phone on the same Wi-Fi network?")
+                    print(f"   • Is the IP Webcam app running on the phone?")
+                    print(f"   • Try opening {ip_addr} in a browser on this PC")
+                    self.camera_cap = None
+                    return
 
-                    # Restore environment
-                    if old_fflags:
-                        os.environ['FFLAGS'] = old_fflags
-                    elif 'FFLAGS' in os.environ:
-                        del os.environ['FFLAGS']
+                # 2. Try candidate MJPEG endpoints until one streams frames
+                import os
+                os.environ.setdefault("FFLAGS", "-hide_banner -loglevel warning")
 
-                    # Set camera properties for IP streams
-                    self.camera_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer for low latency
-                    self.camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    self.camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                working_url = None
+                for url in self._candidate_urls(ip_addr):
+                    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    ret, _ = cap.read()
+                    if ret:
+                        working_url = url
+                        self.camera_cap = cap
+                        break
+                    cap.release()
 
-                    # Check if connection succeeded
-                    ret, test_frame = self.camera_cap.read()
-                    if not ret:
-                        print(f"⚠️ Warning: Could not read from IP camera at {ip_addr}")
-                        print(f"   Camera is connected but may not be streaming properly")
-                        print(f"   Try adding endpoint: {ip_addr}/video or {ip_addr}/stream")
+                if working_url is None:
+                    tried = ", ".join(self._candidate_urls(ip_addr)[:4])
+                    self._ip_status("✗ Server reachable but no video stream found")
+                    print(f"⚠  No MJPEG stream found at {ip_addr}")
+                    print(f"   Tried: {tried}")
+                    print(f"   • In the IP Webcam app tap  Video preferences → Enable MJPEG")
+                    print(f"   • Or open {ip_addr} in a browser and copy the /video URL")
+                    return
 
-                        # Update status label to show connection failed
-                        if hasattr(self, 'ip_status_label'):
-                            self.ip_status_label.configure(
-                                text="⚠️ Cannot connect to IP camera - check address and ensure phone app is running",
-                                text_color="#ff4444"
-                            )
-                    else:
-                        # Connection successful - clear status
-                        if hasattr(self, 'ip_status_label'):
-                            self.ip_status_label.configure(text="✓ Connected", text_color="#44ff44")
-                else:
-                    # No IP address configured
-                    if hasattr(self, 'ip_status_label'):
-                        self.ip_status_label.configure(
-                            text="⚠️ No IP address configured",
-                            text_color="#ff4444"
-                        )
+                # 3. Update the URL entry if we found a better endpoint
+                if working_url != ip_addr:
+                    self.after(0, lambda u=working_url: (
+                        self.ip_entry.delete(0, "end"),
+                        self.ip_entry.insert(0, u),
+                    ))
+                    print(f"ℹ  Auto-detected stream URL: {working_url}")
+
+                self.camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self._ip_status(f"✓  Connected — {working_url}", ok=True)
 
         except Exception as e:
             print(f"Error initializing camera: {e}")
             self.camera_cap = None
-            # Update status on error
-            if hasattr(self, 'ip_status_label'):
-                self.ip_status_label.configure(
-                    text=f"⚠️ Error: {str(e)[:50]}...",
-                    text_color="#ff4444"
-                )
+            self._ip_status(f"✗ Error: {str(e)[:60]}")
 
     def _display_frame(self, frame):
         """Display a frame in the camera preview label."""
@@ -327,8 +401,12 @@ class RecordingTab(ctk.CTkFrame):
         )
         source_title.pack(padx=15, pady=(10, 5), anchor="w")
 
-        # Default to IP camera if IP address is configured, otherwise use webcam
-        default_camera = "ip" if (self.ip_address and self.ip_address.strip()) else "webcam"
+        # When enabled=True: auto-select configured source.
+        # When enabled=False: start with nothing selected; user must choose.
+        if RecordingSettings.enabled:
+            default_camera = "ip" if (self.ip_address and self.ip_address.strip()) else "webcam"
+        else:
+            default_camera = "none"
         self.camera_var = ctk.StringVar(value=default_camera)
 
         webcam_btn = ctk.CTkRadioButton(
@@ -363,16 +441,31 @@ class RecordingTab(ctk.CTkFrame):
         )
         ip_label.pack(anchor="w", pady=(0, 5))
 
+        # Entry + Connect button row
+        ip_row = ctk.CTkFrame(self.ip_frame, fg_color="transparent")
+        ip_row.pack(fill="x", pady=0)
+        ip_row.grid_columnconfigure(0, weight=1)
+
         self.ip_entry = ctk.CTkEntry(
-            self.ip_frame,
+            ip_row,
             placeholder_text="http://192.168.x.x:8080/video",
             font=("Segoe UI", 10),
-            height=35
+            height=35,
         )
-        self.ip_entry.pack(fill="x", expand=True, pady=0)
+        self.ip_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.ip_entry.insert(0, self.ip_address)
-        self.ip_entry.bind("<FocusOut>", lambda e: self._init_camera())
         self.ip_entry.bind("<Return>", lambda e: self._init_camera())
+
+        ctk.CTkButton(
+            ip_row,
+            text="🔗 Connect",
+            width=90,
+            height=35,
+            font=("Segoe UI", 10),
+            fg_color="#1a4a1a",
+            hover_color="#2a6a2a",
+            command=self._init_camera,
+        ).grid(row=0, column=1)
 
         # Connection status indicator
         self.ip_status_label = ctk.CTkLabel(
@@ -497,9 +590,12 @@ class RecordingTab(ctk.CTkFrame):
         camera_frame = ctk.CTkFrame(right_panel, fg_color="#1e1e1e", corner_radius=8, border_width=2, border_color="#404040")
         camera_frame.pack(fill="both", expand=True, pady=(0, 10))
 
+        _init_text = ("📷 Camera Preview\nWebcam Ready"
+                      if RecordingSettings.enabled
+                      else "📷 Select a camera source to begin")
         self.camera_preview_label = ctk.CTkLabel(
             camera_frame,
-            text="📷 Camera Preview\nWebcam Ready",
+            text=_init_text,
             text_color="#888888",
             font=("Segoe UI", 14),
             fg_color="#1e1e1e"
@@ -528,15 +624,28 @@ class RecordingTab(ctk.CTkFrame):
 
     def _on_camera_changed(self):
         """Handle camera source change."""
-        if self.camera_var.get() == "ip":
+        src = self.camera_var.get()
+        if src == "ip":
             self.ip_frame.pack(padx=15, pady=5, fill="x")
         else:
             self.ip_frame.pack_forget()
 
-        # Reinitialize camera for new source
-        self._init_camera()
+        if src == "none":
+            self._stop_camera_thread()
+            self.camera_preview_label.configure(
+                image="",
+                text="📷 Select a camera source to begin",
+                text_color="#666666",
+            )
+            return
 
-        # Update camera preview
+        # Start capture thread on first real selection, then reinit camera
+        if not self.camera_running:
+            self._start_camera_thread()
+        else:
+            self._stop_camera_thread()
+            self._start_camera_thread()
+
         self._update_camera_preview()
 
     def _update_camera_preview(self):

@@ -372,12 +372,18 @@ class MainWindow(ctk.CTk):
         self.status_label = ctk.CTkLabel(status_frame, text="Ready", text_color="#28a745", font=("Segoe UI", 10))
         self.status_label.pack(padx=10, pady=(0, 10), anchor="w")
 
-        # Help button (Settings removed - use system settings or preferences)
+        # Utility buttons row (Help + Screen Record)
         button_frame = ctk.CTkFrame(sidebar)
         button_frame.grid(row=12, column=0, padx=10, pady=10, sticky="ew")
         button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkButton(button_frame, text="Help", width=60, command=self.show_help).grid(row=0, column=0, padx=2, sticky="ew")
+        ctk.CTkButton(button_frame, text="Help", width=60,
+                      command=self.show_help).grid(row=0, column=0, padx=(0, 2), sticky="ew")
+        ctk.CTkButton(button_frame, text="📹 Record",
+                      fg_color="#1a3a5a", hover_color="#2a4a6a",
+                      width=60, command=self._open_screen_recorder
+                      ).grid(row=0, column=1, padx=(2, 0), sticky="ew")
 
         version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}", text_color="#666666", font=("Segoe UI", 8))
         version_label.grid(row=13, column=0, padx=10, pady=5, sticky="ew")
@@ -408,7 +414,7 @@ class MainWindow(ctk.CTk):
         if VideoAnalysisTab is not None:
             self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
         self.tab_definitions.update({
-            "Session Analysis": {"class": AnalysisControlSessionTab, "args": (self.config_manager, self.update_status)},
+            "Session Analysis": {"class": AnalysisControlSessionTab, "args": (self.config_manager, self.update_status, self.broadcast_session_dir)},
             "C3D Export": {"class": C3DExportTab, "args": (self.config_manager, self.update_status)},
             "Batch C3D": {"class": BatchC3DExport, "args": ()},
             "EMG Normalization": {"class": EMGNormalizationTab, "args": (self.config_manager, self.update_status)},
@@ -517,35 +523,210 @@ class MainWindow(ctk.CTk):
         thread.start()
 
     def _create_topbar(self) -> None:
-        """Create top bar with session selector and controls."""
+        """Create top bar with project selector and version status indicator."""
         topbar = ctk.CTkFrame(self.main_frame, corner_radius=8)
         topbar.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 10))
-        topbar.grid_columnconfigure(1, weight=1)
+        topbar.grid_columnconfigure(2, weight=1)
 
-        # Title shows current tab name dynamically
+        # Title label (current tab)
         self.title_label = ctk.CTkLabel(topbar, text="", font=("Segoe UI", 14, "bold"))
         self.title_label.pack(side="left", padx=15, pady=10)
 
-        # Session-level selector
-        session_frame = ctk.CTkFrame(topbar)
-        session_frame.pack(side="left", padx=15, pady=10, fill="x", expand=False)
+        # ── Project path selector ──────────────────────────────────────────
+        proj_frame = ctk.CTkFrame(topbar, fg_color="transparent")
+        proj_frame.pack(side="left", padx=10, pady=8, fill="x", expand=True)
 
-        ctk.CTkLabel(session_frame, text="Session:", font=("Segoe UI", 11, "bold")).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(proj_frame, text="Project:", font=("Segoe UI", 11, "bold")).pack(side="left", padx=(0, 6))
 
         from tkinter import filedialog
 
-        self.session_dir = ctk.StringVar(value="")
-        self.session_entry = ctk.CTkEntry(session_frame, textvariable=self.session_dir, placeholder_text="Select session folder...", width=400)
-        self.session_entry.pack(side="left", padx=5)
+        self._project_dir = ctk.StringVar(value="")
+        proj_entry = ctk.CTkEntry(
+            proj_frame,
+            textvariable=self._project_dir,
+            placeholder_text="Select project folder…",
+            width=420,
+        )
+        proj_entry.pack(side="left", padx=4)
 
-        def browse_session():
-            folder = filedialog.askdirectory(title="Select Session Folder")
+        # Status icon: shown after the entry
+        self._proj_status = ctk.CTkLabel(
+            proj_frame, text="", font=("Segoe UI", 11), width=26
+        )
+        self._proj_status.pack(side="left", padx=(2, 6))
+
+        def _browse_project():
+            folder = filedialog.askdirectory(title="Select Project Folder")
             if folder:
-                self.session_dir.set(folder)
-                self.broadcast_session_dir(folder)
+                self._project_dir.set(folder)
+                self._load_project(folder)
 
-        ctk.CTkButton(session_frame, text="Browse", width=80, command=browse_session).pack(side="left", padx=5)
-        ctk.CTkButton(session_frame, text="Load", width=60, command=lambda: self.broadcast_session_dir(self.session_dir.get())).pack(side="left", padx=5)
+        ctk.CTkButton(proj_frame, text="Browse", width=76,
+                      command=_browse_project).pack(side="left", padx=3)
+        ctk.CTkButton(proj_frame, text="Load", width=56,
+                      command=lambda: self._load_project(self._project_dir.get())
+                      ).pack(side="left", padx=3)
+
+        self._update_settings_btn = ctk.CTkButton(
+            proj_frame, text="↑ Update Settings", width=130,
+            fg_color="#5a3a00", hover_color="#7a5000",
+            font=("Segoe UI", 10),
+            command=self._update_project_settings,
+            state="disabled",
+        )
+        self._update_settings_btn.pack(side="left", padx=(8, 3))
+
+    def _load_project(self, project_dir: str) -> None:
+        """Validate project settings.py version and broadcast to tabs."""
+        if not project_dir:
+            return
+        p = Path(project_dir)
+        self._project_dir.set(str(p))
+
+        # ── Version check ──────────────────────────────────────────────────
+        settings_file = p / "settings.py"
+        ok = False
+        needs_update = False
+        tooltip = ""
+        if not settings_file.exists():
+            tooltip = "⚠  No settings.py — run: python -m bioscout --init"
+        else:
+            try:
+                import importlib.util as _ilu
+                spec = _ilu.spec_from_file_location("_proj_settings", settings_file)
+                mod  = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                proj_ver = getattr(mod, "SETTINGS_VERSION", None)
+                from settings import SETTINGS_VERSION as _SRC_VER
+                if proj_ver is None:
+                    tooltip = "⚠  settings.py has no SETTINGS_VERSION — click ↑ Update Settings"
+                    needs_update = True
+                elif proj_ver != _SRC_VER:
+                    tooltip = f"⚠  settings v{proj_ver} ≠ src v{_SRC_VER} — click ↑ Update Settings"
+                    needs_update = True
+                else:
+                    ok = True
+                    tooltip = f"✓  settings v{proj_ver}"
+            except Exception as e:
+                tooltip = f"⚠  Could not read settings.py: {e}"
+                needs_update = True
+
+        if ok:
+            self._proj_status.configure(text="✓", text_color="#28a745")
+            self._update_settings_btn.configure(state="disabled",
+                                                fg_color="#5a3a00")
+        else:
+            self._proj_status.configure(text="⚠", text_color="#dc3545")
+            if needs_update:
+                self._update_settings_btn.configure(
+                    state="normal",
+                    fg_color="#c87000", hover_color="#e08800")
+            else:
+                self._update_settings_btn.configure(state="disabled",
+                                                    fg_color="#5a3a00")
+
+        self.update_status(tooltip, "success" if ok else "warning")
+        self.broadcast_project_dir(project_dir)
+
+    def _update_project_settings(self) -> None:
+        """Preview and apply a settings.py migration for the current project."""
+        project_dir = self._project_dir.get().strip()
+        if not project_dir:
+            messagebox.showwarning("No Project", "Load a project folder first.", parent=self)
+            return
+        settings_file = Path(project_dir) / "settings.py"
+        if not settings_file.exists():
+            messagebox.showerror("Missing settings.py",
+                                 "No settings.py found in this folder.\n"
+                                 "Run: python -m bioscout --init", parent=self)
+            return
+
+        try:
+            from utils.settings_updater import build_updated_settings
+            new_text, preserved = build_updated_settings(settings_file)
+        except Exception as e:
+            messagebox.showerror("Migration Error", str(e), parent=self)
+            return
+
+        # ── Preview dialog ────────────────────────────────────────────────
+        dlg = tkinter.Toplevel(self)
+        dlg.title("Update Settings — Preview")
+        dlg.geometry("820x640")
+        dlg.grab_set()
+        dlg.configure(bg="#1a1a2a")
+
+        ctk.CTkLabel(dlg, text="Settings Update Preview",
+                     font=("Segoe UI", 14, "bold")).pack(padx=16, pady=(14, 4))
+        ctk.CTkLabel(dlg,
+                     text="The values below will be preserved from your current settings.py.\n"
+                          "All other fields will be updated to the latest schema.\n"
+                          "A backup (settings.py.bak_<timestamp>) will be created automatically.",
+                     font=("Segoe UI", 10), justify="left", text_color="#aaaaaa"
+                     ).pack(padx=16, pady=(0, 8), anchor="w")
+
+        # Preserved list
+        pf = ctk.CTkFrame(dlg, fg_color="#111118", corner_radius=6)
+        pf.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(pf, text="Preserved values:", font=("Segoe UI", 10, "bold"),
+                     anchor="w").pack(anchor="w", padx=10, pady=(6, 2))
+        for line in preserved:
+            ctk.CTkLabel(pf, text=line, font=("Courier New", 9),
+                         text_color="#aaddaa", anchor="w").pack(anchor="w", padx=14, pady=1)
+        ctk.CTkLabel(pf, text="", height=4).pack()
+
+        # New file preview
+        ctk.CTkLabel(dlg, text="New settings.py (preview):",
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
+        txt_frame = ctk.CTkFrame(dlg, fg_color="#111118")
+        txt_frame.pack(fill="both", expand=True, padx=16, pady=(4, 8))
+
+        import tkinter as _tk
+        txt = _tk.Text(txt_frame, bg="#111118", fg="#cccccc",
+                       font=("Courier New", 9), wrap="none",
+                       insertbackground="#cccccc")
+        sb_y = _tk.Scrollbar(txt_frame, orient="vertical",   command=txt.yview)
+        sb_x = _tk.Scrollbar(txt_frame, orient="horizontal", command=txt.xview)
+        txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        sb_y.pack(side="right", fill="y")
+        sb_x.pack(side="bottom", fill="x")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", new_text)
+        txt.configure(state="disabled")
+
+        # Buttons
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 14))
+
+        def _apply():
+            try:
+                from utils.settings_updater import write_updated_settings
+                write_updated_settings(settings_file)
+                dlg.destroy()
+                messagebox.showinfo("Settings Updated",
+                                    "settings.py has been updated.\n"
+                                    "A backup was saved alongside it.",
+                                    parent=self)
+                self._load_project(project_dir)   # re-validate
+            except Exception as e:
+                messagebox.showerror("Write Error", str(e), parent=self)
+
+        ctk.CTkButton(btn_row, text="✓  Apply Update", fg_color="#28a745",
+                      hover_color="#218838", width=150,
+                      command=_apply).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Cancel", fg_color="#555555",
+                      hover_color="#666666", width=100,
+                      command=dlg.destroy).pack(side="left")
+
+    def broadcast_project_dir(self, project_dir: str) -> None:
+        """Broadcast project directory to all tabs that support set_project_dir()."""
+        if not project_dir:
+            return
+        for tab_name, tab in self.tabs.items():
+            if hasattr(tab, "set_project_dir"):
+                try:
+                    tab.set_project_dir(project_dir)
+                except Exception as e:
+                    logger.error(f"Error setting project dir for {tab_name}: {e}")
 
     def switch_tab(self, tab_name: str) -> None:
         """Switch to specified tab (with lazy loading support)."""
@@ -592,6 +773,24 @@ class MainWindow(ctk.CTk):
         color = color_map.get(status_type, color_map["info"])
         self.status_label.configure(text=status, text_color=color)
         logger.info(f"Status: {status} ({status_type})")
+
+    def _open_screen_recorder(self) -> None:
+        """Launch the screen recorder as a floating panel."""
+        try:
+            from record.screen_record import ScreenRecorder
+            rec = ScreenRecorder()
+            rec.open_panel(parent=self)
+        except ImportError as e:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Screen Recorder",
+                f"Could not load screen recorder:\n{e}\n\n"
+                "Make sure pyautogui and opencv-python are installed:\n"
+                "  pip install pyautogui opencv-python",
+                parent=self)
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Screen Recorder", str(e), parent=self)
 
     def show_help(self) -> None:
         """Show help dialog."""

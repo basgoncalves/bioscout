@@ -8,14 +8,16 @@
 
 <p align="center">
 BioScout is an open-source Python toolbox for musculoskeletal modelling, motion capture analysis, and real-time movement assessment.<br>
-Successor to <a href="https://pypi.org/project/msk-modelling-python/">msk_modelling_python</a>.
+Successor to <a href="https://pypi.org/project/msk-modelling-python/">msk_modelling_python</a>.<br>
+see <a href="LICENSE">License</a>
 </p>
+
 
 ---
 
 ## App Preview
 
-![BioScout Video Analysis — pose estimation on a sprinting athlete](bioscout\utils\app_window.png)
+![BioScout Video Analysis — pose estimation on a sprinting athlete](bioscout/utils/app_window.png)
 
 ---
 
@@ -25,6 +27,17 @@ Successor to <a href="https://pypi.org/project/msk-modelling-python/">msk_modell
 - **Computer vision kinematics** — pose detection from phone or laptop camera
 - **Player profiles** — organise athlete data across sessions, assign groups, track over time
 - **Batch processing** — run entire pipelines overnight with a single settings file
+
+---
+
+## Requirements
+
+| Dependency | Version | Install via |
+|---|---|---|
+| Python | 3.9 – 3.11 | conda |
+| OpenSim | 4.6+ | `pip install opensim` (or `conda install -c opensim-org opensim`) |
+| numpy, pandas, scipy, matplotlib | latest | pip (auto with bioscout) |
+| opencv-python, mediapipe | latest | pip (optional, video features) |
 
 ---
 
@@ -217,17 +230,3 @@ import bioscout as msk
 
 ---
 
-## Requirements
-
-| Dependency | Version | Install via |
-|---|---|---|
-| Python | 3.9 – 3.11 | conda |
-| OpenSim | 4.6+ | `pip install opensim` (or `conda install -c opensim-org opensim`) |
-| numpy, pandas, scipy, matplotlib | latest | pip (auto with bioscout) |
-| opencv-python, mediapipe | latest | pip (optional, video features) |
-
----
-
-## License
-
-MIT — see [LICENSE.md](LICENSE.md)

@@ -1,568 +1,714 @@
-"""Results Viewer Tab - View and analyze results with checkbox selection and session integration."""
+"""Results Viewer Tab — multi-subject, multi-trial plot builder.
+
+Layout
+------
+Left panel  : project folder + cascading dropdowns (participant → session → trial → file)
+              + colour picker + "Add to Plot" + series queue + Clear All
+Centre      : matplotlib grid of subplots (one per selected channel)
+              + NavigationToolbar + Save / Clear buttons
+Right panel : channel tick-boxes (union across all loaded series)
+              + Select All / None
+Bottom bar  : Time Normalise toggle (0-100 %)
+"""
+
+from __future__ import annotations
+
+import re
+import threading
+from pathlib import Path
+from typing import Optional
+import sys
 
 import customtkinter as ctk
-from pathlib import Path
-import sys
-import numpy as np
-import threading
+import tkinter as tk
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from config.config_manager import ConfigManager
 from utils.logger import logger
 
 try:
     import matplotlib
-    matplotlib.use('TkAgg')
+    matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
     from matplotlib.figure import Figure
-    HAS_MATPLOTLIB = True
+    import numpy as np
+    HAS_MPL = True
 except ImportError:
-    HAS_MATPLOTLIB = False
+    HAS_MPL = False
 
 try:
-    from utils import load_any_data_file
-    HAS_UTILS = True
+    import pandas as pd
+    HAS_PD = True
 except ImportError:
-    HAS_UTILS = False
+    HAS_PD = False
 
+# ── colour palette (cycles) ─────────────────────────────────────────────────
+_PALETTE = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+]
+
+
+# ── file parsers ─────────────────────────────────────────────────────────────
+
+def _load_file(path: Path) -> Optional["pd.DataFrame"]:
+    """Return a DataFrame (time as first column if present) or None."""
+    if not HAS_PD:
+        return None
+    suf = path.suffix.lower()
+    try:
+        if suf in (".mot", ".sto"):
+            return _parse_mot(path)
+        if suf == ".trc":
+            return _parse_trc(path)
+        if suf == ".csv":
+            return pd.read_csv(path)
+    except Exception as e:
+        logger.warning(f"Could not load {path.name}: {e}")
+    return None
+
+
+def _parse_mot(path: Path) -> Optional["pd.DataFrame"]:
+    """Parse OpenSim .mot / .sto (header ends at 'endheader')."""
+    lines = path.read_text(errors="replace").splitlines()
+    header_end = next((i for i, l in enumerate(lines)
+                       if l.strip().lower() == "endheader"), None)
+    if header_end is None:
+        return None
+    data_lines = [l for l in lines[header_end + 1:] if l.strip()]
+    if not data_lines:
+        return None
+    # First non-empty line after endheader may be the column header
+    col_line = data_lines[0]
+    # Heuristic: if it contains letters it's a header row
+    if re.search(r"[a-zA-Z_]", col_line):
+        cols = col_line.split()
+        rows = data_lines[1:]
+    else:
+        cols = None
+        rows = data_lines
+    parsed = []
+    for r in rows:
+        try:
+            parsed.append([float(x) for x in r.split()])
+        except ValueError:
+            continue
+    if not parsed:
+        return None
+    df = pd.DataFrame(parsed, columns=cols if cols and len(cols) == len(parsed[0]) else None)
+    return df
+
+
+def _parse_trc(path: Path) -> Optional["pd.DataFrame"]:
+    """Parse OpenSim .trc marker file."""
+    lines = path.read_text(errors="replace").splitlines()
+    # TRC has 4 header lines; line 3 (0-indexed 2) is the marker names,
+    # line 4 (0-indexed 3) is X/Y/Z sub-labels; data starts at line 5.
+    if len(lines) < 6:
+        return None
+    try:
+        marker_names = lines[3].split("\t")
+        sub_labels   = lines[4].split("\t")
+        col_names: list[str] = []
+        mi = 0
+        for sub in sub_labels:
+            sub = sub.strip()
+            if not sub:
+                col_names.append(f"col{len(col_names)}")
+                continue
+            if sub.upper() in ("FRAME#", "TIME"):
+                col_names.append(sub)
+            else:
+                marker = marker_names[mi].strip() if mi < len(marker_names) else f"M{mi}"
+                col_names.append(f"{marker}_{sub}")
+                if sub.upper() == "Z":
+                    mi += 1
+        rows = []
+        for l in lines[5:]:
+            if not l.strip():
+                continue
+            try:
+                rows.append([float(x) for x in l.split("\t") if x.strip()])
+            except ValueError:
+                continue
+        if not rows:
+            return None
+        max_cols = max(len(r) for r in rows)
+        while len(col_names) < max_cols:
+            col_names.append(f"col{len(col_names)}")
+        rows = [r + [float("nan")] * (max_cols - len(r)) for r in rows]
+        return pd.DataFrame(rows, columns=col_names[:max_cols])
+    except Exception as e:
+        logger.warning(f"TRC parse error: {e}")
+        return None
+
+
+def _time_normalise(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Interpolate all columns to 101 evenly-spaced points (0-100%)."""
+    import numpy as np
+    n = len(df)
+    if n < 2:
+        return df
+    old_x = np.linspace(0, 100, n)
+    new_x = np.linspace(0, 100, 101)
+    result = {}
+    for col in df.columns:
+        try:
+            result[col] = np.interp(new_x, old_x, df[col].values.astype(float))
+        except Exception:
+            result[col] = np.full(101, float("nan"))
+    return pd.DataFrame(result)
+
+
+# ── main widget ──────────────────────────────────────────────────────────────
 
 class ResultsViewerTab(ctk.CTkFrame):
-    """Tab for viewing and analyzing analysis results with session-level support."""
+    """Results viewer with project-tree dropdowns, channel tickboxes, and grid subplots."""
+
+    _DATA_EXTS = {".mot", ".sto", ".csv", ".trc"}
 
     def __init__(self, parent, config_manager: ConfigManager, status_callback):
-        """Initialize Results Viewer Tab."""
         super().__init__(parent)
-        self.config_manager = config_manager
+        self.config_manager  = config_manager
         self.status_callback = status_callback
-        self.session_dir = None
-        self.trials_files = {}  # trial_name -> [file_paths]
-        self.file_vars = {}  # file_path -> BooleanVar
-        self.canvas = None
-        self.fig = None
-        self.toolbar = None
 
-        self._create_widgets()
+        self._project_root: Optional[Path] = None
+        self._series: list[dict] = []          # added plot lines
+        self._channels: list[str] = []         # union of all channels
+        self._ch_vars:  dict[str, ctk.BooleanVar] = {}
+        self._fig: Optional[Figure] = None
+        self._canvas_widget = None
+        self._toolbar = None
+        self._colour_idx = 0
 
-    def set_session_dir(self, session_dir: str):
-        """Receive session directory from main window."""
-        self.session_dir = Path(session_dir) if session_dir else None
-        if self.session_dir and self.session_dir.exists():
-            self.session_label.configure(text=f"Session: {self.session_dir.name}")
-            self._scan_trials_and_files()
-            logger.info(f"Results Viewer: Session set to {self.session_dir}")
-        else:
-            self.session_label.configure(text="Session: Not set")
-            self._clear_files()
-
-    def _create_widgets(self) -> None:
-        """Create UI widgets."""
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
+        self._build_ui()
 
-        # TOP: Session Info
-        top_frame = ctk.CTkFrame(self)
-        top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
-        top_frame.grid_columnconfigure(1, weight=1)
+    # ── UI construction ──────────────────────────────────────────────────────
 
-        ctk.CTkLabel(top_frame, text="Results Viewer", font=("Segoe UI", 12, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 10)
-        )
+    def _build_ui(self):
+        root = ctk.CTkFrame(self, fg_color="transparent")
+        root.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        root.grid_rowconfigure(0, weight=1)
+        root.grid_columnconfigure(1, weight=1)
 
-        self.session_label = ctk.CTkLabel(top_frame, text="Session: Not set", font=("Segoe UI", 10, "bold"), text_color="#28a745")
-        self.session_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        # ── left panel: selection + series ─────────────────────────────
+        left = ctk.CTkFrame(root, width=240, fg_color="#161620", corner_radius=8)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left.grid_propagate(False)
+        left.grid_rowconfigure(6, weight=1)
+        left.grid_columnconfigure(0, weight=1)
 
-        # MAIN: Content
-        main_frame = ctk.CTkFrame(self)
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
-        main_frame.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(0, weight=0, minsize=300)
-        main_frame.grid_columnconfigure(1, weight=1)
+        row = 0
+        def _lbl(text):
+            nonlocal row
+            ctk.CTkLabel(left, text=text, font=("Segoe UI", 9, "bold"),
+                         text_color="#aaaaaa").grid(row=row, column=0,
+                         sticky="w", padx=10, pady=(8, 1))
+            row += 1
 
-        # LEFT: Trial and File Selection
-        left_panel = ctk.CTkFrame(main_frame, corner_radius=8)
-        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=5)
-        left_panel.grid_rowconfigure(1, weight=1)
-        left_panel.grid_columnconfigure(0, weight=1)
+        def _menu(var, values=("—",)):
+            nonlocal row
+            m = ctk.CTkOptionMenu(left, variable=var, values=list(values),
+                                  height=26, font=("Segoe UI", 10))
+            m.grid(row=row, column=0, sticky="ew", padx=10, pady=(0, 2))
+            row += 1
+            return m
 
-        ctk.CTkLabel(left_panel, text="Select File to Plot", font=("Segoe UI", 11, "bold")).grid(
-            row=0, column=0, sticky="w", padx=10, pady=(10, 5)
-        )
+        _lbl("Participant")
+        self._part_var  = ctk.StringVar(value="—")
+        self._part_menu = _menu(self._part_var)
+        self._part_var.trace_add("write", lambda *_: self._on_part_changed())
 
-        # File selection frame (scrollable)
-        self.files_frame = ctk.CTkScrollableFrame(left_panel)
-        self.files_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        _lbl("Session / Date")
+        self._sess_var  = ctk.StringVar(value="—")
+        self._sess_menu = _menu(self._sess_var)
+        self._sess_var.trace_add("write", lambda *_: self._on_sess_changed())
 
-        # Plot options
-        options_frame = ctk.CTkFrame(left_panel)
-        options_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-        options_frame.grid_columnconfigure(0, weight=1)
+        _lbl("Trial")
+        self._trial_var  = ctk.StringVar(value="—")
+        self._trial_menu = _menu(self._trial_var)
+        self._trial_var.trace_add("write", lambda *_: self._on_trial_changed())
 
-        ctk.CTkLabel(options_frame, text="Plot Options", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(5, 5))
+        _lbl("File")
+        self._file_var  = ctk.StringVar(value="—")
+        self._file_menu = _menu(self._file_var)
 
-        self.subplot_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            options_frame,
-            text="Separate Subplots",
-            variable=self.subplot_var,
-            font=("Segoe UI", 10)
-        ).pack(anchor="w", padx=5, pady=2)
+        # colour + add button
+        colour_row = ctk.CTkFrame(left, fg_color="transparent")
+        colour_row.grid(row=row, column=0, sticky="ew", padx=10, pady=(8, 2))
+        colour_row.grid_columnconfigure(1, weight=1)
+        row += 1
+        self._colour_btn = ctk.CTkButton(colour_row, text="■", width=32, height=26,
+                                         fg_color=_PALETTE[0], hover_color=_PALETTE[0],
+                                         command=self._pick_colour)
+        self._colour_btn.grid(row=0, column=0, padx=(0, 4))
+        ctk.CTkLabel(colour_row, text="Colour", font=("Segoe UI", 10)).grid(
+            row=0, column=1, sticky="w")
 
-        ctk.CTkButton(
-            options_frame,
-            text="Load & Plot",
-            fg_color="#28a745",
-            command=self._load_and_plot
-        ).pack(fill="x", padx=0, pady=(10, 0))
+        self._cur_colour = _PALETTE[0]
 
-        # RIGHT: Plot display
-        right_panel = ctk.CTkFrame(main_frame, corner_radius=8)
-        right_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=5)
-        right_panel.grid_rowconfigure(0, weight=1)
-        right_panel.grid_rowconfigure(1, weight=0)
-        right_panel.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(left, text="➕  Add to Plot", height=28,
+                      fg_color="#28a745", hover_color="#218838",
+                      command=self._add_series).grid(row=row, column=0,
+                      sticky="ew", padx=10, pady=(4, 6))
+        row += 1
 
-        # Plot area
-        self.plot_frame = ctk.CTkFrame(right_panel)
-        self.plot_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.plot_frame.grid_rowconfigure(0, weight=1)
-        self.plot_frame.grid_columnconfigure(0, weight=1)
+        # series list (scrollable)
+        ctk.CTkLabel(left, text="Series", font=("Segoe UI", 9, "bold"),
+                     text_color="#aaaaaa").grid(row=row, column=0,
+                     sticky="w", padx=10, pady=(6, 1))
+        row += 1
+        self._series_frame = ctk.CTkScrollableFrame(left, fg_color="transparent",
+                                                     corner_radius=0)
+        self._series_frame.grid(row=row, column=0, sticky="nsew", padx=4, pady=0)
+        row += 1
 
-        self.plot_label = ctk.CTkLabel(self.plot_frame, text="Load a file to view plot", text_color="gray")
-        self.plot_label.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkButton(left, text="Clear All", height=24,
+                      fg_color="#555555", hover_color="#666666",
+                      command=self._clear_all).grid(row=row, column=0,
+                      sticky="ew", padx=10, pady=(4, 8))
 
-        # Control buttons below plot
-        button_frame = ctk.CTkFrame(right_panel)
-        button_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 5))
-        button_frame.grid_columnconfigure(0, weight=1)
-        button_frame.grid_columnconfigure(1, weight=1)
+        # ── centre: plot ─────────────────────────────────────────────────
+        centre = ctk.CTkFrame(root, fg_color="#111118", corner_radius=8)
+        centre.grid(row=0, column=1, sticky="nsew", padx=4)
+        centre.grid_rowconfigure(0, weight=1)
+        centre.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(
-            button_frame,
-            text="Save Figure",
-            fg_color="#0084ff",
-            command=self._save_figure,
-            width=100
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self._plot_frame = ctk.CTkFrame(centre, fg_color="#111118", corner_radius=0)
+        self._plot_frame.grid(row=0, column=0, sticky="nsew")
+        self._plot_frame.grid_rowconfigure(0, weight=1)
+        self._plot_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(
-            button_frame,
-            text="Clear",
-            fg_color="#666666",
-            command=self._clear_plot,
-            width=100
-        ).grid(row=0, column=1, sticky="ew", padx=(5, 0))
+        self._plot_placeholder = ctk.CTkLabel(
+            self._plot_frame,
+            text="Add a series and select channels to plot",
+            text_color="#555555", font=("Segoe UI", 12))
+        self._plot_placeholder.grid(row=0, column=0)
 
-    def _scan_trials_and_files(self):
-        """Scan session for trials and their data files."""
-        self._clear_files()
+        # bottom control bar
+        bot = ctk.CTkFrame(centre, fg_color="#1a1a2a", corner_radius=0, height=38)
+        bot.grid(row=1, column=0, sticky="ew")
+        bot.grid_propagate(False)
+        bot.grid_columnconfigure(1, weight=1)
 
-        if not self.session_dir:
+        self._norm_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bot, text="Normalise time 0-100%", variable=self._norm_var,
+                        font=("Segoe UI", 10), command=self._refresh_plot
+                        ).grid(row=0, column=0, padx=10, pady=6, sticky="w")
+        ctk.CTkButton(bot, text="💾 Save", width=70, height=26,
+                      command=self._save_figure
+                      ).grid(row=0, column=2, padx=(4, 4), pady=6)
+        ctk.CTkButton(bot, text="🗑 Clear", width=70, height=26,
+                      fg_color="#555555", hover_color="#666666",
+                      command=self._clear_plot
+                      ).grid(row=0, column=3, padx=(0, 10), pady=6)
+
+        # ── right panel: channels ────────────────────────────────────────
+        right = ctk.CTkFrame(root, width=190, fg_color="#161620", corner_radius=8)
+        right.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
+        right.grid_propagate(False)
+        right.grid_rowconfigure(2, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(right, text="Channels", font=("Segoe UI", 10, "bold")).grid(
+            row=0, column=0, sticky="w", padx=10, pady=(8, 2))
+
+        sel_row = ctk.CTkFrame(right, fg_color="transparent")
+        sel_row.grid(row=1, column=0, sticky="ew", padx=6, pady=(0, 4))
+        sel_row.grid_columnconfigure(0, weight=1)
+        sel_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkButton(sel_row, text="All", height=22, width=50,
+                      fg_color="#2a3a4a", hover_color="#3a4a5a",
+                      command=lambda: self._set_all_channels(True)
+                      ).grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ctk.CTkButton(sel_row, text="None", height=22, width=50,
+                      fg_color="#2a3a4a", hover_color="#3a4a5a",
+                      command=lambda: self._set_all_channels(False)
+                      ).grid(row=0, column=1, sticky="ew", padx=(2, 0))
+
+        self._ch_scroll = ctk.CTkScrollableFrame(right, fg_color="transparent",
+                                                  corner_radius=0)
+        self._ch_scroll.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 6))
+        self._ch_scroll.grid_columnconfigure(0, weight=1)
+
+    # ── project folder ───────────────────────────────────────────────────────
+
+    def set_project_dir(self, project_dir: str) -> None:
+        """Called by main window when global project path changes."""
+        if project_dir:
+            self._set_project(Path(project_dir))
+
+    def _set_project(self, path: Path):
+        settings_py = path / "settings.py"
+        if not settings_py.exists():
+            self.status_callback(
+                "Results: No settings.py found. Use: python -m bioscout --init <folder>",
+                "warning")
+        self._project_root = path
+        self._clear_all()
+        self._populate_participants()
+
+    def _sims_dir(self) -> Optional[Path]:
+        if not self._project_root:
+            return None
+        p = self._project_root / "simulations"
+        return p if p.exists() else None
+
+    # ── cascading dropdowns ──────────────────────────────────────────────────
+
+    def _populate_participants(self):
+        sims = self._sims_dir()
+        if not sims:
+            self._part_menu.configure(values=["—"])
+            self._part_var.set("—")
+            return
+        parts = sorted(p.name for p in sims.iterdir() if p.is_dir())
+        opts = parts if parts else ["—"]
+        self._part_menu.configure(values=opts)
+        self._part_var.set(opts[0])
+
+    def _on_part_changed(self, *_):
+        part = self._part_var.get()
+        sims = self._sims_dir()
+        if not sims or part == "—":
+            self._sess_menu.configure(values=["—"])
+            self._sess_var.set("—")
+            return
+        part_dir = sims / part
+        sessions = sorted(p.name for p in part_dir.iterdir() if p.is_dir())
+        opts = sessions if sessions else ["—"]
+        self._sess_menu.configure(values=opts)
+        self._sess_var.set(opts[0])
+
+    def _on_sess_changed(self, *_):
+        part = self._part_var.get()
+        sess = self._sess_var.get()
+        sims = self._sims_dir()
+        if not sims or part == "—" or sess == "—":
+            self._trial_menu.configure(values=["—"])
+            self._trial_var.set("—")
+            return
+        sess_dir = sims / part / sess
+        trials = sorted(p.name for p in sess_dir.iterdir() if p.is_dir())
+        opts = trials if trials else ["—"]
+        self._trial_menu.configure(values=opts)
+        self._trial_var.set(opts[0])
+
+    def _on_trial_changed(self, *_):
+        part  = self._part_var.get()
+        sess  = self._sess_var.get()
+        trial = self._trial_var.get()
+        sims  = self._sims_dir()
+        if not sims or "—" in (part, sess, trial):
+            self._file_menu.configure(values=["—"])
+            self._file_var.set("—")
+            return
+        trial_dir = sims / part / sess / trial
+        files = sorted(f.name for f in trial_dir.iterdir()
+                       if f.suffix.lower() in self._DATA_EXTS)
+        opts = files if files else ["—"]
+        self._file_menu.configure(values=opts)
+        self._file_var.set(opts[0])
+
+    # ── colour picker ────────────────────────────────────────────────────────
+
+    def _pick_colour(self):
+        try:
+            from tkinter.colorchooser import askcolor
+            result = askcolor(color=self._cur_colour, title="Pick line colour", parent=self)
+            if result and result[1]:
+                self._cur_colour = result[1]
+                self._colour_btn.configure(fg_color=self._cur_colour,
+                                           hover_color=self._cur_colour)
+        except Exception:
+            # cycle through palette
+            self._colour_idx = (self._colour_idx + 1) % len(_PALETTE)
+            self._cur_colour = _PALETTE[self._colour_idx]
+            self._colour_btn.configure(fg_color=self._cur_colour,
+                                       hover_color=self._cur_colour)
+
+    # ── add / remove series ──────────────────────────────────────────────────
+
+    def _add_series(self):
+        sims  = self._sims_dir()
+        part  = self._part_var.get()
+        sess  = self._sess_var.get()
+        trial = self._trial_var.get()
+        fname = self._file_var.get()
+
+        if not sims or "—" in (part, sess, trial, fname):
+            self.status_callback("Select participant / session / trial / file first", "warning")
             return
 
-        try:
-            # Scan for trial folders
-            for trial_folder in sorted(self.session_dir.iterdir()):
-                if trial_folder.is_dir() and not trial_folder.name.startswith('.'):
-                    # Find data files in trial
-                    data_files = self._find_data_files(trial_folder)
-                    if data_files:
-                        trial_name = trial_folder.name
-                        self.trials_files[trial_name] = sorted(data_files)
-
-            # Populate checkboxes
-            for trial_name in sorted(self.trials_files.keys()):
-                # Trial label
-                trial_label = ctk.CTkLabel(
-                    self.files_frame,
-                    text=f"📊 {trial_name}",
-                    font=("Segoe UI", 10, "bold")
-                )
-                trial_label.pack(anchor="w", padx=5, pady=(10, 3))
-
-                # Files for this trial
-                for file_path in self.trials_files[trial_name]:
-                    var = ctk.BooleanVar(value=False)
-                    checkbox = ctk.CTkCheckBox(
-                        self.files_frame,
-                        text=f"  📄 {file_path.name}",
-                        variable=var,
-                        font=("Segoe UI", 9),
-                        command=lambda fp=file_path, v=var: self._on_file_selected(fp, v)
-                    )
-                    checkbox.pack(anchor="w", padx=10, pady=2)
-                    self.file_vars[str(file_path)] = var
-
-            self.status_callback(f"Found {len(self.trials_files)} trials with data files", "success")
-
-        except Exception as e:
-            logger.error(f"Error scanning trials: {e}")
-            self.status_callback(f"Error: {str(e)[:50]}", "error")
-
-    def _find_data_files(self, folder: Path) -> list:
-        """Find all data files in a folder."""
-        data_extensions = {'.mot', '.sto', '.csv', '.trc'}
-        files = []
-
-        try:
-            for file in folder.glob('*'):
-                if file.suffix.lower() in data_extensions:
-                    files.append(file)
-        except Exception as e:
-            logger.error(f"Error finding files in {folder}: {e}")
-
-        return files
-
-    def _clear_files(self):
-        """Clear file list."""
-        for widget in self.files_frame.winfo_children():
-            widget.destroy()
-        self.file_vars.clear()
-        self.trials_files.clear()
-
-    def _on_file_selected(self, file_path: Path, var: ctk.BooleanVar):
-        """Handle file selection - allows multiple files."""
-        # Allow multiple selection - don't deselect others
-        selected_files = [p for p, v in self.file_vars.items() if v.get()]
-
-        if selected_files:
-            self.status_callback(f"Selected: {len(selected_files)} file(s)", "success")
-        else:
-            self.status_callback("No files selected", "info")
-
-    def _load_and_plot(self) -> None:
-        """Load files and generate plot."""
-        selected_files = [Path(p) for p, v in self.file_vars.items() if v.get()]
-
-        if not selected_files:
-            self.status_callback("Please select at least one file", "warning")
+        file_path = sims / part / sess / trial / fname
+        if not file_path.exists():
+            self.status_callback(f"File not found: {file_path}", "error")
             return
 
-        if not HAS_MATPLOTLIB:
-            self.status_callback("Matplotlib not installed", "error")
+        label = f"{part} / {sess} / {trial} / {fname}"
+
+        # Don't add duplicates
+        if any(s["label"] == label for s in self._series):
+            self.status_callback("Already added", "warning")
             return
 
-        # Run in background thread
-        thread = threading.Thread(target=self._load_and_plot_thread, args=(selected_files,), daemon=True)
-        thread.start()
+        colour = self._cur_colour
+        # Advance colour suggestion for next add
+        self._colour_idx = (self._colour_idx + 1) % len(_PALETTE)
+        self._cur_colour = _PALETTE[self._colour_idx]
+        self._colour_btn.configure(fg_color=self._cur_colour,
+                                   hover_color=self._cur_colour)
 
-    def _load_and_plot_thread(self, selected_files: list) -> None:
-        """Load and plot multiple files in background thread."""
+        # Load data in background
+        self.status_callback(f"Loading {fname}…", "info")
+
+        def _load():
+            df = _load_file(file_path)
+            self.after(0, lambda: self._on_series_loaded(label, file_path, colour, df))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _on_series_loaded(self, label, file_path, colour, df):
+        if df is None or df.empty:
+            self.status_callback(f"Could not load {file_path.name}", "error")
+            return
+
+        series = {"label": label, "file": file_path, "colour": colour, "df": df}
+        self._series.append(series)
+
+        # Update channel union
+        new_cols = [c for c in df.columns if c not in self._ch_vars]
+        self._add_channel_rows(new_cols)
+
+        self._rebuild_series_list()
+        self.status_callback(f"Added: {label}", "success")
+        self._refresh_plot()
+
+    def _rebuild_series_list(self):
+        for w in self._series_frame.winfo_children():
+            w.destroy()
+        for i, s in enumerate(self._series):
+            row = ctk.CTkFrame(self._series_frame, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            row.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(row, text="■", text_color=s["colour"],
+                         font=("Segoe UI", 12)).grid(row=0, column=0, padx=(2, 4))
+            ctk.CTkLabel(row, text=s["label"], font=("Segoe UI", 9),
+                         anchor="w", wraplength=160).grid(row=0, column=1, sticky="ew")
+            idx = i
+            ctk.CTkButton(row, text="✕", width=20, height=20,
+                          fg_color="#553333", hover_color="#774444",
+                          font=("Segoe UI", 9),
+                          command=lambda i=idx: self._remove_series(i)
+                          ).grid(row=0, column=2, padx=(2, 0))
+
+    def _remove_series(self, idx: int):
+        if 0 <= idx < len(self._series):
+            self._series.pop(idx)
+            self._rebuild_series_list()
+            self._rebuild_channels()
+            self._refresh_plot()
+
+    # ── channel panel ────────────────────────────────────────────────────────
+
+    def _add_channel_rows(self, cols: list[str]):
+        for col in cols:
+            var = ctk.BooleanVar(value=True)
+            self._ch_vars[col] = var
+            ctk.CTkCheckBox(
+                self._ch_scroll, text=col,
+                variable=var,
+                font=("Segoe UI", 9),
+                command=self._refresh_plot,
+            ).pack(anchor="w", padx=4, pady=1)
+        self._channels = list(self._ch_vars.keys())
+
+    def _rebuild_channels(self):
+        """Recompute channel union from remaining series."""
+        # Keep only vars for columns still present in at least one series
+        live_cols: set[str] = set()
+        for s in self._series:
+            live_cols.update(s["df"].columns)
+
+        # Remove stale
+        for col in list(self._ch_vars.keys()):
+            if col not in live_cols:
+                del self._ch_vars[col]
+
+        # Rebuild widget list
+        for w in self._ch_scroll.winfo_children():
+            w.destroy()
+        for col in list(self._ch_vars.keys()):
+            ctk.CTkCheckBox(
+                self._ch_scroll, text=col,
+                variable=self._ch_vars[col],
+                font=("Segoe UI", 9),
+                command=self._refresh_plot,
+            ).pack(anchor="w", padx=4, pady=1)
+        self._channels = list(self._ch_vars.keys())
+
+    def _set_all_channels(self, state: bool):
+        for var in self._ch_vars.values():
+            var.set(state)
+        self._refresh_plot()
+
+    # ── plotting ─────────────────────────────────────────────────────────────
+
+    def _refresh_plot(self):
+        if not HAS_MPL:
+            self.status_callback("matplotlib not installed", "error")
+            return
+        if not self._series:
+            self._clear_plot()
+            return
+
+        selected = [c for c, v in self._ch_vars.items() if v.get()]
+        if not selected:
+            self._clear_plot()
+            return
+
+        threading.Thread(target=self._render_plot, args=(selected,), daemon=True).start()
+
+    def _render_plot(self, channels: list[str]):
         try:
-            if not HAS_UTILS:
-                self.status_callback("Utils module not available", "error")
-                return
+            normalise = self._norm_var.get()
+            n_ch = len(channels)
 
-            self.status_callback(f"Loading {len(selected_files)} file(s)...", "info")
+            # Grid layout: max 4 columns
+            n_cols = min(4, n_ch)
+            n_rows = (n_ch + n_cols - 1) // n_cols
 
-            # Load all selected files
-            all_data = {}  # file_name -> (data, labels)
-            all_labels = {}
+            fig_w = max(10, n_cols * 3.5)
+            fig_h = max(5, n_rows * 2.8)
 
-            for file_path in selected_files:
-                try:
-                    # Try different loading methods based on file type
-                    if file_path.suffix.lower() == '.mot':
-                        plot_data, labels = self._load_mot_file(file_path)
+            fig = Figure(figsize=(fig_w, fig_h), dpi=96,
+                         facecolor="#111118")
+            fig.subplots_adjust(hspace=0.45, wspace=0.35,
+                                left=0.07, right=0.97, top=0.93, bottom=0.08)
+
+            axes: list = []
+            for i, ch in enumerate(channels):
+                ax = fig.add_subplot(n_rows, n_cols, i + 1)
+                ax.set_facecolor("#1a1a28")
+                ax.tick_params(colors="#888888", labelsize=7)
+                for spine in ax.spines.values():
+                    spine.set_edgecolor("#333344")
+                ax.grid(True, color="#222233", linewidth=0.5)
+                ax.set_title(ch, fontsize=8, color="#cccccc", pad=3)
+                axes.append((ch, ax))
+
+            for s in self._series:
+                df = _time_normalise(s["df"]) if normalise else s["df"]
+                # x axis
+                if normalise:
+                    x = np.linspace(0, 100, len(df))
+                else:
+                    # Use first column if it looks like time (values increasing)
+                    first_col = df.columns[0]
+                    first_vals = df[first_col].values
+                    if first_vals[-1] > first_vals[0]:
+                        x = first_vals
                     else:
-                        # Use generic loader
-                        data = load_any_data_file(str(file_path))
-                        if isinstance(data, dict) and 'data' in data:
-                            plot_data = data['data']
-                            labels = data.get('labels', [])
-                        else:
-                            self.status_callback(f"Could not parse {file_path.name}", "error")
-                            continue
+                        x = np.arange(len(df))
 
-                    if plot_data is None or plot_data.size == 0:
-                        self.status_callback(f"{file_path.name} contains no data", "warning")
+                for ch, ax in axes:
+                    if ch not in df.columns:
                         continue
+                    try:
+                        y = df[ch].values.astype(float)
+                        ax.plot(x, y, linewidth=1.2, color=s["colour"],
+                                alpha=0.85, label=s["label"].split(" / ")[0])
+                    except Exception:
+                        pass
 
-                    all_data[file_path.name] = plot_data
-                    all_labels[file_path.name] = labels
-
-                except Exception as e:
-                    logger.error(f"Error loading {file_path.name}: {e}")
-                    self.status_callback(f"Error loading {file_path.name}: {str(e)[:30]}", "error")
-
-            if not all_data:
-                self.status_callback("No files loaded successfully", "error")
-                return
-
-            # Find common columns
-            common_labels = self._find_common_columns(all_labels)
-
-            if not common_labels:
-                self.status_callback("No common columns found - displaying sad platypus", "warning")
-                self._show_sad_platypus()
-                return
-
-            # Create plot with common columns
-            use_subplots = self.subplot_var.get()
-            self._plot_data(all_data, all_labels, common_labels, use_subplots)
-            self.status_callback(f"Plot generated with {len(common_labels)} common columns", "success")
-
-        except Exception as e:
-            self.status_callback(f"Load error: {str(e)[:50]}", "error")
-            logger.error(f"Load and plot error: {e}")
-
-    def _load_mot_file(self, mot_file: Path) -> tuple:
-        """Load MOT file and return (data, labels)."""
-        try:
-            data = []
-            labels = []
-            in_data = False
-
-            with open(mot_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-
-                    # Skip empty lines and comments
-                    if not line:
-                        continue
-
-                    # Check for end of header
-                    if line.lower().startswith("endheader"):
-                        in_data = True
-                        continue
-
-                    # Extract labels from line before data starts (if present)
-                    if in_data and not any(c.isdigit() or c in '.-e' for c in line.split()[0]):
-                        # This might be a label line
-                        labels = line.split()
-                        continue
-
-                    # Parse data lines
-                    if in_data:
-                        try:
-                            values = [float(x) for x in line.split()]
-                            if len(values) > 1:
-                                # Skip first column (time)
-                                data.append(values[1:])
-                        except (ValueError, IndexError):
-                            # Skip malformed lines
-                            continue
-
-            if data:
-                return np.array(data), labels[1:] if labels else []
-            return None, []
-
-        except Exception as e:
-            logger.error(f"Error loading MOT file: {e}")
-            return None, []
-
-    def _find_common_columns(self, all_labels: dict) -> list:
-        """Find common column labels across all loaded files."""
-        if not all_labels:
-            return []
-
-        # Convert all labels to sets and find intersection
-        label_sets = []
-        for labels in all_labels.values():
-            # Clean labels (remove empty strings, convert to lowercase for comparison)
-            clean_labels = [str(l).strip() for l in labels if l]
-            if clean_labels:
-                label_sets.append(set(clean_labels))
-
-        if not label_sets:
-            return []
-
-        # Find common labels (case-insensitive intersection)
-        common = label_sets[0]
-        for label_set in label_sets[1:]:
-            common = common.intersection(label_set)
-
-        # Return sorted list for consistent ordering
-        return sorted(list(common))
-
-    def _show_sad_platypus(self) -> None:
-        """Display sad platypus image when no common columns exist."""
-        try:
-            # Clear previous plot
-            for widget in self.plot_frame.winfo_children():
-                if isinstance(widget, ctk.CTkLabel) and widget == self.plot_label:
-                    continue
-                widget.destroy()
-
-            platypus_path = Path("C:\\Git\\powerlifing_model_clean\\code\\tests\\app\\utils\\platypus_sad.jpg")
-
-            if not platypus_path.exists():
-                self.plot_label.configure(text="❌ No common columns found\n(sad platypus image not found)")
-                self.plot_label.grid(row=0, column=0, sticky="nsew")
-                return
-
-            # Try to load and display the image using PIL
-            try:
-                from PIL import Image, ImageTk
-                img = Image.open(platypus_path)
-
-                # Scale image to fit the plot area (max 800x600)
-                img.thumbnail((800, 600), Image.Resampling.LANCZOS)
-
-                # Convert to PhotoImage
-                photo = ImageTk.PhotoImage(img)
-
-                # Display in label
-                label = ctk.CTkLabel(self.plot_frame, image=photo, text="")
-                label.image = photo  # Keep a reference
-                label.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-
-            except ImportError:
-                self.plot_label.configure(text="❌ No common columns found\n(PIL not available for image display)")
-                self.plot_label.grid(row=0, column=0, sticky="nsew")
-
-        except Exception as e:
-            logger.error(f"Error displaying sad platypus: {e}")
-            self.plot_label.configure(text=f"❌ No common columns found\n(Error: {str(e)[:30]})")
-            self.plot_label.grid(row=0, column=0, sticky="nsew")
-
-    def _plot_data(self, all_data: dict, all_labels: dict, common_labels: list, use_subplots: bool = False) -> None:
-        """Plot multiple files with common columns and zoom support."""
-        try:
-            # Clear previous plot
-            for widget in self.plot_frame.winfo_children():
-                if isinstance(widget, ctk.CTkLabel) and widget == self.plot_label:
-                    continue
-                widget.destroy()
-
-            num_cols = len(common_labels)
-            num_files = len(all_data)
-
-            # Better figure sizing based on number of plots and files
-            if use_subplots:
-                # Each column gets its own subplot (3 per row)
-                num_rows = max(1, (num_cols + 2) // 3)
-                # Increase height based on rows AND number of files
-                fig_height = max(6, num_rows * 2.5 + (num_files - 1) * 0.5)
-                fig_width = max(14, 12)
-                fig = Figure(figsize=(fig_width, fig_height), dpi=100)
-
-                for idx, col_label in enumerate(common_labels):
-                    ax = fig.add_subplot(num_rows, 3, idx + 1)
-                    time_samples = None
-
-                    # Plot data from all files
-                    colors = plt.cm.tab10(np.linspace(0, 1, num_files))
-                    for file_idx, (file_name, data) in enumerate(all_data.items()):
-                        # Find column index in this file
-                        file_labels = all_labels[file_name]
-                        try:
-                            col_idx = [str(l).strip().lower() for l in file_labels].index(str(col_label).strip().lower())
-                            time = np.arange(data.shape[0])
-                            ax.plot(time, data[:, col_idx], linewidth=1.5, label=file_name, color=colors[file_idx], alpha=0.8)
-                            if time_samples is None:
-                                time_samples = len(time)
-                        except (ValueError, IndexError):
-                            logger.debug(f"Column {col_label} not in {file_name}")
-                            continue
-
-                    ax.set_title(str(col_label), fontsize=10, fontweight='bold')
-                    ax.grid(True, alpha=0.3)
-                    ax.set_xlabel("Sample", fontsize=9)
-                    ax.set_ylabel("Value", fontsize=9)
-
-                    # Add legend to first subplot only
-                    if idx == 0 and num_files > 1:
-                        ax.legend(fontsize=8, loc='best')
-
+            if normalise:
+                for _, ax in axes:
+                    ax.set_xlabel("% cycle", fontsize=7, color="#888888")
             else:
-                # All columns on single plot
-                fig_height = max(6, 5 + (num_files - 1) * 0.5)
-                fig = Figure(figsize=(14, fig_height), dpi=100)
-                ax = fig.add_subplot(111)
+                for _, ax in axes:
+                    ax.set_xlabel("time (s)", fontsize=7, color="#888888")
 
-                colors = plt.cm.tab10(np.linspace(0, 1, num_files * num_cols))
-                color_idx = 0
+            # Legend in first subplot if multiple series
+            if len(self._series) > 1 and axes:
+                handles, labels = axes[0][1].get_legend_handles_labels()
+                if handles:
+                    axes[0][1].legend(handles, labels,
+                                      fontsize=6, loc="best",
+                                      facecolor="#1e1e2e",
+                                      labelcolor="#cccccc",
+                                      edgecolor="#333344")
 
-                for file_name, data in all_data.items():
-                    file_labels = all_labels[file_name]
-                    time = np.arange(data.shape[0])
-
-                    for col_label in common_labels:
-                        try:
-                            col_idx = [str(l).strip().lower() for l in file_labels].index(str(col_label).strip().lower())
-                            label = f"{file_name}: {col_label}"
-                            ax.plot(time, data[:, col_idx], linewidth=1.5, label=label, color=colors[color_idx], alpha=0.8)
-                            color_idx += 1
-                        except (ValueError, IndexError):
-                            continue
-
-                ax.set_xlabel("Sample", fontsize=11)
-                ax.set_ylabel("Value", fontsize=11)
-                ax.set_title(f"{num_files} file(s) - {num_cols} common columns", fontsize=12, fontweight='bold')
-                ax.grid(True, alpha=0.3)
-
-                # Add legend
-                if num_files <= 3 and num_cols <= 5:
-                    ax.legend(fontsize=9, loc='best', ncol=min(2, num_cols))
-
-            fig.tight_layout()
-
-            # Store figure reference
-            self.fig = fig
-
-            # Display in frame with zoom support
-            self.canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
-            self.canvas.draw()
-
-            # Configure plot_frame for canvas and toolbar
-            self.plot_frame.grid_rowconfigure(0, weight=1)
-            self.plot_frame.grid_rowconfigure(1, weight=0)
-            self.plot_frame.grid_columnconfigure(0, weight=1)
-
-            # Add canvas
-            self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-
-            # Enable zoom and pan tools
-            try:
-                from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-                self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
-                self.toolbar.update()
-                self.toolbar.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 5))
-            except Exception as e:
-                logger.debug(f"Could not add navigation toolbar: {e}")
+            self._fig = fig
+            self.after(0, lambda: self._display_figure(fig))
 
         except Exception as e:
-            self.plot_label.configure(text=f"Error rendering plot: {str(e)[:50]}")
-            self.plot_label.grid(row=0, column=0, sticky="nsew")
-            logger.error(f"Plot error: {e}")
+            logger.error(f"Render error: {e}")
+            self.status_callback(f"Plot error: {e}", "error")
 
-    def _save_figure(self) -> None:
-        """Save current figure to file."""
-        if self.fig is None:
+    def _display_figure(self, fig: Figure):
+        # Remove old canvas
+        for w in self._plot_frame.winfo_children():
+            w.destroy()
+
+        self._plot_frame.grid_rowconfigure(0, weight=1)
+        self._plot_frame.grid_rowconfigure(1, weight=0)
+        self._plot_frame.grid_columnconfigure(0, weight=1)
+
+        canvas = FigureCanvasTkAgg(fig, master=self._plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._canvas_widget = canvas
+
+        try:
+            tb = NavigationToolbar2Tk(canvas, self._plot_frame)
+            tb.update()
+            tb.grid(row=1, column=0, sticky="ew")
+            self._toolbar = tb
+        except Exception:
+            pass
+
+        n = sum(1 for v in self._ch_vars.values() if v.get())
+        self.status_callback(f"Plotted {n} channel(s) × {len(self._series)} series", "success")
+
+    def _clear_plot(self):
+        for w in self._plot_frame.winfo_children():
+            w.destroy()
+        self._plot_placeholder = ctk.CTkLabel(
+            self._plot_frame,
+            text="Add a series and select channels to plot",
+            text_color="#555555", font=("Segoe UI", 12))
+        self._plot_placeholder.grid(row=0, column=0)
+        self._fig = None
+        self._canvas_widget = None
+        self._toolbar = None
+
+    def _clear_all(self):
+        self._series.clear()
+        for w in self._series_frame.winfo_children():
+            w.destroy()
+        for w in self._ch_scroll.winfo_children():
+            w.destroy()
+        self._ch_vars.clear()
+        self._channels.clear()
+        self._clear_plot()
+
+    # ── save ────────────────────────────────────────────────────────────────
+
+    def _save_figure(self):
+        if self._fig is None:
             self.status_callback("No plot to save", "warning")
             return
-
-        try:
-            from tkinter import filedialog
-            file_path = filedialog.asksaveasfilename(
-                title="Save Figure As",
-                defaultextension=".png",
-                filetypes=[
-                    ("PNG Files", "*.png"),
-                    ("PDF Files", "*.pdf"),
-                    ("SVG Files", "*.svg"),
-                ]
-            )
-
-            if file_path:
-                self.fig.savefig(file_path, dpi=300, bbox_inches='tight')
-                self.status_callback(f"Figure saved: {Path(file_path).name}", "success")
-                logger.info(f"Figure saved to {file_path}")
-
-        except Exception as e:
-            self.status_callback(f"Save error: {str(e)[:50]}", "error")
-            logger.error(f"Save figure error: {e}")
-
-    def _clear_plot(self) -> None:
-        """Clear the current plot."""
-        # Clear all widgets in plot frame
-        for widget in self.plot_frame.winfo_children():
-            widget.destroy()
-
-        self.plot_label.grid(row=0, column=0, sticky="nsew")
-        self.fig = None
-        self.canvas = None
-        self.toolbar = None
-        self.status_callback("Plot cleared", "info")
+        from tkinter.filedialog import asksaveasfilename
+        path = asksaveasfilename(
+            title="Save Figure",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
+            parent=self)
+        if path:
+            self._fig.savefig(path, dpi=200, bbox_inches="tight",
+                              facecolor=self._fig.get_facecolor())
+            self.status_callback(f"Saved → {Path(path).name}", "success")
