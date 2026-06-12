@@ -243,5 +243,12 @@ print(f"      {PYTHON_EXECUTABLE} -m twine upload --repository pypi {DIST_FOLDER
 print("-" * 25)
 print("\n👍 Preparation complete. Please perform the manual steps above before uploading.")
 
+# Bash-friendly upload command (forward slashes, no drive letter issues)
+bash_cmd = "python -m twine upload --repository pypi dist/*"
+print(f"\n💻 Bash-compatible upload command:\n   {bash_cmd}")
 
-pyperclip.copy(f"{PYTHON_EXECUTABLE} -m twine upload --repository pypi {DIST_FOLDER}/*")
+try:
+    pyperclip.copy(bash_cmd)
+    print("📋 Copied to clipboard.")
+except Exception:
+    pass

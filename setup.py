@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -10,7 +10,7 @@ setup(
     version=__version__,
     author="Bas",
     author_email="basilio.goncalves7@gmail.com",
-    description=f"A Python package for musculoskeletal modelling (version {__version__})",
+    description=f"an open-source Python toolbox movement assessment (version {__version__})",
     long_description=f"{long_description}\n\nVersion: {__version__}",
     long_description_content_type="text/markdown",
     url="https://github.com/basgoncalves/bioscout",
