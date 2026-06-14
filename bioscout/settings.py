@@ -1,7 +1,6 @@
-u"""
+"""
 Unified Settings Module
 """
-
 import os
 from pathlib import Path
 
@@ -25,20 +24,27 @@ LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install
 
 
 # ============================================================================
-# PLAYERS — list of player IDs to process in this batch.
+# PLAYERS — subjects (and optionally sessions) to process in this batch.
 #
 # Full player data (height, mass, group, etc.) lives in players.json at the
 # project root.  Add players with:  python -m bioscout --add_player .
 #
-# Two formats are supported:
+# Three formats are supported:
 #
-#   Simple (recommended) — IDs only, all data from players.json:
+#   Simple list — IDs only, processes entire subject folder:
 #       PLAYERS = ['012', '078']
 #
-#   With overrides — dict where values override players.json fields for that run:
+#   With session + static trial per subject (recommended for clinical projects):
 #       PLAYERS = {
-#           '012': {},                         # no overrides, use registry as-is
-#           '078': {'static_trial': 'static2'} # override one field
+#           '012': {'session': 'session1', 'static_trial': 'static01'},
+#           '078': {'session': 'session2', 'static_trial': 'static02'},
+#       }
+#       → processes simulations/012/session1  and  simulations/078/session2
+#
+#   With other per-subject overrides (any BatchSettings field):
+#       PLAYERS = {
+#           '012': {'session': 'session1', 'static_trial': 'static01', 'tested_leg': 'l'},
+#           '078': {'session': 'session2', 'static_trial': 'static02', 'tested_leg': 'r'},
 #       }
 # ============================================================================
 PLAYERS = ['012', '078']
@@ -51,10 +57,15 @@ def build_sessions(players=None, simulations_dir: Path = None,
     Loads per-player data (static_trial, etc.) from players.json.
     Falls back to 'static1' if the registry doesn't exist yet.
 
+    If a player entry contains a 'session' key, the path is built as:
+        simulations_dir / pid / session
+    Otherwise the entire subject folder is used:
+        simulations_dir / pid
+
     Args:
-        players:        list of IDs or {id: override_dict}. Defaults to PLAYERS.
-        simulations_dir: parent folder of session sub-folders. Defaults to SIMULATIONS_DIR.
-        project_root:   folder containing players.json. Defaults to PROJECT_ROOT.
+        players:         list of IDs or {id: override_dict}. Defaults to PLAYERS.
+        simulations_dir: parent folder of subject sub-folders. Defaults to SIMULATIONS_DIR.
+        project_root:    folder containing players.json. Defaults to PROJECT_ROOT.
     Returns:
         {str(abs_path): static_trial_name}
     """
@@ -77,11 +88,23 @@ def build_sessions(players=None, simulations_dir: Path = None,
         player_map = {}
 
     # Try loading the registry; degrade gracefully when it doesn't exist yet.
+    # Import is attempted via multiple paths so this works whether settings.py
+    # is run from the project folder, the bioscout package dir, or installed.
     registry = {}
     try:
-        from utils.player_registry import PlayerRegistry
-        reg = PlayerRegistry(project_root)
-        registry = reg.all_players()
+        PlayerRegistry = None
+        for _import in [
+            lambda: __import__('bioscout.utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
+            lambda: __import__('utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
+        ]:
+            try:
+                PlayerRegistry = _import()
+                break
+            except ImportError:
+                continue
+        if PlayerRegistry is not None:
+            reg = PlayerRegistry(project_root)
+            registry = reg.all_players()
     except Exception:
         pass
 
@@ -89,7 +112,13 @@ def build_sessions(players=None, simulations_dir: Path = None,
     for pid, overrides in player_map.items():
         rec = {**registry.get(pid, {}), **overrides}
         static = rec.get('static_trial') or 'static1'
-        out[str(simulations_dir / pid)] = static
+        # If a specific session is given, drill down into simulations/<pid>/<session>
+        session = rec.get('session')
+        if session:
+            path = simulations_dir / pid / session
+        else:
+            path = simulations_dir / pid
+        out[str(path)] = static
     return out
 
 
@@ -110,7 +139,8 @@ class BatchSettings:
     setup_files_folder = SETUP_DIR
     generic_model = os.path.join(MODELS_DIR, 'Rajagopal2015_FAI_os4.osim')
     markerset = os.path.join(SETUP_DIR, "markers_FAIS.xml")
-    trials_to_skip: list = []
+    trials_to_skip: list = []   # skip these trials (blacklist)
+    trials_to_run:  list = []   # if non-empty, only run these trials (whitelist)
 
     auto_create_dirs = True
     replace_existing = True
@@ -302,6 +332,34 @@ class CEINMSSettings:
 
 
 # ============================================================================
+# SUMMARY SETTINGS  (python -m bioscout --summary)
+# ============================================================================
+class SummarySettings:
+    """Configuration for the kinematics/kinetics summary plots."""
+
+    # Put the left and right DOFs of each joint in the SAME column.
+    combine_legs = True
+    left_color   = 'tab:red'
+    right_color  = 'tab:blue'
+
+    # Row order, top to bottom. Any subset of:
+    #   angle, emg, moment, moment_arms, muscle_forces, activations, energetics
+    rows = ['angle', 'emg', 'moment', 'moment_arms',
+            'muscle_forces', 'activations', 'energetics']
+
+    # Per-joint marker error: substrings matched against the per-marker columns
+    # of _ik_marker_errors_all.sto, averaged per side for the angle-row box.
+    joint_marker_patterns = {
+        'hip':   ['ASI', 'PSI', 'SACR', 'THI'],
+        'knee':  ['THI', 'FC', 'TIB', 'KNE'],
+        'ankle': ['TIB', 'MAL', 'ANK', 'HEE', 'MT'],
+    }
+
+    # Optional explicit joint -> [muscles] override for the EMG / force panels.
+    joint_muscles = {}
+
+
+# ============================================================================
 # UI SETTINGS
 # ============================================================================
 class UISettings:
@@ -460,3 +518,4 @@ class Inputs:
 # BACKWARD COMPATIBILITY
 # ============================================================================
 Config = BatchSettings
+   

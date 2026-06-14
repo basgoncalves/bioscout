@@ -11,7 +11,11 @@ import tkinter
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from version import APP_VERSION
+from importlib.metadata import version as _pkg_version
+try:
+    APP_VERSION = _pkg_version("bioscout")
+except Exception:
+    APP_VERSION = "dev"
 
 # Patch Tkinter's exception handling to suppress non-fatal CustomTkinter scaling errors
 _original_report_callback_exception = tkinter.Tk.report_callback_exception
@@ -583,7 +587,9 @@ class MainWindow(ctk.CTk):
         p = Path(project_dir)
         self._project_dir.set(str(p))
 
-        # ── Version check ──────────────────────────────────────────────────
+        # ── Version check (AST-only — avoids executing the file, which can
+        #    fail if the project's settings.py references names like PlayerConfig
+        #    that are no longer in the template's global scope) ────────────────
         settings_file = p / "settings.py"
         ok = False
         needs_update = False
@@ -592,11 +598,17 @@ class MainWindow(ctk.CTk):
             tooltip = "⚠  No settings.py — run: python -m bioscout --init"
         else:
             try:
-                import importlib.util as _ilu
-                spec = _ilu.spec_from_file_location("_proj_settings", settings_file)
-                mod  = _ilu.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                proj_ver = getattr(mod, "SETTINGS_VERSION", None)
+                import ast as _ast
+                src = settings_file.read_text(encoding="utf-8", errors="replace")
+                tree = _ast.parse(src)
+                proj_ver = None
+                for node in tree.body:
+                    if (isinstance(node, _ast.Assign) and
+                            any(isinstance(t, _ast.Name) and t.id == "SETTINGS_VERSION"
+                                for t in node.targets)):
+                        if isinstance(node.value, _ast.Constant):
+                            proj_ver = node.value.value
+                        break
                 from settings import SETTINGS_VERSION as _SRC_VER
                 if proj_ver is None:
                     tooltip = "⚠  settings.py has no SETTINGS_VERSION — click ↑ Update Settings"
@@ -626,6 +638,13 @@ class MainWindow(ctk.CTk):
                                                     fg_color="#5a3a00")
 
         self.update_status(tooltip, "success" if ok else "warning")
+
+        # Redirect log file into the project folder — only when the project
+        # actually changes to avoid opening multiple handlers on re-validate.
+        if str(p) != getattr(self, "_last_logged_project", None):
+            self._last_logged_project = str(p)
+            logger.set_project_log_dir(p / "logs")
+
         self.broadcast_project_dir(project_dir)
 
     def _update_project_settings(self) -> None:
@@ -651,7 +670,7 @@ class MainWindow(ctk.CTk):
         # ── Preview dialog ────────────────────────────────────────────────
         dlg = tkinter.Toplevel(self)
         dlg.title("Update Settings — Preview")
-        dlg.geometry("820x640")
+        dlg.geometry("820x680")
         dlg.grab_set()
         dlg.configure(bg="#1a1a2a")
 
@@ -664,39 +683,7 @@ class MainWindow(ctk.CTk):
                      font=("Segoe UI", 10), justify="left", text_color="#aaaaaa"
                      ).pack(padx=16, pady=(0, 8), anchor="w")
 
-        # Preserved list
-        pf = ctk.CTkFrame(dlg, fg_color="#111118", corner_radius=6)
-        pf.pack(fill="x", padx=16, pady=(0, 6))
-        ctk.CTkLabel(pf, text="Preserved values:", font=("Segoe UI", 10, "bold"),
-                     anchor="w").pack(anchor="w", padx=10, pady=(6, 2))
-        for line in preserved:
-            ctk.CTkLabel(pf, text=line, font=("Courier New", 9),
-                         text_color="#aaddaa", anchor="w").pack(anchor="w", padx=14, pady=1)
-        ctk.CTkLabel(pf, text="", height=4).pack()
-
-        # New file preview
-        ctk.CTkLabel(dlg, text="New settings.py (preview):",
-                     font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
-        txt_frame = ctk.CTkFrame(dlg, fg_color="#111118")
-        txt_frame.pack(fill="both", expand=True, padx=16, pady=(4, 8))
-
-        import tkinter as _tk
-        txt = _tk.Text(txt_frame, bg="#111118", fg="#cccccc",
-                       font=("Courier New", 9), wrap="none",
-                       insertbackground="#cccccc")
-        sb_y = _tk.Scrollbar(txt_frame, orient="vertical",   command=txt.yview)
-        sb_x = _tk.Scrollbar(txt_frame, orient="horizontal", command=txt.xview)
-        txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
-        sb_y.pack(side="right", fill="y")
-        sb_x.pack(side="bottom", fill="x")
-        txt.pack(fill="both", expand=True)
-        txt.insert("1.0", new_text)
-        txt.configure(state="disabled")
-
-        # Buttons
-        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(0, 14))
-
+        # ── Buttons at the top so they are always visible ─────────────────
         def _apply():
             try:
                 from utils.settings_updater import write_updated_settings
@@ -710,12 +697,44 @@ class MainWindow(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Write Error", str(e), parent=self)
 
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 10))
         ctk.CTkButton(btn_row, text="✓  Apply Update", fg_color="#28a745",
                       hover_color="#218838", width=150,
                       command=_apply).pack(side="left", padx=(0, 8))
         ctk.CTkButton(btn_row, text="Cancel", fg_color="#555555",
                       hover_color="#666666", width=100,
                       command=dlg.destroy).pack(side="left")
+
+        # ── Preserved values (scrollable, capped height) ──────────────────
+        pf_outer = ctk.CTkFrame(dlg, fg_color="#111118", corner_radius=6)
+        pf_outer.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(pf_outer, text="Preserved values:", font=("Segoe UI", 10, "bold"),
+                     anchor="w").pack(anchor="w", padx=10, pady=(6, 2))
+        pf_scroll = ctk.CTkScrollableFrame(pf_outer, fg_color="transparent", height=140)
+        pf_scroll.pack(fill="x", padx=6, pady=(0, 6))
+        for line in preserved:
+            ctk.CTkLabel(pf_scroll, text=line, font=("Courier New", 9),
+                         text_color="#aaddaa", anchor="w").pack(anchor="w", padx=8, pady=1)
+
+        # ── New file preview ──────────────────────────────────────────────
+        ctk.CTkLabel(dlg, text="New settings.py (preview):",
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
+        txt_frame = ctk.CTkFrame(dlg, fg_color="#111118")
+        txt_frame.pack(fill="both", expand=True, padx=16, pady=(4, 14))
+
+        import tkinter as _tk
+        txt = _tk.Text(txt_frame, bg="#111118", fg="#cccccc",
+                       font=("Courier New", 9), wrap="none",
+                       insertbackground="#cccccc")
+        sb_y = _tk.Scrollbar(txt_frame, orient="vertical",   command=txt.yview)
+        sb_x = _tk.Scrollbar(txt_frame, orient="horizontal", command=txt.xview)
+        txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        sb_y.pack(side="right", fill="y")
+        sb_x.pack(side="bottom", fill="x")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", new_text)
+        txt.configure(state="disabled")
 
     def broadcast_project_dir(self, project_dir: str) -> None:
         """Broadcast project directory to all tabs that support set_project_dir()."""
@@ -844,12 +863,4 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
     print("[main_window] mainloop() returned — window was closed.", flush=True)
 
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="BioScout")
-    parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode")
-    parser.add_argument("--screen-x", type=int, help="Force window X position (e.g., 1920 for secondary screen)")
-    parser.add_argument("--screen-y", type=int, help="Force window Y position")
-
-    args = parser.parse_args()
-    main(fullscreen=args.fullscreen, screen_x=args.screen_x, screen_y=args.screen_y)
+if __name__ 

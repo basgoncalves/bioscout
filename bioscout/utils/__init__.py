@@ -492,16 +492,23 @@ class Analyse(settings.Inputs):
             pass
 
         try:
-            marker_data = load_any_data_file(self.markers)
-            self.time_range = [marker_data['time'].min(), marker_data['time'].max()]
-            return self.time_range
+            if os.path.exists(self.markers):
+                marker_data = load_any_data_file(self.markers)
+                # load_trc returns a MultiIndex DataFrame; df['time'] gives a sub-DataFrame
+                # whose .min() would be a Series. Flatten to get scalar floats.
+                time_col = marker_data['time']
+                time_vals = time_col.values.flatten().astype(float)
+                self.time_range = [float(time_vals.min()), float(time_vals.max())]
+                return self.time_range
         except:
             pass
 
         try:
             if os.path.exists(self.c3d):
                 c3d_data = load_any_data_file(self.c3d)
-                self.time_range = [c3d_data['time'].min(), c3d_data['time'].max()]
+                time_col = c3d_data['time']
+                time_vals = time_col.values.flatten().astype(float)
+                self.time_range = [float(time_vals.min()), float(time_vals.max())]
                 return self.time_range
         except:
             pass
@@ -786,8 +793,16 @@ class Analyse(settings.Inputs):
                 os.path.normcase(os.path.abspath(self.path))
             )
 
-        exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list, create_folder=create_folder)
-        
+        time_range = exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list, create_folder=create_folder)
+
+        # Update start_time / end_time in trial_settings.xml from actual C3D data
+        if time_range is not None:
+            self.start_time = f"{time_range[0]:.4f}"
+            self.end_time   = f"{time_range[1]:.4f}"
+            self.time_range = list(time_range)
+            self._to_xml()
+            print(f"[{self.trial}] Time range updated: {self.start_time} – {self.end_time} s")
+
     @staticmethod
     def _get_openSim():
         """Return the openSim module, attempting a late import if it is still None."""
@@ -967,6 +982,48 @@ class Analyse(settings.Inputs):
         except Exception as e:
             self._log(f'[Error] during SO plotting: {e}')
 
+    def run_energetics(self):
+        """Run Metabolic Cost (Energetics) analysis for this trial.
+
+        Wraps utils.openSim.run_energetics, which attaches an Umberger (2010)
+        metabolic-energy probe set to the scaled model and runs a ProbeReporter.
+        Needs the IK coordinates (kinematics) and, ideally, the Static
+        Optimization activations (SO_StaticOptimization_activation.sto) so the
+        probe evaluates real per-frame muscle activations.
+
+        Output: energetics_ProbeReporter_probes.sto in the trial folder.
+        """
+        os.chdir(self.path)
+        _os = self._get_openSim()
+
+        ik_abs     = os.path.join(self.path, self.ik)
+        so_act_abs = os.path.join(self.path, self.so_activations)
+        out_abs    = os.path.join(self.path, 'energetics_ProbeReporter_probes.sto')
+
+        if os.path.exists(out_abs) and not self.replace:
+            self._log(f'Energetics output already exists: {out_abs}')
+            return
+
+        if not os.path.exists(ik_abs):
+            raise FileNotFoundError(
+                f'IK output required for energetics not found: {ik_abs}')
+
+        if not os.path.exists(so_act_abs):
+            self._log(f'[Warning] SO activation file not found ({so_act_abs}); '
+                      f'energetics will use default activation.')
+            so_act_abs = None
+
+        try:
+            _os.run_energetics(osim_modelPath=self.model_dir,
+                               ik_output=ik_abs,
+                               muscle_activations=so_act_abs,
+                               setup_xml=None,
+                               results_dir=self.path)
+            self._log(f'[Success] Energetics completed. Results saved in {self.path}')
+        except Exception as e:
+            self._log(f'[Error] during Energetics: {e}')
+            raise
+
     def run_jra(self):
         os.chdir(self.path)
         self.load_settings(self.settingsXML)
@@ -1035,23 +1092,34 @@ class Analyse(settings.Inputs):
                 self._log("[Warning] No EMG columns found in emg.mot")
                 return
 
-            # Fix timestamps before filtering — C3D export often writes wrong time values
-            fs = getattr(settings.BatchSettings, 'emg_sampling_freq', None)
-            if fs and 'time' in data.columns and len(data) >= 2:
-                n = len(data)
-                actual_dt = (data['time'].iloc[-1] - data['time'].iloc[0]) / (n - 1)
-                expected_dt = 1.0 / fs
-                if abs(actual_dt - expected_dt) / expected_dt > 0.20:
-                    try:
-                        start_t = float(self.time_range[0]) if self.time_range else 0.0
-                    except Exception:
-                        start_t = 0.0
-                    data = data.copy()
-                    data['time'] = start_t + np.arange(n) / fs
-                    self._log(f'[Info] Fixed EMG timestamps in emg.mot: '
-                              f'dt={actual_dt:.6f}s -> {expected_dt:.6f}s, '
-                              f'time {data["time"].iloc[0]:.4f}..{data["time"].iloc[-1]:.4f}s',
-                              terminal=True)
+            # --- Reliable EMG time vector + sampling frequency ---
+            # Derive the sampling frequency from the EMG file's OWN time column
+            # (the true analog rate) rather than a fixed setting, which is often
+            # wrong (e.g. configured 1000 Hz while the data is 200 Hz). Only when
+            # that time column is invalid (non-monotonic / all-zeros) do we rebuild
+            # it, aligning to the trial's kinematic window so it matches IK/ID/GRF.
+            data = data.copy()
+            fs_setting = getattr(settings.BatchSettings, 'emg_sampling_freq', None)
+            n = len(data)
+            t = (pd.to_numeric(data['time'], errors='coerce').values.astype(float)
+                 if 'time' in data.columns else np.array([]))
+            time_ok = n >= 2 and np.all(np.isfinite(t)) and np.all(np.diff(t) > 0)
+            if time_ok:
+                fs = 1.0 / ((t[-1] - t[0]) / (n - 1))
+            else:
+                fs = fs_setting or 1000.0
+                try:
+                    start_t = float(self.time_range[0])
+                    end_t = float(self.time_range[1])
+                    if not (end_t > start_t):
+                        raise ValueError
+                    data['time'] = np.linspace(start_t, end_t, n)
+                except Exception:
+                    data['time'] = np.arange(n) / fs
+                self._log(f'[Info] EMG time column invalid — rebuilt '
+                          f'({n} samples @ ~{fs:.0f} Hz, '
+                          f'{data["time"].iloc[0]:.4f}..{data["time"].iloc[-1]:.4f}s)',
+                          terminal=True)
 
             # Auto-detect prefix — use the longest common prefix of EMG columns,
             # falling back to empty string (filters all non-time columns)
@@ -5210,21 +5278,4 @@ try:
     # Load utils/ceinms.py explicitly — `import ceinms` would grab the
     # utils/ceinms/ binary package instead (package takes precedence over
     # the .py module when both share the same name).
-    import importlib.util as _ilu_c
-    _ceinms_py_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ceinms.py')
-    _ceinms_spec = _ilu_c.spec_from_file_location('ceinms_py', _ceinms_py_path)
-    _ceinms_mod = _ilu_c.module_from_spec(_ceinms_spec)
-    _ceinms_spec.loader.exec_module(_ceinms_mod)
-    ceinms = _ceinms_mod
-    HAS_CEINMS = True
-except Exception:
-    HAS_CEINMS = False
-    ceinms = None
-
-try:
-    import emg_normalise as _emg_mod
-    emg_normalise = _emg_mod
-    HAS_EMG_NORMALISE = True
-except ImportError:
-    HAS_EMG_NORMALISE = False
-    emg_normalise = None
+    import importlib.uti

@@ -428,7 +428,8 @@ def rotate_data_table(table, axis, deg):
         vec_rotated = R.multiply(vec)
         table.setRowAtIndex(i, vec_rotated)
 
-def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
+def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_dir=None):
+    output_dir = output_dir or os.path.dirname(c3d_filepath)
     print(f"Reading C3D file: {c3d_filepath}")
     try:
         reader = c3d.Reader(open(c3d_filepath, "rb"))
@@ -480,7 +481,7 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
         analog_df['time'] = analog_df['time'] - analog_df['time'].iloc[0]
 
     # Save analog to csv
-    analog_path = os.path.join(os.path.dirname(c3d_filepath), "analog.csv")
+    analog_path = os.path.join(output_dir, "analog.csv")
     analog_df.to_csv(analog_path, index=False)
     print(f"Successfully exported {analog_path}")
 
@@ -495,7 +496,7 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
                 emg_indices.append(i)
                 print(f"Found EMG channel: '{label}' at index {i}")
 
-    emg_mot_path = os.path.join(os.path.dirname(c3d_filepath), "emg.mot")
+    emg_mot_path = os.path.join(output_dir, "emg.mot")
 
     if emg_indices:
         emg_labels = [analog_labels[i] for i in emg_indices]
@@ -515,7 +516,7 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True):
         print("Warning: No EMG channels found among available analog channels.")
         print(f"[DEBUG] Searched for {len(emg_strings_list)} patterns in {len(analog_labels)} available channels")
        
-def export_markers(c3d_filepath, strings_to_remove=[]):
+def export_markers(c3d_filepath, strings_to_remove=[], output_dir=None):
     print(f"Exporting markers for {c3d_filepath}")
 
     # OpenSim data adapters
@@ -527,7 +528,7 @@ def export_markers(c3d_filepath, strings_to_remove=[]):
     # get markers
     task = adapter.read(c3d_filepath)
     markers_task = adapter.getMarkersTable(task)
-    output_dir = os.path.dirname(c3d_filepath)
+    output_dir = output_dir or os.path.dirname(c3d_filepath)
 
     # process markers of task and save to .trc file
     rotate_data_table(markers_task, [1, 0, 0], -90)
@@ -538,6 +539,20 @@ def export_markers(c3d_filepath, strings_to_remove=[]):
         labels = [re.sub(s, '', lbl) for lbl in labels]
 
     markers_task.setColumnLabels(labels)
+
+    # TRCFileAdapter.write() requires 'DataRate' and 'CameraRate' metadata.
+    # C3DFileAdapter doesn't always populate these, so compute from the time column.
+    time_col = markers_task.getIndependentColumn()
+    if len(time_col) > 1 and (time_col[1] - time_col[0]) > 0:
+        data_rate = round(1.0 / (time_col[1] - time_col[0]))
+    else:
+        data_rate = 100.0
+    if not markers_task.hasTableMetaDataKey('DataRate'):
+        markers_task.addTableMetaDataString('DataRate', str(data_rate))
+    if not markers_task.hasTableMetaDataKey('CameraRate'):
+        markers_task.addTableMetaDataString('CameraRate', str(data_rate))
+    if not markers_task.hasTableMetaDataKey('Units'):
+        markers_task.addTableMetaDataString('Units', 'mm')
 
     trc_adapter = opensim.TRCFileAdapter()
     marker_trc_file = os.path.join(output_dir, 'marker_experimental.trc')
@@ -608,7 +623,7 @@ def _remap_grf_axes(grf_file, axis_map=None, cop_scale=0.001,
             f.write('\t'.join(_fmt(v) for v in _row) + '\n')
 
 
-def export_grf(c3d_filepath):
+def export_grf(c3d_filepath, output_dir=None):
 
     def transform_labels(labels):
         """
@@ -663,7 +678,7 @@ def export_grf(c3d_filepath):
     osim_tools = osimTools()
     force_sto = osim_tools._create_opensim_storage(time, forces_table.getMatrix(), labels)
     force_sto.setName('grf')
-    output_dir = os.path.dirname(c3d_filepath)
+    output_dir = output_dir or os.path.dirname(c3d_filepath)
     grf_file = os.path.join(output_dir, 'grf.mot')
     force_sto.printResult(force_sto, 'grf', output_dir, 0.01, '.mot')
     print(f"Successfully exported {grf_file}")
@@ -699,9 +714,40 @@ def export_grf(c3d_filepath):
         else:
             print(f"  [OK] No NaN rows to remove (data is clean)")
 
+def get_time_range_from_c3d(c3d_filepath):
+    """Return (start_time, end_time) in seconds from a C3D file.
+
+    Tries the forces/analog table first (present even when there are no markers),
+    then falls back to the markers table.  Returns None if both fail.
+    """
+    try:
+        adapter = opensim.C3DFileAdapter()
+        task = adapter.read(c3d_filepath)
+        # Forces table uses analog rate — always available when GRF channels exist
+        for getter in (adapter.getForcesTable, adapter.getMarkersTable):
+            try:
+                table = getter(task)
+                tc = table.getIndependentColumn()
+                if len(tc) > 1:
+                    return (float(tc[0]), float(tc[-1]))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
 def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
-    
-    # create a directory for the output files   
+    """Export C3D data to TRC / GRF.mot / EMG.mot files.
+
+    Returns
+    -------
+    tuple or None
+        (start_time, end_time) in seconds read from the C3D, or None if
+        the time range could not be determined.
+    """
+
+    # create a directory for the output files
     output_dir = os.path.dirname(c3d_filepath)
 
     if create_folder:
@@ -709,28 +755,31 @@ def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
         os.makedirs(output_dir, exist_ok=True)
         print(f"Created output directory: {output_dir}")
 
-    # copy the c3d file to the output directory for reference
-    c3d_output_path = os.path.join(output_dir, os.path.basename(c3d_filepath))
-    if not os.path.exists(c3d_output_path):
-        shutil.copy(c3d_filepath, c3d_output_path)
-        print(f"Copied {c3d_filepath} to {c3d_output_path}")
+    # Read time range before exports (C3D file intact, forces table is reliable)
+    time_range = get_time_range_from_c3d(c3d_filepath)
 
     try:
-        export_markers(c3d_output_path, strings_to_remove = [])
-    except Exception as e:
-        print(f"An error occurred while exporting markers")
+        export_markers(c3d_filepath, strings_to_remove=[], output_dir=output_dir)
+    except BaseException as e:
+        import traceback as _tb
+        print(f"An error occurred while exporting markers: {type(e).__name__}: {e}")
+        _tb.print_exc()
 
     try:
-        export_grf(c3d_output_path)
-    except Exception as e:
-        print(f"An error occurred while exporting ground reaction forces")
-        
+        export_grf(c3d_filepath, output_dir=output_dir)
+    except BaseException as e:
+        import traceback as _tb
+        print(f"An error occurred while exporting ground reaction forces: {type(e).__name__}: {e}")
+        _tb.print_exc()
+
     try:
-        export_emg(c3d_output_path, emg_strings_list=emg_string_list)
-    except Exception as e:
+        export_emg(c3d_filepath, emg_strings_list=emg_string_list, output_dir=output_dir)
+    except BaseException as e:
         import traceback as _tb
         print(f"An error occurred while exporting EMG data: {type(e).__name__}: {e}")
         _tb.print_exc()
+
+    return time_range
 
 def transform_labels(labels):
         """

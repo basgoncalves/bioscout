@@ -3667,46 +3667,149 @@ def run_energetics(osim_modelPath=None, ik_output=None, muscle_activations=None,
     try:
         print("Starting Metabolic Cost Analysis (Energetics)...")
 
+        # ------------------------------------------------------------------ #
+        # Pre-flight checks
+        # ------------------------------------------------------------------ #
+        if not osim_modelPath or not os.path.exists(osim_modelPath):
+            raise FileNotFoundError(f"Model file not found: {osim_modelPath}")
+        if not ik_output or not os.path.exists(ik_output):
+            raise FileNotFoundError(f"IK coordinates file not found: {ik_output}")
+
+        if results_dir is None:
+            results_dir = os.path.dirname(os.path.abspath(ik_output))
+        os.makedirs(results_dir, exist_ok=True)
+
+        # Absolute paths — the tool is run with cwd=results_dir below, so we keep
+        # everything absolute to avoid relative-path surprises.
+        osim_modelPath = os.path.abspath(osim_modelPath)
+        ik_output = os.path.abspath(ik_output)
+        if muscle_activations:
+            muscle_activations = os.path.abspath(muscle_activations)
+
+        # ------------------------------------------------------------------ #
+        # Path A — an existing Metabolic Cost setup XML was supplied: use it.
+        # ------------------------------------------------------------------ #
         if setup_xml and os.path.exists(setup_xml):
-            # Use existing Energetics setup file
             try:
                 tool = osim.AnalyzeTool(setup_xml)
-                model = osim.Model(osim_modelPath)
-                tool.setModel(model)
-                tool.run()
-                utils.print_to_log("Metabolic Cost Analysis completed successfully using existing setup file.")
+                tool.setResultsDir(results_dir)
+                original_cwd = os.getcwd()
+                try:
+                    os.chdir(results_dir)
+                    tool.run()
+                finally:
+                    os.chdir(original_cwd)
+                utils.print_to_log(
+                    "Metabolic Cost Analysis completed using existing setup file.")
                 print("Energetics calculation completed.")
                 return
             except Exception as e:
-                print(f"Error running Energetics with existing setup: {e}")
-                utils.print_to_log(f"Error running Energetics with existing setup: {e}")
+                print(f"Existing energetics setup failed ({e}); rebuilding it.")
+                utils.print_to_log(
+                    f"Existing energetics setup failed ({e}); rebuilding it.")
 
-        # Create a new Metabolic Cost Analysis if setup_xml not provided
-        if not osim_modelPath or not ik_output:
-            raise ValueError("osim_modelPath and ik_output are required for Metabolic Cost Analysis")
-
+        # ------------------------------------------------------------------ #
+        # Path B — build a metabolic probe set + ProbeReporter from scratch.
+        # ------------------------------------------------------------------ #
         model = osim.Model(osim_modelPath)
-        state = model.initSystem()
+        model.initSystem()
 
-        # Create AnalyzeTool for metabolic cost analysis
-        analyze_tool = osim.AnalyzeTool()
-        analyze_tool.setModel(model)
+        # Attach an Umberger (2010) metabolic-energy probe covering every muscle.
+        # All four rate components are reported (activation/maintenance,
+        # shortening, mechanical work and basal), plus per-muscle breakdown.
+        probe = osim.Umberger2010MuscleMetabolicsProbe()
+        probe.setName("metabolics")
+        for _setter, _val in (
+            ("set_activation_maintenance_rate_on", True),
+            ("set_shortening_rate_on",            True),
+            ("set_basal_rate_on",                 True),
+            ("set_mechanical_work_rate_on",       True),
+            ("set_report_total_metabolics_only",  False),
+            ("setOperation",                      "value"),
+        ):
+            try:
+                getattr(probe, _setter)(_val)
+            except Exception:
+                pass  # property name varies slightly across OpenSim versions
 
-        # Set kinematics
-        analyze_tool.setCoordinatesFileName(ik_output)
+        muscles = model.getMuscles()
+        n_added = 0
+        for i in range(muscles.getSize()):
+            try:
+                probe.addMuscle(muscles.get(i).getName(), 0.5)
+                n_added += 1
+            except Exception as e:
+                print(f"  [warn] could not add muscle to metabolics probe: {e}")
+        if n_added == 0:
+            raise RuntimeError("No muscles could be added to the metabolics probe.")
+        print(f"  Metabolics probe covers {n_added} muscles.")
 
-        # Set muscle activations if provided
+        model.addProbe(probe)
+        model.finalizeConnections()
+
+        # Persist the probe-augmented model next to the results so the setup XML
+        # is self-contained and reproducible.
+        model_with_probes = os.path.join(results_dir, "model_metabolics.osim")
+        model.printToXML(model_with_probes)
+
+        # Time window from the IK motion.
+        motion = osim.Storage(ik_output)
+        initial_time = motion.getFirstTime()
+        final_time = motion.getLastTime()
+
+        # Build the AnalyzeTool around the in-memory (probe-augmented) model.
+        tool = osim.AnalyzeTool(model)
+        tool.setName("energetics")
+        tool.setModelFilename(model_with_probes)
+        tool.setCoordinatesFileName(ik_output)
+        tool.setInitialTime(initial_time)
+        tool.setFinalTime(final_time)
+        tool.setLowpassCutoffFrequency(6.0)
+
+        # Feed muscle activations (from Static Optimization) as the model states
+        # so the probe evaluates real per-frame activations; solve fibre
+        # equilibrium from the posed kinematics.
         if muscle_activations and os.path.exists(muscle_activations):
-            analyze_tool.setLoadModelAndInput(osim_modelPath, muscle_activations)
+            tool.setStatesFileName(muscle_activations)
+            try:
+                tool.setSolveForEquilibrium(True)
+            except Exception:
+                pass
+        else:
+            print("  [warn] No SO activation file supplied — metabolic rates "
+                  "will be based on default activation.")
 
-        # Set output directory
-        if results_dir:
-            analyze_tool.setResultsDir(results_dir)
+        # Attach the ProbeReporter so probe outputs are written to .sto.
+        probe_reporter = osim.ProbeReporter(model)
+        probe_reporter.setName("ProbeReporter")
+        probe_reporter.setStartTime(initial_time)
+        probe_reporter.setEndTime(final_time)
+        tool.updAnalysisSet().cloneAndAppend(probe_reporter)
 
-        # Run analysis
-        analyze_tool.run()
-        utils.print_to_log("Metabolic Cost Analysis completed successfully.")
-        print("Energetics calculation completed. Metabolic cost computed.")
+        tool.setResultsDir(results_dir)
+
+        # Save the setup for the record/debugging.
+        if not setup_xml:
+            setup_xml = os.path.join(results_dir, "setup_Energetics.xml")
+        tool.printToXML(setup_xml)
+        print(f"  Energetics setup saved to: {setup_xml}")
+
+        # Run with cwd inside results_dir so all relative outputs land there.
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(results_dir)
+            tool.run()
+        finally:
+            try:
+                os.chdir(original_cwd)
+            except Exception:
+                pass
+
+        out_file = os.path.join(results_dir, "energetics_ProbeReporter_probes.sto")
+        utils.print_to_log(
+            f"Metabolic Cost Analysis completed. Output: {out_file}")
+        print(f"Energetics calculation completed. Metabolic cost written to "
+              f"{results_dir}")
 
     except Exception as e:
         error_msg = f"Error running Metabolic Cost Analysis: {str(e)}"

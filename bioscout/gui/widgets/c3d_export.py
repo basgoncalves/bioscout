@@ -426,6 +426,7 @@ class C3DExportTab(ctk.CTkFrame):
                     if grf_file.exists():
                         exported_files.append(("GRF", grf_file))
                         print(f"[OK] GRF exported to {grf_file.name}")
+                        self._create_grf_xml(output_dir)
                     self._log_status("[OK] GRF exported successfully")
                 except Exception as e:
                     self._log_status(f"[FAIL] Error exporting GRF: {str(e)[:50]}")
@@ -603,8 +604,6 @@ class C3DExportTab(ctk.CTkFrame):
         self._log_status("Export stopped")
         self.stop_btn.configure(state="disabled")
 
-    def _log_status(self, message):
-        """Update status message."""
-        self.status_label.configure(text=message)
-        logger.debug(f"C3D Export: {message}")
-        self.update()
+    @staticmethod
+    def _create_grf_xml(output_folder: Path) -> None:
+        """Create GRF.xml (OpenSim ExternalLoads) referencing grf

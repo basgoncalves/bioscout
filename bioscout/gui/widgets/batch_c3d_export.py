@@ -159,6 +159,7 @@ class BatchC3DExport(ctk.CTkFrame):
         self.total_files = 0
         self.session_dir = None  # Track session directory
         self.all_detected_markers = set()  # Store all markers detected across trials
+        self._all_analog_channels: list = []  # All analog channels found (unfiltered)
 
         self._create_widgets()
 
@@ -168,12 +169,12 @@ class BatchC3DExport(ctk.CTkFrame):
         if self.session_dir and self.session_dir.exists():
             # Auto-populate source folder with session directory
             self.source_folder_var.set(str(self.session_dir))
-            self.source_folder = self.session_dir  # Directly set source_folder
+            self.source_folder = self.session_dir
 
             # Also auto-populate destination folder with same directory
             self.dest_entry.delete(0, "end")
             self.dest_entry.insert(0, str(self.session_dir))
-            self.dest_folder = self.session_dir  # Directly set dest_folder
+            self.dest_folder = self.session_dir
 
             self._scan_for_c3d_files()
 
@@ -199,17 +200,33 @@ class BatchC3DExport(ctk.CTkFrame):
             row=0, column=0, columnspan=3, sticky="w", padx=5, pady=(3, 5)
         )
 
-        # Source folder (hidden - auto-populated from session)
+        # C3D source folder (visible row)
         self.source_folder_var = ctk.StringVar(value="")
         self.source_folder_var.trace("w", lambda *args: self._validate_source_folder())
-        self.source_error = ctk.CTkLabel(folder_frame, text="", text_color="#dc3545", font=("Segoe UI", 8))
-
-        # Destination folder (keep only destination, remove source from display)
-        ctk.CTkLabel(folder_frame, text="Dest. Folder:", font=("Segoe UI", 9)).grid(
+        ctk.CTkLabel(folder_frame, text="C3D Folder:", font=("Segoe UI", 9)).grid(
             row=1, column=0, sticky="w", padx=5, pady=(2, 1)
         )
+        self.source_entry = ctk.CTkEntry(
+            folder_frame,
+            textvariable=self.source_folder_var,
+            placeholder_text="Folder containing .c3d files...",
+            font=("Segoe UI", 9))
+        self.source_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=(2, 1))
+        ctk.CTkButton(
+            folder_frame,
+            text="Browse",
+            width=80,
+            font=("Segoe UI", 9),
+            command=self._select_source_folder,
+        ).grid(row=1, column=2, sticky="ew", padx=5, pady=(2, 1))
+        self.source_error = ctk.CTkLabel(folder_frame, text="", text_color="#dc3545", font=("Segoe UI", 8))
+
+        # Destination folder
+        ctk.CTkLabel(folder_frame, text="Dest. Folder:", font=("Segoe UI", 9)).grid(
+            row=2, column=0, sticky="w", padx=5, pady=(2, 1)
+        )
         self.dest_entry = ctk.CTkEntry(folder_frame, placeholder_text="Paste folder path or browse...", font=("Segoe UI", 9))
-        self.dest_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=(2, 1))
+        self.dest_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(2, 1))
         self.dest_entry.bind("<KeyRelease>", lambda e: self._validate_dest_folder())
 
         ctk.CTkButton(
@@ -218,10 +235,10 @@ class BatchC3DExport(ctk.CTkFrame):
             width=80,
             font=("Segoe UI", 9),
             command=self._select_dest_folder,
-        ).grid(row=1, column=2, sticky="ew", padx=5, pady=(2, 1))
+        ).grid(row=2, column=2, sticky="ew", padx=5, pady=(2, 1))
 
         self.dest_error = ctk.CTkLabel(folder_frame, text="", text_color="#dc3545", font=("Segoe UI", 8))
-        self.dest_error.grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 2))
+        self.dest_error.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 2))
 
         # ===== LEFT COLUMN: FILE SELECTION SECTION =====
         files_frame = ctk.CTkFrame(self)
@@ -290,7 +307,7 @@ class BatchC3DExport(ctk.CTkFrame):
             command=self._update_markers_from_c3d,
         ).pack(side="right", padx=0)
 
-        # EMG Label Pattern
+        # EMG Label Pattern + Search button
         emg_pattern_frame = ctk.CTkFrame(settings_frame)
         emg_pattern_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 3))
         emg_pattern_frame.grid_columnconfigure(1, weight=1)
@@ -299,6 +316,12 @@ class BatchC3DExport(ctk.CTkFrame):
         self.emg_label_var = ctk.StringVar(value=BATCH_C3D_EMG_LABEL_DEFAULT)
         self.emg_label_entry = ctk.CTkEntry(emg_pattern_frame, textvariable=self.emg_label_var, placeholder_text=BATCH_C3D_EMG_LABEL_DEFAULT, height=24)
         self.emg_label_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        self.emg_label_entry.bind("<Return>", lambda e: self._filter_emg_channels())
+        ctk.CTkButton(
+            emg_pattern_frame, text="Search", width=60, height=24,
+            font=("Segoe UI", 8),
+            command=self._filter_emg_channels,
+        ).grid(row=0, column=2, padx=(0, 0))
 
         # EMG Filter Settings (side by side)
         filter_frame = ctk.CTkFrame(settings_frame)
@@ -467,7 +490,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
     def _validate_source_folder(self):
         """Validate source folder path."""
-        path_str = self.source_entry.get().strip()
+        path_str = self.source_folder_var.get().strip()
         if not path_str:
             self.source_error.configure(text="")
             self.source_folder = None
@@ -647,6 +670,21 @@ class BatchC3DExport(ctk.CTkFrame):
             checkbox.pack(anchor="w", padx=5, pady=2)
             self.right_marker_checkboxes.append(checkbox)
 
+    def _filter_emg_channels(self) -> None:
+        """Re-populate EMG channel list using the current label string as a filter.
+
+        Shows only channels whose name contains the label string (case-insensitive).
+        If the label is empty, all detected channels are shown.
+        """
+        pattern = self.emg_label_var.get().strip().lower()
+        if pattern:
+            filtered = [ch for ch in self._all_analog_channels
+                        if pattern in ch.lower()]
+        else:
+            filtered = list(self._all_analog_channels)
+        self._populate_emg_channels(filtered)
+        logger.info(f"EMG filter '{pattern}': {len(filtered)}/{len(self._all_analog_channels)} channels shown")
+
     def _select_all_emg(self):
         """Select all EMG channels."""
         for var in self.emg_channel_vars.values():
@@ -779,14 +817,12 @@ class BatchC3DExport(ctk.CTkFrame):
                                     file_markers.add(marker)
                                 logger.info(f"No labeled markers found in {c3d_file.name}, using {num_markers} numbered markers")
 
-                        # Detect EMG channels
+                        # Detect analog channels — collect ALL, filter later
                         if hasattr(reader, 'analog_labels'):
                             for label in reader.analog_labels:
                                 if label and label.strip():
                                     channel_label = label.strip()
-                                    # Check if matches EMG pattern
-                                    if emg_pattern and emg_pattern.lower() in channel_label.lower():
-                                        emg_channels.add(channel_label)
+                                    emg_channels.add(channel_label)  # store all
                         else:
                             logger.warning(f"No analog_labels attribute in C3D file {c3d_file.name}")
 
@@ -844,14 +880,13 @@ class BatchC3DExport(ctk.CTkFrame):
             else:
                 logger.warning("No markers detected in selected C3D files")
 
-            # Update EMG channel checkboxes
-            if emg_channels:
-                sorted_emg = sorted(list(emg_channels))
-                self._populate_emg_channels(sorted_emg)
-                logger.info(f"Updated EMG channels: {len(emg_channels)} channels detected")
-                logger.info(f"EMG channels: {sorted_emg}")
+            # Store all analog channels and show the filtered subset
+            self._all_analog_channels = sorted(emg_channels)
+            if self._all_analog_channels:
+                logger.info(f"Analog channels found: {len(self._all_analog_channels)}")
+                self._filter_emg_channels()  # apply current label filter
             else:
-                logger.info("No EMG channels detected matching pattern")
+                logger.info("No analog channels detected in selected C3D files")
 
         except Exception as e:
             logger.error(f"Error updating markers from C3D files: {e}")
@@ -1005,6 +1040,7 @@ class BatchC3DExport(ctk.CTkFrame):
                     grf_file = output_folder / "grf.mot"
                     if grf_file.exists():
                         exported_files.append(("GRF", grf_file))
+                        self._create_grf_xml(output_folder)
                 except Exception as e:
                     logger.error(f"GRF export error: {e}")
 
@@ -1470,42 +1506,4 @@ class BatchC3DExport(ctk.CTkFrame):
                     # Add three columns for X, Y, Z with zero values
                     row.append("0.000000")
                     row.append("0.000000")
-                    row.append("0.000000")
-
-            # Reconstruct the marker names header with all markers in sorted order
-            all_markers_sorted = sorted(all_markers)
-            new_header_parts = header_parts[:2]  # Keep Frame# and Time
-
-            for marker in all_markers_sorted:
-                new_header_parts.append(marker)
-                new_header_parts.append("X")
-                new_header_parts.append("Y")
-                new_header_parts.append("Z")
-
-            # Write updated TRC file
-            with open(str(trc_file), 'w') as f:
-                f.write(header_line_0)
-                f.write(header_line_1)
-                f.write('\t'.join(new_header_parts) + '\n')
-
-                # Write coordinate labels line if it existed
-                if header_line_3.strip():
-                    new_coord_line_parts = header_line_3.strip().split('\t')[:2]
-                    for _ in all_markers_sorted:
-                        new_coord_line_parts.extend(['X', 'Y', 'Z'])
-                    f.write('\t'.join(new_coord_line_parts) + '\n')
-
-                # Write data rows
-                for row in data_rows:
-                    f.write('\t'.join(row) + '\n')
-
-            logger.info(f"Updated TRC file with all {len(all_markers)} markers ({len(missing_markers)} added)")
-
-        except Exception as e:
-            logger.error(f"Error ensuring all markers in TRC: {e}")
-
-    def _on_cancel(self):
-        """Cancel batch export."""
-        self.is_processing = False
-        self.progress_label.configure(text="Cancelling...")
-        self.cancel_button.configure(state="disabled")
+    

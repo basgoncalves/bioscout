@@ -59,6 +59,17 @@ parser.add_argument('--add_player', type=str, nargs='?', const='.', metavar='PRO
                     help="Interactively add a player to players.json in PROJECT_PATH (default: cwd)")
 parser.add_argument('--install', action='store_true',
                     help="Check dependencies and install missing ones (opensim via conda, others via pip)")
+parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SETTINGS_OR_PROJECT',
+                    help="Build kinematics/kinetics summaries. Optionally pass a settings.py "
+                         "or project path; defaults to ./settings.py then the package settings.")
+parser.add_argument('-overall', '--overall', dest='overall', action='store_true',
+                    help="With --summary: only (re)build the overall plots/metrics in <project>/summary")
+parser.add_argument('-s', '--subject', type=str, default=None, metavar='PLAYER_ID',
+                    help="With --summary: restrict to one player (e.g. -s 012)")
+parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL_PATH',
+                    help="With --summary: build only this one trial folder (fast iteration)")
+parser.add_argument('-p', '--project', type=str, default=None, metavar='PROJECT_PATH',
+                    help="With --summary: project root override (defaults to settings.PROJECT_ROOT)")
 args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
@@ -103,9 +114,86 @@ def _run_step(trial: 'utils.Analyse', step_name: str, method_name: str) -> bool:
 
 
 def _should_skip(trial_name: str, config) -> bool:
-    """Return True if this trial matches any entry in BatchSettings.trials_to_skip."""
+    """Return True if this trial should be skipped.
+
+    Logic (both lists are optional / can be left empty):
+      - If ``trials_to_run`` is non-empty, only trials whose name contains
+        at least one entry are processed; everything else is skipped.
+      - If ``trials_to_skip`` is non-empty, any trial whose name contains
+        at least one entry is skipped (applied after the whitelist check).
+    Static trials are never affected here — callers guard them separately.
+    """
+    run_list  = getattr(config, 'trials_to_run',  []) or []
     skip_list = getattr(config, 'trials_to_skip', []) or []
-    return any(s in trial_name for s in skip_list)
+
+    # Whitelist: if populated, trial must match at least one entry
+    if run_list and not any(s in trial_name for s in run_list):
+        return True
+
+    # Blacklist
+    if any(s in trial_name for s in skip_list):
+        return True
+
+    return False
+
+
+def _trc_is_valid(trc_path: str):
+    """Return (True, 'ok') if the TRC has ≥1 marker and ≥1 frame, else (False, reason)."""
+    if not os.path.exists(trc_path):
+        return False, f"file not found: {trc_path}"
+    try:
+        with open(trc_path, 'r') as fh:
+            lines = fh.readlines()
+        if len(lines) < 3:
+            return False, "file has fewer than 3 lines"
+        # Line 3 (index 2): DataRate CameraRate NumFrames NumMarkers Units ...
+        vals = lines[2].strip().split('\t')
+        num_frames  = int(float(vals[2]))
+        num_markers = int(float(vals[3]))
+        if num_markers == 0:
+            return False, f"NumMarkers=0 in TRC header"
+        if num_frames == 0:
+            return False, f"NumFrames=0 in TRC header"
+        return True, "ok"
+    except Exception as exc:
+        return False, f"could not parse TRC header: {exc}"
+
+
+def _validate_step_inputs(trial: 'utils.Analyse', step: str) -> tuple:
+    """Check that all required input files exist and are valid for *step*.
+
+    Returns (is_valid: bool, issues: list[str]).
+
+    Steps checked: 'IK', 'ID', 'SO', 'MA'.
+    """
+    issues = []
+    trc_abs  = os.path.join(trial.path, trial.markers) if not os.path.isabs(trial.markers) else trial.markers
+    grf_abs  = os.path.join(trial.path, trial.grf_mot) if not os.path.isabs(trial.grf_mot) else trial.grf_mot
+    ik_abs   = os.path.join(trial.path, trial.ik)      if not os.path.isabs(trial.ik)      else trial.ik
+    id_abs   = os.path.join(trial.path, trial.id)      if not os.path.isabs(trial.id)      else trial.id
+
+    if step == 'IK':
+        ok, reason = _trc_is_valid(trc_abs)
+        if not ok:
+            issues.append(f"marker TRC invalid — {reason}")
+
+    elif step == 'ID':
+        if not os.path.exists(ik_abs):
+            issues.append(f"IK output missing: {ik_abs}")
+        if not os.path.exists(grf_abs):
+            issues.append(f"GRF .mot missing: {grf_abs}")
+
+    elif step == 'SO':
+        if not os.path.exists(ik_abs):
+            issues.append(f"IK output missing (needed by SO): {ik_abs}")
+        if not os.path.exists(id_abs):
+            issues.append(f"ID output missing (needed by SO): {id_abs}")
+
+    elif step == 'MA':
+        if not os.path.exists(ik_abs):
+            issues.append(f"IK output missing (needed by MA): {ik_abs}")
+
+    return len(issues) == 0, issues
 
 
 def _norm(s: str) -> str:
@@ -216,6 +304,31 @@ def run_batch_mode(settings_path: str) -> bool:
     _load_settings_from_path(settings_path)
 
     config = BatchSettings
+
+    # ------------------------------------------------------------------ #
+    # PRE-FLIGHT: OpenSim must be importable, otherwise every OpenSim step
+    # (C3D export, IK, ID, SO, energetics) fails one-by-one and floods the
+    # log. Fail fast here with an actionable message instead.
+    # ------------------------------------------------------------------ #
+    if getattr(utils, 'openSim', None) is None:
+        try:
+            import opensim  # noqa: F401
+        except Exception as _osim_err:
+            logger.error("=" * 70)
+            logger.error("OpenSim is not available in this Python environment.")
+            logger.error(f"   import opensim -> {type(_osim_err).__name__}: {_osim_err}")
+            logger.error("")
+            logger.error("Every OpenSim step would fail, so the batch is aborting.")
+            logger.error("Fix: install OpenSim into the SAME environment that runs")
+            logger.error("BioScout, then re-run. With Python 3.11:")
+            logger.error("     pip install opensim")
+            logger.error("   or (any version):")
+            logger.error("     conda install -c opensim-org opensim -y")
+            logger.error("Verify with:  python -c \"import opensim; print(opensim.__version__)\"")
+            logger.error(f"Interpreter in use: {sys.executable}")
+            logger.error("=" * 70)
+            return False
+
     sessions = _discover_sessions(config)
     if not sessions:
         logger.error(
@@ -238,8 +351,14 @@ def run_batch_mode(settings_path: str) -> bool:
         logger.info("#" * 70)
         logger.info(f"# SESSION {i}/{len(sessions)} : {session_dir.name}")
         logger.info("#" * 70)
+        # Derive subject name: for Simulations/PID/session structure the subject
+        # is the parent dir (PID); for flat Simulations/PID structure it is the
+        # dir itself.  We prefer the parent when it isn't the filesystem root.
+        _subject_name = (session_dir.parent.name
+                         if session_dir.parent != session_dir.parent.parent
+                         else session_dir.name)
         try:
-            ok = _run_one_session(session_dir, config, session_dir.name,
+            ok = _run_one_session(session_dir, config, _subject_name,
                                   resolved_static)
             all_ok = all_ok and ok
         except Exception as e:
@@ -311,7 +430,7 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
                     if new_tr:
                         trial.time_range = new_tr
                         trial.update_trial_attribute('time_range', new_tr)
-                        logger.info(f"    time_range updated: {new_tr[0]:.4f} – {new_tr[1]:.4f} s")
+                        logger.info(f"    time_range updated: {float(new_tr[0]):.4f} – {float(new_tr[1]):.4f} s")
                 # Static trial only needs TRC for scaling — skip EMG processing
                 if not is_static:
                     _run_step(trial, "EMG filter", "run_emg_filter")
@@ -382,16 +501,48 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
             try:
 
                 if config.enable_inverse_kinematics:
-                    _run_step(trial, "Inverse Kinematics", "run_ik")
+                    _ok, _issues = _validate_step_inputs(trial, 'IK')
+                    if _ok:
+                        _run_step(trial, "Inverse Kinematics", "run_ik")
+                    else:
+                        logger.warning(f"  [SKIP] IK — inputs invalid: {'; '.join(_issues)}")
 
                 if config.enable_inverse_dynamics:
-                    _run_step(trial, "Inverse Dynamics", "run_id")
+                    _ok, _issues = _validate_step_inputs(trial, 'ID')
+                    if _ok:
+                        _run_step(trial, "Inverse Dynamics", "run_id")
+                    else:
+                        logger.warning(f"  [SKIP] ID — inputs invalid: {'; '.join(_issues)}")
 
                 if getattr(config, 'enable_static_optimization', False):
-                    _run_step(trial, "Static Optimization", "run_so")
+                    _ok, _issues = _validate_step_inputs(trial, 'SO')
+                    if _ok:
+                        _run_step(trial, "Static Optimization", "run_so")
+                    else:
+                        logger.warning(f"  [SKIP] SO — inputs invalid: {'; '.join(_issues)}")
 
                 if getattr(config, 'enable_muscle_analysis', False):
-                    _run_step(trial, "Muscle Analysis", "run_ma")
+                    _ok, _issues = _validate_step_inputs(trial, 'MA')
+                    if _ok:
+                        _run_step(trial, "Muscle Analysis", "run_ma")
+                    else:
+                        logger.warning(f"  [SKIP] MA — inputs invalid: {'; '.join(_issues)}")
+
+                if getattr(config, 'enable_energetics', False):
+                    # Energetics (metabolic cost) needs the IK kinematics and,
+                    # ideally, the Static Optimization activations.
+                    _ik_abs     = os.path.join(trial.path, trial.ik)
+                    _so_act_abs = os.path.join(trial.path, trial.so_activations)
+                    if not os.path.exists(_ik_abs):
+                        logger.warning(
+                            f"  [SKIP] Energetics — IK output missing: {_ik_abs}")
+                    else:
+                        if not os.path.exists(_so_act_abs):
+                            logger.warning(
+                                f"  [WARN] Energetics — SO activations missing "
+                                f"({_so_act_abs}); using default activation")
+                        _run_step(trial, "Energetics (Metabolic Cost)",
+                                  "run_energetics")
 
 
             except Exception as e:
@@ -613,179 +764,3 @@ def run_init_mode(project_path: str) -> int:
     print(f"{'='*60}")
 
     # ---------------------------------------------------------------------- #
-    # 1. Create standard folder structure
-    # ---------------------------------------------------------------------- #
-    standard_dirs = ['simulations', 'Models', 'setup_files', 'logs']
-    for d in standard_dirs:
-        target = project / d
-        if not target.exists():
-            target.mkdir(parents=True)
-            print(f"  [created]  {target}")
-        else:
-            print(f"  [exists]   {target}")
-
-    # ---------------------------------------------------------------------- #
-    # 2. Copy bundled templates (setup_files and models)
-    # ---------------------------------------------------------------------- #
-    def _copy_template_dir(src: Path, dst: Path, extensions: tuple) -> tuple:
-        """Copy files matching *extensions* from src → dst, skipping existing.
-        Returns (copied_count, skipped_count).
-        """
-        if not src.exists():
-            return 0, 0
-        copied, skipped = 0, 0
-        for item in sorted(src.rglob('*')):
-            if item.is_file() and (not extensions or item.suffix in extensions):
-                rel = item.relative_to(src)
-                target = dst / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists():
-                    skipped += 1
-                else:
-                    shutil.copy2(item, target)
-                    copied += 1
-        return copied, skipped
-
-    for tmpl_name, dst_name, exts in [
-        ('setup_files', 'setup_files', ('.xml', '.txt')),
-        ('models',      'Models',      ()),       # () = copy all (includes Geometry/ meshes)
-    ]:
-        src_dir = Path(__file__).parent / tmpl_name
-        dst_dir = project / dst_name
-        c, s = _copy_template_dir(src_dir, dst_dir, exts)
-        label = f"  [{dst_name}]"
-        if c:
-            print(f"\n{label} {c} file(s) copied to {dst_dir}")
-        if s:
-            print(f"{label} {s} file(s) already existed — not overwritten")
-        if not c and not s:
-            print(f"\n{label} No bundled templates found at {src_dir}")
-
-    # ---------------------------------------------------------------------- #
-    # 3. Copy settings template
-    # ---------------------------------------------------------------------- #
-    settings_dest = project / 'settings.py'
-    settings_src  = Path(__file__).parent / 'settings.py'
-
-    if settings_dest.exists():
-        print(f"\n  [skip] settings.py already exists — not overwriting.")
-        print(f"         Edit it directly: {settings_dest}")
-    else:
-        if settings_src.exists():
-            content = settings_src.read_text(encoding='utf-8')
-            # Replace PROJECT_ROOT with the actual project path (forward slashes
-            # work on all platforms; raw string keeps backslashes on Windows).
-            # Use a lambda replacement so re never interprets the path string
-            # as a regex escape sequence (e.g. \U on Windows would raise
-            # re.PatternError in Python 3.12+).
-            path_str = str(project).replace('\\', '/')
-            repl = f"PROJECT_ROOT    = Path(r'{path_str}')"
-            content = _re.sub(
-                r"PROJECT_ROOT\s*=\s*.*",
-                lambda _: repl,
-                content,
-                count=1,
-            )
-            settings_dest.write_text(content, encoding='utf-8')
-            print(f"\n  [created]  {settings_dest}")
-            print(f"  ⚠  Edit PLAYERS and generic_model / markerset paths before running --batch.")
-        else:
-            print(f"\n  [warn] Package settings.py template not found at {settings_src}.")
-
-    # ---------------------------------------------------------------------- #
-    # 3. Check existing simulations against PLAYERS in settings.py
-    # ---------------------------------------------------------------------- #
-    sims_dir = project / 'simulations'
-    if sims_dir.exists():
-        sim_folders = sorted(
-            d.name for d in sims_dir.iterdir() if d.is_dir()
-        )
-
-        if sim_folders:
-            # Try to load PLAYERS from the settings file
-            players_in_settings: Optional[set] = None
-            try:
-                import importlib.util as _ilu
-                _spec = _ilu.spec_from_file_location('_init_settings', str(settings_dest))
-                _mod  = _ilu.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)
-                if hasattr(_mod, 'PLAYERS'):
-                    players_in_settings = set(_mod.PLAYERS.keys())
-            except Exception as _e:
-                print(f"\n  [warn] Could not parse PLAYERS from settings.py: {_e}")
-
-            print(f"\n  Simulation folders found  : {sim_folders}")
-
-            if players_in_settings is not None:
-                print(f"  PLAYERS in settings.py    : {sorted(players_in_settings)}")
-                missing_from_settings = set(sim_folders) - players_in_settings
-                missing_from_disk     = players_in_settings - set(sim_folders)
-
-                if missing_from_settings:
-                    print(f"\n  ⚠  WARNING: these folders exist in simulations/ but are NOT in PLAYERS:")
-                    for m in sorted(missing_from_settings):
-                        print(f"       {m}")
-                if missing_from_disk:
-                    print(f"\n  ⚠  WARNING: these PLAYERS entries have no folder in simulations/:")
-                    for m in sorted(missing_from_disk):
-                        print(f"       {m}")
-                if not missing_from_settings and not missing_from_disk:
-                    print(f"\n  ✓  simulations/ folders match PLAYERS in settings.py.")
-            else:
-                print(f"\n  [info] Add these folder names to PLAYERS in settings.py:")
-                for f in sim_folders:
-                    print(f"           '{f}': PlayerConfig(group=''),")
-
-    print(f"\n{'='*60}")
-    print(f"Project ready. Next steps:")
-    print(f"  1. Edit {settings_dest}")
-    print(f"     — set PLAYERS, generic_model, markerset")
-    print(f"  2. cd {project}")
-    print(f"  3. python -m bioscout -b settings.py")
-    print(f"{'='*60}\n")
-    return 0
-
-
-def _is_video_batch_settings(settings_path: str) -> bool:
-    """Return True if the settings file looks like a video batch config (has 'videos' key)."""
-    import json
-    try:
-        cfg = json.loads(Path(settings_path).read_text())
-        return "videos" in cfg
-    except Exception:
-        return False
-
-
-def run_add_player_mode(project_path: str) -> int:
-    """Interactively add a player to players.json in *project_path*."""
-    from utils.player_registry import PlayerRegistry, prompt_add_player
-    root = Path(project_path).resolve()
-    if not root.is_dir():
-        print(f"[error] Project path does not exist: {root}")
-        return 1
-    registry = PlayerRegistry(root)
-    existing = registry.all_ids()
-    if existing:
-        print(f"  {len(existing)} player(s) already registered: {', '.join(existing)}")
-    pid = prompt_add_player(registry)
-    return 0 if pid else 1
-
-
-def main() -> int:
-    if args.install:
-        from utils.dependency_installer import install_missing
-        return 0 if install_missing(interactive=True) else 1
-    if args.add_player is not None:
-        return run_add_player_mode(args.add_player)
-    if args.init:
-        return run_init_mode(args.init)
-    if args.batch:
-        if _is_video_batch_settings(args.batch):
-            return 0 if run_video_batch_mode(args.batch) else 1
-        return 0 if run_batch_mode(args.batch) else 1
-    # GUI mode: explicit --gui flag, or no arguments at all
-    return run_gui_mode()
-
-
-if __name__ == '__main__':
-    sys.exit(main())
