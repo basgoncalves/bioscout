@@ -518,4 +518,3 @@ class Inputs:
 # BACKWARD COMPATIBILITY
 # ============================================================================
 Config = BatchSettings
-   

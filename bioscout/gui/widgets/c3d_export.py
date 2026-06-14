@@ -606,4 +606,73 @@ class C3DExportTab(ctk.CTkFrame):
 
     @staticmethod
     def _create_grf_xml(output_folder: Path) -> None:
-        """Create GRF.xml (OpenSim ExternalLoads) referencing grf
+        """Create GRF.xml (OpenSim ExternalLoads) referencing grf.mot.
+
+        Reads grf.mot column headers to discover force-plate IDs, then writes
+        one ExternalForce block per plate.  Plate 1 defaults to right calcaneus,
+        plate 2 to left calcaneus; additional plates use a generic body name.
+        """
+        try:
+            import re as _re
+            import xml.etree.ElementTree as _ET
+            from xml.dom import minidom as _md
+
+            grf_mot = output_folder / "grf.mot"
+            if not grf_mot.exists():
+                logger.warning("grf.mot not found – skipping GRF.xml creation")
+                return
+
+            # Discover plate IDs from column names like ground_force_1_vx
+            plate_ids = []
+            with open(str(grf_mot), 'r', errors='replace') as fh:
+                for line in fh:
+                    if 'ground_force' in line.lower():
+                        plate_ids = sorted(set(
+                            _re.findall(r'ground_force_(\d+)_v', line)))
+                        break
+            if not plate_ids:
+                plate_ids = ['1', '2']
+
+            _default_bodies = {0: 'calcn_r', 1: 'calcn_l'}
+
+            root = _ET.Element('OpenSimDocument')
+            root.set('Version', '40000')
+            ext_loads = _ET.SubElement(root, 'ExternalLoads')
+            ext_loads.set('name', 'externalloads')
+            objects = _ET.SubElement(ext_loads, 'objects')
+
+            for idx, pid in enumerate(plate_ids):
+                body = _default_bodies.get(idx, f'calcn_{idx}')
+                ef = _ET.SubElement(objects, 'ExternalForce')
+                ef.set('name', f'grf_plate{pid}')
+                _ET.SubElement(ef, 'applied_to_body').text         = body
+                _ET.SubElement(ef, 'force_expressed_in_body').text = 'ground'
+                _ET.SubElement(ef, 'point_expressed_in_body').text = 'ground'
+                _ET.SubElement(ef, 'force_identifier').text        = f'ground_force_{pid}_v'
+                _ET.SubElement(ef, 'point_identifier').text        = f'ground_force_{pid}_p'
+                _ET.SubElement(ef, 'torque_identifier').text       = f'ground_moment_{pid}_m'
+                _ET.SubElement(ef, 'data_source_name').text        = ''
+
+            _ET.SubElement(ext_loads, 'groups')
+            _ET.SubElement(ext_loads, 'datafile').text = 'grf.mot'
+            _ET.SubElement(ext_loads, 'external_loads_model_kinematics_file').text = ''
+            _ET.SubElement(ext_loads, 'lowpass_cutoff_frequency_for_load_kinematics').text = '6'
+
+            xml_str = _md.parseString(_ET.tostring(root)).toprettyxml(indent='   ')
+            xml_str = '\n'.join(l for l in xml_str.splitlines() if l.strip())
+
+            grf_xml = output_folder / 'GRF.xml'
+            with open(str(grf_xml), 'w', encoding='utf-8') as fh:
+                fh.write(xml_str)
+
+            print(f"[OK] Created GRF.xml ({len(plate_ids)} force plate(s))")
+            logger.info(f"GRF.xml created: {grf_xml}")
+
+        except Exception as exc:
+            logger.warning(f"Could not create GRF.xml: {exc}")
+
+    def _log_status(self, message):
+        """Update status message."""
+        self.status_label.configure(text=message)
+        logger.debug(f"C3D Export: {message}")
+        self.update()

@@ -863,4 +863,12 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
     print("[main_window] mainloop() returned — window was closed.", flush=True)
 
 
-if __name__ 
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="BioScout")
+    parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode")
+    parser.add_argument("--screen-x", type=int, help="Force window X position (e.g., 1920 for secondary screen)")
+    parser.add_argument("--screen-y", type=int, help="Force window Y position")
+
+    args = parser.parse_args()
+    main(fullscreen=args.fullscreen, screen_x=args.screen_x, screen_y=args.screen_y)

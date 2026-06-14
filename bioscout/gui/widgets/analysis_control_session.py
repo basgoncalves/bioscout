@@ -760,3 +760,13 @@ class AnalysisControlSessionTab(ctk.CTkFrame):
         status = progress_info.get('status', '')
         progress = progress_info.get('progress', 0)
         if progress is not None:
+            self.progress_bar.set(progress / 100)
+        status_msg = f"{step}: {status}" if step else status
+        self.status_label.configure(text=status_msg)
+        logger.debug(f"Progress: {status_msg}")
+
+    def _string_to_step(self, step_name: str) -> AnalysisStep:
+        for step in AnalysisStep:
+            if step.value == step_name:
+                return step
+        raise ValueError(f"Unknown step: {step_name}")

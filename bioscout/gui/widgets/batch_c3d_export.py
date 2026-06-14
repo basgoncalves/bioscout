@@ -1506,4 +1506,114 @@ class BatchC3DExport(ctk.CTkFrame):
                     # Add three columns for X, Y, Z with zero values
                     row.append("0.000000")
                     row.append("0.000000")
-    
+                    row.append("0.000000")
+
+            # Reconstruct the marker names header with all markers in sorted order
+            all_markers_sorted = sorted(all_markers)
+            new_header_parts = header_parts[:2]  # Keep Frame# and Time
+
+            for marker in all_markers_sorted:
+                new_header_parts.append(marker)
+                new_header_parts.append("X")
+                new_header_parts.append("Y")
+                new_header_parts.append("Z")
+
+            # Write updated TRC file
+            with open(str(trc_file), 'w') as f:
+                f.write(header_line_0)
+                f.write(header_line_1)
+                f.write('\t'.join(new_header_parts) + '\n')
+
+                # Write coordinate labels line if it existed
+                if header_line_3.strip():
+                    new_coord_line_parts = header_line_3.strip().split('\t')[:2]
+                    for _ in all_markers_sorted:
+                        new_coord_line_parts.extend(['X', 'Y', 'Z'])
+                    f.write('\t'.join(new_coord_line_parts) + '\n')
+
+                # Write data rows
+                for row in data_rows:
+                    f.write('\t'.join(row) + '\n')
+
+            logger.info(f"Updated TRC file with all {len(all_markers)} markers ({len(missing_markers)} added)")
+
+        except Exception as e:
+            logger.error(f"Error ensuring all markers in TRC: {e}")
+
+    @staticmethod
+    def _create_grf_xml(output_folder: Path) -> None:
+        """Create GRF.xml (OpenSim ExternalLoads) referencing grf.mot.
+
+        Reads the grf.mot header to discover force-plate IDs and writes one
+        ExternalForce block per plate.  Plate 1 defaults to right calcaneus,
+        plate 2 to left calcaneus; additional plates use a generic body name.
+        """
+        try:
+            grf_mot = output_folder / "grf.mot"
+            if not grf_mot.exists():
+                logger.warning("grf.mot not found – skipping GRF.xml creation")
+                return
+
+            # ── discover plate IDs from grf.mot column headers ────────────
+            import re as _re
+            plate_ids = []
+            with open(str(grf_mot), 'r', errors='replace') as fh:
+                for line in fh:
+                    if 'ground_force' in line.lower():
+                        plate_ids = sorted(set(
+                            _re.findall(r'ground_force_(\d+)_v', line)))
+                        break
+
+            if not plate_ids:
+                # Fall back to two plates if we couldn't parse
+                plate_ids = ['1', '2']
+
+            # Default body assignments (user can edit in OpenSim)
+            _default_bodies = {0: 'calcn_r', 1: 'calcn_l'}
+
+            # ── build XML ─────────────────────────────────────────────────
+            root = ET.Element('OpenSimDocument')
+            root.set('Version', '40000')
+
+            ext_loads = ET.SubElement(root, 'ExternalLoads')
+            ext_loads.set('name', 'externalloads')
+
+            objects = ET.SubElement(ext_loads, 'objects')
+
+            for idx, pid in enumerate(plate_ids):
+                body = _default_bodies.get(idx, f'calcn_{idx}')
+                ef = ET.SubElement(objects, 'ExternalForce')
+                ef.set('name', f'grf_plate{pid}')
+                ET.SubElement(ef, 'applied_to_body').text          = body
+                ET.SubElement(ef, 'force_expressed_in_body').text  = 'ground'
+                ET.SubElement(ef, 'point_expressed_in_body').text  = 'ground'
+                ET.SubElement(ef, 'force_identifier').text         = f'ground_force_{pid}_v'
+                ET.SubElement(ef, 'point_identifier').text         = f'ground_force_{pid}_p'
+                ET.SubElement(ef, 'torque_identifier').text        = f'ground_moment_{pid}_m'
+                ET.SubElement(ef, 'data_source_name').text         = ''
+
+            ET.SubElement(ext_loads, 'groups')
+            ET.SubElement(ext_loads, 'datafile').text = 'grf.mot'
+            ET.SubElement(ext_loads, 'external_loads_model_kinematics_file').text = ''
+            ET.SubElement(ext_loads, 'lowpass_cutoff_frequency_for_load_kinematics').text = '6'
+
+            # ── pretty-print ──────────────────────────────────────────────
+            from xml.dom import minidom as _md
+            xml_str = _md.parseString(ET.tostring(root)).toprettyxml(indent='   ')
+            xml_str = '\n'.join(l for l in xml_str.splitlines() if l.strip())
+
+            grf_xml = output_folder / 'GRF.xml'
+            with open(str(grf_xml), 'w', encoding='utf-8') as fh:
+                fh.write(xml_str)
+
+            print(f"[OK] Created GRF.xml ({len(plate_ids)} force plate(s))")
+            logger.info(f"GRF.xml created: {grf_xml}")
+
+        except Exception as exc:
+            logger.warning(f"Could not create GRF.xml: {exc}")
+
+    def _on_cancel(self):
+        """Cancel batch export."""
+        self.is_processing = False
+        self.progress_label.configure(text="Cancelling...")
+        self.cancel_button.configure(state="disabled")

@@ -68,6 +68,29 @@ parser.add_argument('-s', '--subject', type=str, default=None, metavar='PLAYER_I
                     help="With --summary: restrict to one player (e.g. -s 012)")
 parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL_PATH',
                     help="With --summary: build only this one trial folder (fast iteration)")
+parser.add_argument('--shots', type=str, default=None, metavar='VIDEO',
+                    help="Basketball shot analysis: count shots, per-shot kinematics (0-100%%), "
+                         "assisted made/missed tagging, kinematics-only muscle forces")
+parser.add_argument('--shooting-hand', type=str, default='right', choices=['right', 'left'],
+                    help="With --shots: which hand releases the ball (default: right)")
+parser.add_argument('--poses', type=str, default=None, metavar='POSES_JSON',
+                    help="With --shots: precomputed {frame:{landmark:[x,y]}} JSON (skip MediaPipe). "
+                         "A poses.json is written to the output folder on every run for re-tuning.")
+parser.add_argument('--fps', type=float, default=None,
+                    help="With --shots: override the video frame rate (e.g. 5 for 5 fps footage)")
+parser.add_argument('--min-gap', type=float, default=1.5, dest='min_gap',
+                    help="With --shots: minimum seconds between detected shots (default 1.5)")
+parser.add_argument('--n-points', type=int, default=1000, dest='n_points',
+                    help="With --shots: samples per shot for the smooth 0-100%% curves (default 1000)")
+parser.add_argument('--hoop-side', type=str, default='auto', dest='hoop_side',
+                    choices=['auto', 'right', 'left'],
+                    help="With --shots: which side the hoop is on (ball flies toward it). Default auto")
+parser.add_argument('--yolo-model', type=str, default=None, dest='yolo_model', metavar='WEIGHTS.pt',
+                    help="With --shots: YOLO (ultralytics) ball+hoop model -> robust avishah3-style "
+                         "shot/make detection. `pip install ultralytics` and supply a trained model.")
+parser.add_argument('--hoop', type=str, default=None, metavar='CX,CY,W,H',
+                    help="With --shots: rim box (pixels) for hoop-based detection without YOLO "
+                         "(uses HSV ball + this hoop). E.g. --hoop 955,235,70,40")
 parser.add_argument('-p', '--project', type=str, default=None, metavar='PROJECT_PATH',
                     help="With --summary: project root override (defaults to settings.PROJECT_ROOT)")
 args = parser.parse_args()
@@ -764,3 +787,205 @@ def run_init_mode(project_path: str) -> int:
     print(f"{'='*60}")
 
     # ---------------------------------------------------------------------- #
+    # 1. Create standard folder structure
+    # ---------------------------------------------------------------------- #
+    standard_dirs = ['simulations', 'Models', 'setup_files', 'logs']
+    for d in standard_dirs:
+        target = project / d
+        if not target.exists():
+            target.mkdir(parents=True)
+            print(f"  [created]  {target}")
+        else:
+            print(f"  [exists]   {target}")
+
+    # ---------------------------------------------------------------------- #
+    # 2. Copy bundled templates (setup_files and models)
+    # ---------------------------------------------------------------------- #
+    def _copy_template_dir(src: Path, dst: Path, extensions: tuple) -> tuple:
+        """Copy files matching *extensions* from src → dst, skipping existing.
+        Returns (copied_count, skipped_count).
+        """
+        if not src.exists():
+            return 0, 0
+        copied, skipped = 0, 0
+        for item in sorted(src.rglob('*')):
+            if item.is_file() and (not extensions or item.suffix in extensions):
+                rel = item.relative_to(src)
+                target = dst / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    skipped += 1
+                else:
+                    shutil.copy2(item, target)
+                    copied += 1
+        return copied, skipped
+
+    for tmpl_name, dst_name, exts in [
+        ('setup_files', 'setup_files', ('.xml', '.txt')),
+        ('models',      'Models',      ()),       # () = copy all (includes Geometry/ meshes)
+    ]:
+        src_dir = Path(__file__).parent / tmpl_name
+        dst_dir = project / dst_name
+        c, s = _copy_template_dir(src_dir, dst_dir, exts)
+        label = f"  [{dst_name}]"
+        if c:
+            print(f"\n{label} {c} file(s) copied to {dst_dir}")
+        if s:
+            print(f"{label} {s} file(s) already existed — not overwritten")
+        if not c and not s:
+            print(f"\n{label} No bundled templates found at {src_dir}")
+
+    # ---------------------------------------------------------------------- #
+    # 3. Copy settings template
+    # ---------------------------------------------------------------------- #
+    settings_dest = project / 'settings.py'
+    settings_src  = Path(__file__).parent / 'settings.py'
+
+    if settings_dest.exists():
+        print(f"\n  [skip] settings.py already exists — not overwriting.")
+        print(f"         Edit it directly: {settings_dest}")
+    else:
+        if settings_src.exists():
+            content = settings_src.read_text(encoding='utf-8')
+            # Replace PROJECT_ROOT with the actual project path (forward slashes
+            # work on all platforms; raw string keeps backslashes on Windows).
+            # Use a lambda replacement so re never interprets the path string
+            # as a regex escape sequence (e.g. \U on Windows would raise
+            # re.PatternError in Python 3.12+).
+            path_str = str(project).replace('\\', '/')
+            repl = f"PROJECT_ROOT    = Path(r'{path_str}')"
+            content = _re.sub(
+                r"PROJECT_ROOT\s*=\s*.*",
+                lambda _: repl,
+                content,
+                count=1,
+            )
+            settings_dest.write_text(content, encoding='utf-8')
+            print(f"\n  [created]  {settings_dest}")
+            print(f"  ⚠  Edit PLAYERS and generic_model / markerset paths before running --batch.")
+        else:
+            print(f"\n  [warn] Package settings.py template not found at {settings_src}.")
+
+    # ---------------------------------------------------------------------- #
+    # 3. Check existing simulations against PLAYERS in settings.py
+    # ---------------------------------------------------------------------- #
+    sims_dir = project / 'simulations'
+    if sims_dir.exists():
+        sim_folders = sorted(
+            d.name for d in sims_dir.iterdir() if d.is_dir()
+        )
+
+        if sim_folders:
+            # Try to load PLAYERS from the settings file
+            players_in_settings: Optional[set] = None
+            try:
+                import importlib.util as _ilu
+                _spec = _ilu.spec_from_file_location('_init_settings', str(settings_dest))
+                _mod  = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                if hasattr(_mod, 'PLAYERS'):
+                    players_in_settings = set(_mod.PLAYERS.keys())
+            except Exception as _e:
+                print(f"\n  [warn] Could not parse PLAYERS from settings.py: {_e}")
+
+            print(f"\n  Simulation folders found  : {sim_folders}")
+
+            if players_in_settings is not None:
+                print(f"  PLAYERS in settings.py    : {sorted(players_in_settings)}")
+                missing_from_settings = set(sim_folders) - players_in_settings
+                missing_from_disk     = players_in_settings - set(sim_folders)
+
+                if missing_from_settings:
+                    print(f"\n  ⚠  WARNING: these folders exist in simulations/ but are NOT in PLAYERS:")
+                    for m in sorted(missing_from_settings):
+                        print(f"       {m}")
+                if missing_from_disk:
+                    print(f"\n  ⚠  WARNING: these PLAYERS entries have no folder in simulations/:")
+                    for m in sorted(missing_from_disk):
+                        print(f"       {m}")
+                if not missing_from_settings and not missing_from_disk:
+                    print(f"\n  ✓  simulations/ folders match PLAYERS in settings.py.")
+            else:
+                print(f"\n  [info] Add these folder names to PLAYERS in settings.py:")
+                for f in sim_folders:
+                    print(f"           '{f}': PlayerConfig(group=''),")
+
+    print(f"\n{'='*60}")
+    print(f"Project ready. Next steps:")
+    print(f"  1. Edit {settings_dest}")
+    print(f"     — set PLAYERS, generic_model, markerset")
+    print(f"  2. cd {project}")
+    print(f"  3. python -m bioscout -b settings.py")
+    print(f"{'='*60}\n")
+    return 0
+
+
+def _is_video_batch_settings(settings_path: str) -> bool:
+    """Return True if the settings file looks like a video batch config (has 'videos' key)."""
+    import json
+    try:
+        cfg = json.loads(Path(settings_path).read_text())
+        return "videos" in cfg
+    except Exception:
+        return False
+
+
+def run_add_player_mode(project_path: str) -> int:
+    """Interactively add a player to players.json in *project_path*."""
+    from utils.player_registry import PlayerRegistry, prompt_add_player
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        print(f"[error] Project path does not exist: {root}")
+        return 1
+    registry = PlayerRegistry(root)
+    existing = registry.all_ids()
+    if existing:
+        print(f"  {len(existing)} player(s) already registered: {', '.join(existing)}")
+    pid = prompt_add_player(registry)
+    return 0 if pid else 1
+
+
+def main() -> int:
+    if args.install:
+        from utils.dependency_installer import install_missing
+        return 0 if install_missing(interactive=True) else 1
+    if args.add_player is not None:
+        return run_add_player_mode(args.add_player)
+    if args.shots:
+        from shot_analysis import analyze_video
+        _model = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'models', 'kinematics_only_model.pkl')
+        _hoop = None
+        if args.hoop:
+            try:
+                _hoop = tuple(float(v) for v in args.hoop.split(','))
+                assert len(_hoop) == 4
+            except Exception:
+                print("[shots] --hoop must be CX,CY,W,H (e.g. 955,235,70,40); ignoring")
+                _hoop = None
+        analyze_video(args.shots, shooting_hand=args.shooting_hand,
+                      poses=args.poses, fps=args.fps,
+                      min_gap_s=args.min_gap, n_points=args.n_points,
+                      hoop_side=args.hoop_side, yolo_model=args.yolo_model, hoop=_hoop,
+                      model_path=_model if os.path.exists(_model) else None)
+        return 0
+    if args.summary is not None:
+        from utils.summary import run_summary
+        ok = run_summary(settings_path=(args.summary or None),
+                         subject=args.subject,
+                         overall_only=args.overall,
+                         project_root=args.project,
+                         trial_path=args.trial)
+        return 0 if ok else 1
+    if args.init:
+        return run_init_mode(args.init)
+    if args.batch:
+        if _is_video_batch_settings(args.batch):
+            return 0 if run_video_batch_mode(args.batch) else 1
+        return 0 if run_batch_mode(args.batch) else 1
+    # GUI mode: explicit --gui flag, or no arguments at all
+    return run_gui_mode()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

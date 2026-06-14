@@ -91,7 +91,7 @@ emg_normalise = None
 HAS_EMG_NORMALISE = False
 
 
-__version__ = '0.1.1'
+__version__ = '1.2.0'
 
 # Project directories
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5278,4 +5278,21 @@ try:
     # Load utils/ceinms.py explicitly — `import ceinms` would grab the
     # utils/ceinms/ binary package instead (package takes precedence over
     # the .py module when both share the same name).
-    import importlib.uti
+    import importlib.util as _ilu_c
+    _ceinms_py_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ceinms.py')
+    _ceinms_spec = _ilu_c.spec_from_file_location('ceinms_py', _ceinms_py_path)
+    _ceinms_mod = _ilu_c.module_from_spec(_ceinms_spec)
+    _ceinms_spec.loader.exec_module(_ceinms_mod)
+    ceinms = _ceinms_mod
+    HAS_CEINMS = True
+except Exception:
+    HAS_CEINMS = False
+    ceinms = None
+
+try:
+    import emg_normalise as _emg_mod
+    emg_normalise = _emg_mod
+    HAS_EMG_NORMALISE = True
+except ImportError:
+    HAS_EMG_NORMALISE = False
+    emg_normalise = None

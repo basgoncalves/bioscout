@@ -654,4 +654,224 @@ def plot_overall(targets, project_root, out_dir=None):
 
     groups = {}
     for t in targets:
-        groups.setdefault(_trial_type(t["trial"]), []).
+        groups.setdefault(_trial_type(t["trial"]), []).append(t)
+
+    saved = []
+    for gtype, items in sorted(groups.items()):
+        data = {}
+        for t in items:
+            for _, members in cols_def:
+                for dof, side in members:
+                    s = _trial_series(t["path"], dof)
+                    for k, df in s.items():
+                        data.setdefault((k, dof), []).append(df)
+
+        ncols, nrows = len(cols_def), len(rows_keys)
+        fig, ax = plt.subplots(nrows, ncols, figsize=(max(3.4 * ncols, 6), 2.3 * nrows),
+                               squeeze=False)
+        for jc, (title, members) in enumerate(cols_def):
+            for ri, key in enumerate(rows_keys):
+                a = ax[ri, jc]
+                any_drew = False
+                for dof, side in members:
+                    dfl = data.get((key, dof), [])
+                    if dfl:
+                        try:
+                            utils.plot_mean_error_shade(
+                                a, dfl, "pct", "val", color=_side_color(side),
+                                label={"l": "Left", "r": "Right"}.get(side, "—"))
+                            any_drew = True
+                        except Exception:
+                            pass
+                if not any_drew:
+                    _empty(a)
+                else:
+                    _legend(a)
+                if ri == 0:
+                    a.set_title(title, fontsize=9)
+                if ri == nrows - 1:
+                    a.set_xlabel("% trial")
+                if jc == 0:
+                    a.set_ylabel(ROW_LABELS[key])
+        fig.suptitle(f"Overall: {gtype}  (n={len(items)} trials)", fontsize=12)
+        fig.tight_layout(rect=(0, 0, 1, 0.98))
+        png = os.path.join(out_dir, f"overall_{gtype}.png")
+        try:
+            fig.savefig(png, dpi=130)
+        finally:
+            plt.close(fig)
+        saved.append(png)
+    return saved
+
+
+# ----------------------------------------------------------------------------
+# Report writers
+# ----------------------------------------------------------------------------
+def _write_csv(rows, out_dir):
+    if not rows:
+        return None
+    path = os.path.join(out_dir, "summary_metrics.csv")
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def _write_report(rows, overall_pngs, out_dir, project_root, subject=None):
+    df = pd.DataFrame(rows) if rows else pd.DataFrame()
+    md = os.path.join(out_dir, "summary_report.md")
+    scope = f"player {subject}" if subject else "all players"
+    lines = ["# BioScout Summary Report", "",
+             f"Scope: **{scope}**  |  Project: `{project_root}`", "",
+             "Columns = joints (left red, right blue). Rows: "
+             + ", ".join(_rows()) + ".", ""]
+    if not df.empty:
+        n_tr = df[["player", "session", "trial"]].drop_duplicates().shape[0]
+        lines += [f"- Trials summarised: **{n_tr}**",
+                  f"- Players: {', '.join(sorted(df['player'].unique()))}",
+                  f"- Trial types: {', '.join(sorted(df['trial_type'].unique()))}", "",
+                  "## Mean metrics by trial type & DOF", "",
+                  "| Trial type | DOF | Marker err (mm) | Moment R2 | Moment RMSE% |",
+                  "|---|---|---|---|---|"]
+        agg = {}
+        if "marker_err_mm" in df.columns:
+            agg["marker_err_mm"] = ("marker_err_mm", "mean")
+        agg["moment_R2"] = ("moment_R2", "mean")
+        agg["moment_RMSE_pct"] = ("moment_RMSE_pct", "mean")
+        g = df.groupby(["trial_type", "dof"]).agg(**agg).reset_index()
+
+        def _f(x):
+            return "-" if pd.isna(x) else f"{x:.2f}"
+        for _, r in g.iterrows():
+            lines.append(f"| {r['trial_type']} | {r['dof']} | {_f(r.get('marker_err_mm'))} "
+                         f"| {_f(r['moment_R2'])} | {_f(r['moment_RMSE_pct'])} |")
+        lines.append("")
+    lines += ["## Overall plots", ""]
+    for p in overall_pngs:
+        rel = os.path.relpath(p, out_dir)
+        lines += [f"### {Path(p).stem}", f"![{Path(p).stem}]({rel})", ""]
+    with open(md, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+    pdf_path = os.path.join(out_dir, "summary_report.pdf")
+    try:
+        with PdfPages(pdf_path) as pdf:
+            fig = plt.figure(figsize=(11, 8.5))
+            fig.text(0.5, 0.95, "BioScout Summary Report", ha="center", fontsize=18)
+            fig.text(0.5, 0.91, f"Scope: {scope}", ha="center", fontsize=11)
+            pdf.savefig(fig)
+            plt.close(fig)
+            for p in overall_pngs:
+                if not os.path.exists(p):
+                    continue
+                img = plt.imread(p)
+                fig = plt.figure(figsize=(11, 8.5))
+                axi = fig.add_axes([0, 0, 1, 1])
+                axi.imshow(img)
+                axi.axis("off")
+                pdf.savefig(fig)
+                plt.close(fig)
+    except Exception as e:
+        print(f"[summary] PDF generation skipped: {e}")
+        pdf_path = None
+    return md, pdf_path
+
+
+# ----------------------------------------------------------------------------
+# Public entry point
+# ----------------------------------------------------------------------------
+def run_summary(settings_path=None, subject=None, overall_only=False,
+                project_root=None, trial_path=None):
+    """Build summaries. ``trial_path`` (or a trial directory passed as
+    ``settings_path``) restricts to a single trial for fast iteration."""
+    try:
+        from utils.logger import logger
+    except Exception:
+        import logging
+        logger = logging.getLogger("bioscout.summary")
+        logging.basicConfig(level=logging.INFO)
+
+    # If --summary was given a trial directory, treat it as single-trial mode.
+    if trial_path is None and settings_path:
+        p = Path(settings_path)
+        if p.is_dir() and (p / "joint_angles.mot").exists():
+            trial_path = str(p)
+            settings_path = None
+
+    if trial_path:
+        sp = settings_path or _find_settings_upwards(trial_path)
+        _, used = _resolve_settings(sp)
+    else:
+        _, used = _resolve_settings(settings_path)
+    root = _project_root(project_root)
+
+    logger.info("=" * 70)
+    logger.info("BioScout — Summary")
+    logger.info(f"Settings       : {used}")
+    logger.info(f"Rows           : {', '.join(_rows())}")
+    logger.info(f"EMG source     : {_emg_file_order()[0]} (fallbacks: "
+                f"{', '.join(_emg_file_order()[1:])})")
+
+    # --- single-trial mode ---
+    if trial_path:
+        if not _is_processed(trial_path):
+            logger.error(f"Not a processed trial (no joint_angles.mot): {trial_path}")
+            return False
+        info = _info_from_path(trial_path)
+        logger.info(f"Single trial   : {info['player']}/{info['session']}/{info['trial']}")
+        logger.info("=" * 70)
+        try:
+            _, png = plot_trial(info)
+            logger.info(f"[OK] {png}")
+            logger.info("=" * 70)
+            return True
+        except Exception as e:
+            logger.error(f"[ERROR] {info['trial']}: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    targets = discover(root, subject=subject)
+    logger.info(f"Project        : {root}")
+    logger.info(f"Scope          : {'player ' + subject if subject else 'all players'}")
+    logger.info(f"Mode           : {'overall only' if overall_only else 'per-trial + overall'}")
+    logger.info(f"Processed trials found : {len(targets)}")
+    logger.info("=" * 70)
+    if not targets:
+        logger.error("No processed trials found under "
+                     f"{_sims_dir(root)}. Check the settings path / project root.")
+        return False
+
+    all_rows = []
+    if not overall_only:
+        for t in targets:
+            try:
+                rows, png = plot_trial(t)
+                all_rows.extend(rows)
+                logger.info(f"  [OK] {t['player']}/{t['session']}/{t['trial']} -> {png}")
+            except Exception as e:
+                logger.error(f"  [ERROR] {t['player']}/{t['session']}/{t['trial']}: {e}")
+                logger.debug(traceback.format_exc())
+    else:
+        tmp = _summary_dir(root, "_per_trial_tmp")
+        for t in targets:
+            try:
+                rows, _ = plot_trial(t, save_dir=tmp)
+                all_rows.extend(rows)
+            except Exception as e:
+                logger.debug(f"metrics gather failed for {t['trial']}: {e}")
+
+    out_dir = _summary_dir(root)
+    overall_pngs = plot_overall(targets, root, out_dir=out_dir)
+    csv_path = _write_csv(all_rows, out_dir)
+    md_path, pdf_path = _write_report(all_rows, overall_pngs, out_dir, root, subject=subject)
+    if subject:
+        _write_csv([r for r in all_rows if r["player"] == subject],
+                   _summary_dir(root, subject))
+
+    logger.info("-" * 70)
+    logger.info(f"Overall figures : {len(overall_pngs)} -> {out_dir}")
+    if csv_path:
+        logger.info(f"Metrics CSV     : {csv_path}")
+    if md_path:
+        logger.info(f"Report          : {md_path}")
+    logger.info("[OK] Summary complete.")
+    logger.info("=" * 70)
+    return True

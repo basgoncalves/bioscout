@@ -23,10 +23,34 @@ see <a href="LICENSE">License</a>
 
 ## What it does
 
-- **Full OpenSim pipeline** — C3D → scaling → IK → ID → static optimisation → CEINMS muscle forces
+- **Full OpenSim pipeline** — C3D → scaling → IK → ID → static optimisation → muscle analysis → energetics → CEINMS muscle forces
 - **Computer vision kinematics** — pose detection from phone or laptop camera
+- **Session summaries** — `python -m bioscout --summary` builds per‑trial and overall kinematics/kinetics/muscle reports
+- **Shot analysis (prototype)** — `python -m bioscout --shots video.mp4` counts shots, detects made/missed, and extracts per‑shot kinematics + muscle forces from a basketball video
 - **Player profiles** — organise athlete data across sessions, assign groups, track over time
 - **Batch processing** — run entire pipelines overnight with a single settings file
+
+See [CHANGELOG.md](CHANGELOG.md) for what's new in **v1.2.0** (energetics, `--summary`, EMG fix, shot analysis).
+
+---
+
+## Shot analysis (computer vision) — new in 1.2.0
+
+From a basketball video: count shot attempts, flag made/missed, and produce a
+per‑shot **card** — stick figure with joint angles and release angle on the
+release frame, beside the ball path and IN/OUT at the rim.
+
+![Shot analysis card](https://raw.githubusercontent.com/basgoncalves/bioscout/main/bioscout/utils/shot_analysis_card.png)
+
+```bash
+# Hoop method (avishah3-style ball+hoop scoring); use a YOLO model for robust detection
+python -m bioscout --shots "clip.mp4" --shooting-hand right --yolo-model best.pt
+# ...or HSV ball + a manual rim box (CX,CY,W,H)
+python -m bioscout --shots "clip.mp4" --shooting-hand right --hoop 928,233,45,18
+```
+
+> Works best on **close-up, ~30–60 fps** footage with the shooter roughly
+> side-on. See the CHANGELOG for current limitations.
 
 ---
 
