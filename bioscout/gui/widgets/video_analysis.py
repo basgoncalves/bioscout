@@ -115,6 +115,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
             logger.warning(f"VideoAnalysisTab: player profiles unavailable: {_e}")
             self._player_store = None
         self._active_profile = None
+        # Active project root (set by set_project_dir); exports default here.
+        self._project_dir: Optional[Path] = Path.cwd()
 
         self._video_path: Optional[Path] = None
         self._process: Optional[subprocess.Popen] = None
@@ -2429,6 +2431,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         except Exception as e:
             logger.warning(f"VideoAnalysisTab.set_project_dir failed: {e}")
             return
+        self._project_dir = Path(project_dir)
         self._active_profile = None
         self._refresh_player_menu()
 
@@ -2766,10 +2769,18 @@ class VideoAnalysisTab(ctk.CTkFrame):
         return "unknown_athlete"
 
     def _base_output_dir(self) -> Path:
-        """Return the base directory for simulations (from output_entry or video parent)."""
+        """Return the base directory for simulations.
+
+        Priority: explicit Output Directory override → active project root →
+        the video's parent folder → cwd. Defaulting to the project root means
+        exports always land in <project>/simulations/... without the user
+        having to set an output directory each time.
+        """
         s = self.output_entry.get().strip()
         if s:
             return Path(s)
+        if getattr(self, "_project_dir", None):
+            return self._project_dir
         if self._video_path:
             return self._video_path.parent
         return Path.cwd()
@@ -2830,17 +2841,27 @@ class VideoAnalysisTab(ctk.CTkFrame):
         return counts.most_common(1)[0][0]
 
     def _build_trial_output_dir(self) -> Path:
-        """Build simulations/<athlete>/<YYYY-MM-DD>/<trial_name>/ path."""
-        import datetime
-        name = self.trial_name_entry.get().strip()
-        if not name:
-            # Fall back: auto-detect on the fly
-            task = self._detect_dominant_motion()
-            slug = self._athlete_slug()
-            n    = self._next_trial_number(slug, task)
-            name = f"{task}{n:03d}"
-        slug  = self._athlete_slug()
-        date  = datetime.date.today().strftime("%Y-%m-%d")
+        """Build simulations/<subject>/<YYYY-MM-DD>/<trialtype><N>/ path.
+
+        Always resolves to: the selected subject, today's date as the session,
+        and the next trial number (last + 1) for that trial type. The trial
+        *type* comes from the prefix of whatever is typed in the Trial Name
+        box (trailing digits stripped); if that's empty, it's auto-detected
+        from the motion. This guarantees exports never overwrite a previous
+        trial and always follow the c3d-trial folder convention.
+        """
+        import datetime, re
+        slug = self._athlete_slug()
+
+        typed = self.trial_name_entry.get().strip()
+        trial_type = re.sub(r"\d+$", "", typed).strip()          # drop trailing number
+        trial_type = re.sub(r"[^\w\-]", "_", trial_type).strip("_")
+        if not trial_type:
+            trial_type = self._detect_dominant_motion()          # e.g. "running", "squat", "trial"
+
+        n    = self._next_trial_number(slug, trial_type)         # last + 1 of this type
+        name = f"{trial_type}{n:03d}"
+        date = datetime.date.today().strftime("%Y-%m-%d")
         return self._base_output_dir() / "simulations" / slug / date / name
 
     def _auto_detect_trial_type(self):

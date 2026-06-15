@@ -410,7 +410,9 @@ class RecordingSettings:
     output_format = "mp4"
 
     # Recording tab defaults
-    OUTPUT_DIR_TEMPLATE = str(Path.home() / "Videos" / "recordings")
+    # Recordings are saved inside the project so they live alongside the
+    # subject's simulations/ data (was ~/Videos/recordings).
+    OUTPUT_DIR_TEMPLATE = str(PROJECT_ROOT / "recordings")
     DEFAULT_DURATION_SECONDS = 5
     DEFAULT_VIDEO_SOURCE = "webcam"
     IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"

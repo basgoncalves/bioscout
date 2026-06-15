@@ -358,14 +358,6 @@ class ProjectPlayerStore:
             return True
         return False
 
-    def models_dir(self, player_id: str) -> Path:
-        d = self.project_root / "Models" / player_id
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-lf._registry:
-            self._registry.remove(player_id)
-            return True
-        return False
 
     def models_dir(self, player_id: str) -> Path:
         d = self.project_root / "Models" / player_id

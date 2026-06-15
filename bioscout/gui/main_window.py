@@ -313,6 +313,9 @@ class MainWindow(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self._create_sidebar()
         self._create_main_area()
+        # Ctrl+R reloads the app (shows the same confirmation popup as the button)
+        self.bind_all("<Control-r>", lambda _e: self._restart_app())
+        self.bind_all("<Control-R>", lambda _e: self._restart_app())
 
     def _create_sidebar(self) -> None:
         """Create left sidebar with navigation."""
@@ -388,6 +391,12 @@ class MainWindow(ctk.CTk):
                       fg_color="#1a3a5a", hover_color="#2a4a6a",
                       width=60, command=self._open_screen_recorder
                       ).grid(row=0, column=1, padx=(2, 0), sticky="ew")
+        # Reload: relaunch the app to pick up the latest code (no manual restart)
+        ctk.CTkButton(button_frame, text="🔄 Reload App",
+                      fg_color="#5a3a00", hover_color="#7a5000",
+                      command=self._restart_app
+                      ).grid(row=1, column=0, columnspan=2, padx=0, pady=(4, 0),
+                             sticky="ew")
 
         version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}", text_color="#666666", font=("Segoe UI", 8))
         version_label.grid(row=13, column=0, padx=10, pady=5, sticky="ew")
@@ -792,6 +801,38 @@ class MainWindow(ctk.CTk):
         color = color_map.get(status_type, color_map["info"])
         self.status_label.configure(text=status, text_color=color)
         logger.info(f"Status: {status} ({status_type})")
+
+    def _restart_app(self) -> None:
+        """Relaunch BioScout so the latest code is loaded.
+
+        Python can't reliably hot-swap a running tkinter GUI, so 'Reload'
+        spawns a fresh instance with the same interpreter, arguments, and
+        working directory, then closes this one. The new process picks up any
+        edited source files (and the active project, since cwd is preserved).
+        """
+        import os
+        import subprocess
+        if not messagebox.askyesno(
+                "Reload BioScout",
+                "Restart the app to load the latest code?\n\n"
+                "Any unsaved state in the tabs will be lost.",
+                parent=self):
+            return
+        cmd = [sys.executable, "-m", "bioscout"] + sys.argv[1:]
+        try:
+            logger.info(f"Reloading BioScout: {' '.join(cmd)} (cwd={os.getcwd()})")
+            subprocess.Popen(cmd, cwd=os.getcwd())
+        except Exception as e:
+            logger.error(f"Reload failed to launch new instance: {e}")
+            messagebox.showerror(
+                "Reload failed",
+                f"Could not start a new instance:\n{e}", parent=self)
+            return
+        # Close this window and hard-exit so the two instances don't clash.
+        try:
+            self.destroy()
+        finally:
+            os._exit(0)
 
     def _open_screen_recorder(self) -> None:
         """Launch the screen recorder as a floating panel."""
