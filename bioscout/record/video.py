@@ -622,15 +622,19 @@ class MovementTracker:
 
             # Write to video file or fallback
             if writer:
-                success = writer.write(frame)
-                if success:
+                # NOTE: cv2.VideoWriter.write() returns None, NOT a success flag.
+                # Detect real failures via exceptions / writer state, not the return value.
+                try:
+                    writer.write(frame)
+                    if not writer.isOpened():
+                        raise RuntimeError("VideoWriter closed unexpectedly")
                     frames_written += 1
                     if frames_written % 10 == 0:
                         print(f"  {frames_written} frames written to video...")
-                else:
+                except Exception as e:
                     write_errors += 1
                     if write_errors == 1:
-                        print(f"  ⚠ Switching to fallback (writer.write() failed)")
+                        print(f"  ⚠ Switching to fallback (writer.write() failed: {e})")
                         writer = None
                         use_fallback = True
                         frames_dir_fallback.mkdir(parents=True, exist_ok=True)

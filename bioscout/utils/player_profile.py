@@ -229,3 +229,145 @@ class PlayerStore:
             shutil.rmtree(d, ignore_errors=True)
             return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped store backed by the project's players.json
+# ---------------------------------------------------------------------------
+#
+# This is the SINGLE source of truth for players, shared with the
+# `python -m bioscout --add_player` CLI (which writes the same players.json via
+# utils.player_registry.PlayerRegistry), so players added in the CLI appear in
+# the GUI dropdown and vice-versa. It exposes the same public API the Video
+# Analysis tab uses (index / load / save / create / delete).
+#
+# Field mapping (PlayerProfile  <->  players.json record):
+#   native columns : name, group, sex, age, height_m, mass_kg, notes
+#   everything else (template_model, opensim_model, ceinms_model, px_per_m,
+#   segment_fractions, mocap_sessions, detect_settings, schema_version) is
+#   stored under the record's "extra" dict so nothing is lost on round-trip,
+#   while registry-only columns (dominant_leg, affected_side, injury_type,
+#   surgery_date, static_trial, generic_model, added) are preserved untouched.
+# ---------------------------------------------------------------------------
+
+# PlayerProfile fields persisted inside the players.json "extra" blob.
+_EXTRA_KEYS = (
+    "template_model", "opensim_model", "ceinms_model", "px_per_m",
+    "segment_fractions", "mocap_sessions", "detect_settings", "schema_version",
+)
+
+
+class ProjectPlayerStore:
+    """`PlayerStore`-compatible facade over a project's players.json."""
+
+    def __init__(self, project_root: Optional[Path] = None):
+        from utils.player_registry import PlayerRegistry
+        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self._registry = PlayerRegistry(self.project_root)
+
+    # ---- mapping helpers -------------------------------------------------
+    @staticmethod
+    def _record_to_profile(pid: str, rec: dict) -> PlayerProfile:
+        extra = dict(rec.get("extra") or {})
+        data = {
+            "id": pid,
+            "name": rec.get("name", "") or "",
+            "group": rec.get("group", "") or "",
+            "sex": rec.get("sex", "") or "",
+            "age": rec.get("age"),
+            "height_m": rec.get("height_m"),
+            "mass_kg": rec.get("mass_kg"),
+            "notes": rec.get("notes", "") or "",
+        }
+        for k in _EXTRA_KEYS:
+            if k in extra:
+                data[k] = extra[k]
+        if not data.get("opensim_model") and rec.get("generic_model"):
+            data["opensim_model"] = rec.get("generic_model")
+        return PlayerProfile.from_dict(data)
+
+    @staticmethod
+    def _profile_to_fields(prof: PlayerProfile, existing_extra: dict) -> dict:
+        extra = dict(existing_extra or {})
+        for k in _EXTRA_KEYS:
+            extra[k] = getattr(prof, k)
+        return {
+            "name": prof.name,
+            "group": prof.group,
+            "sex": prof.sex,
+            "age": prof.age,
+            "height_m": prof.height_m,
+            "mass_kg": prof.mass_kg,
+            "notes": prof.notes,
+            "extra": extra,
+        }
+
+    # ---- index / listing -------------------------------------------------
+    def index(self) -> Dict[str, str]:
+        """Return {display_name: id} for the dropdown (names unique-ified)."""
+        result: Dict[str, str] = {}
+        for pid, rec in sorted(self._registry.all_players().items()):
+            name = (rec.get("name") or "").strip() or pid
+            label, n = name, 2
+            while label in result:
+                label = f"{name} ({n})"
+                n += 1
+            result[label] = pid
+        return result
+
+    @property
+    def _profiles(self) -> Dict[str, PlayerProfile]:
+        """{id: PlayerProfile} — kept for callers that introspect the store."""
+        return {pid: self._record_to_profile(pid, rec)
+                for pid, rec in self._registry.all_players().items()}
+
+    # ---- CRUD ------------------------------------------------------------
+    def load(self, player_id: str) -> Optional[PlayerProfile]:
+        try:
+            rec = self._registry.get(player_id)
+        except KeyError:
+            return None
+        return self._record_to_profile(player_id, rec)
+
+    def save(self, profile: PlayerProfile) -> Path:
+        if not profile.id:
+            profile.id = _slugify(profile.name or "player")
+        existing_extra = {}
+        if profile.id in self._registry:
+            existing_extra = (self._registry.get(profile.id).get("extra") or {})
+        fields = self._profile_to_fields(profile, existing_extra)
+        if profile.id in self._registry:
+            self._registry.update(profile.id, fields)
+        else:
+            self._registry.add(profile.id, fields)
+        return self._registry.path
+
+    def create(self, name: str, **kwargs) -> PlayerProfile:
+        pid = _slugify(name)
+        base, n = pid, 2
+        while pid in self._registry:
+            pid = f"{base}_{n}"
+            n += 1
+        prof = PlayerProfile(id=pid, name=name, **kwargs)
+        self.save(prof)
+        return prof
+
+    def delete(self, player_id: str) -> bool:
+        if player_id in self._registry:
+            self._registry.remove(player_id)
+            return True
+        return False
+
+    def models_dir(self, player_id: str) -> Path:
+        d = self.project_root / "Models" / player_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+lf._registry:
+            self._registry.remove(player_id)
+            return True
+        return False
+
+    def models_dir(self, player_id: str) -> Path:
+        d = self.project_root / "Models" / player_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d

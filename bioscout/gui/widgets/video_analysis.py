@@ -103,10 +103,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.config_manager = config_manager
         self.update_status = update_status_callback or (lambda x: None)
 
-        # Player profiles (anthropometry, models, calibration, detection settings)
+        # Player profiles (anthropometry, models, calibration, detection settings).
+        # Backed by the project's players.json — the SAME file the
+        # `python -m bioscout --add_player` CLI writes — so the GUI dropdown and
+        # the CLI stay in sync. Re-rooted to the active project via
+        # set_project_dir() when a project is loaded.
         try:
-            from utils.player_profile import PlayerStore
-            self._player_store = PlayerStore()
+            from utils.player_profile import ProjectPlayerStore
+            self._player_store = ProjectPlayerStore(Path.cwd())
         except Exception as _e:
             logger.warning(f"VideoAnalysisTab: player profiles unavailable: {_e}")
             self._player_store = None
@@ -2411,6 +2415,22 @@ class VideoAnalysisTab(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # Player profiles
     # ------------------------------------------------------------------
+
+    def set_project_dir(self, project_dir: str):
+        """Re-root the player store on the active project's players.json.
+
+        Called by MainWindow.broadcast_project_dir() whenever a project is
+        loaded, so the dropdown reflects that project's players (the same file
+        the --add_player CLI writes).
+        """
+        try:
+            from utils.player_profile import ProjectPlayerStore
+            self._player_store = ProjectPlayerStore(Path(project_dir))
+        except Exception as e:
+            logger.warning(f"VideoAnalysisTab.set_project_dir failed: {e}")
+            return
+        self._active_profile = None
+        self._refresh_player_menu()
 
     def _refresh_player_menu(self, select_id: Optional[str] = None):
         """Rebuild the dropdown from the store; optionally select a player id."""
