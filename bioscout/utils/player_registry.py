@@ -29,6 +29,7 @@ Schema for each player entry
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from datetime import date
@@ -37,11 +38,17 @@ from typing import Any, Optional
 
 REGISTRY_FILENAME = "players.json"
 
+# On-disk schema version. Bump when the per-player record gains/changes fields
+# so old files can be migrated forward (see PlayerRegistry._migrate).
+#   v1 : flat dict {player_id: record}  (no schema_version key)
+#   v2 : {"schema_version": 2, "players": {player_id: record}} + "tracking" field
+SCHEMA_VERSION = 2
+
 # Canonical field order written to the file (human-readable grouping).
 _FIELD_ORDER = [
     "name", "group", "sex", "age", "height_m", "mass_kg",
     "dominant_leg", "affected_side", "injury_type", "surgery_date",
-    "static_trial", "generic_model", "notes", "extra", "added",
+    "static_trial", "generic_model", "notes", "extra", "tracking", "added",
 ]
 
 # Default values for a fresh player record.
@@ -62,8 +69,20 @@ _DEFAULTS: dict[str, Any] = {
     "generic_model": "Models/GPK_generic.osim",
     "notes":         "",
     "extra":         {},
+    # Training-load tracking (load_tracking module). Holds per-player cloud
+    # credentials and a lightweight cache of imported session summaries.
+    # Raw per-sample traces are cached on disk (see load_tracking.tracking_store),
+    # not inlined here, to keep players.json small.
+    "tracking": {
+        "credentials": {},      # {"zepp": {"token","region"}, "strava": {...}}
+        "sessions": [],         # list of session-summary dicts
+    },
     "added":         str(date.today()),
 }
+
+
+def _default_tracking() -> dict:
+    return {"credentials": {}, "sessions": []}
 
 
 class PlayerRegistry:
@@ -87,29 +106,64 @@ class PlayerRegistry:
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
-        if self.path.is_file():
-            try:
-                with open(self.path, "r", encoding="utf-8") as fh:
-                    raw = json.load(fh)
-                # Merge defaults so older files without new fields still work.
-                self._data = {
-                    pid: {**_DEFAULTS, **record}
-                    for pid, record in raw.items()
-                }
-            except (json.JSONDecodeError, OSError) as exc:
-                raise RuntimeError(
-                    f"Could not read {self.path}: {exc}"
-                ) from exc
+        self.file_version = SCHEMA_VERSION
+        if not self.path.is_file():
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError(f"Could not read {self.path}: {exc}") from exc
+
+        # Detect format: versioned {"schema_version", "players"} vs old flat dict.
+        if isinstance(raw, dict) and "players" in raw and "schema_version" in raw:
+            self.file_version = int(raw.get("schema_version", 1))
+            players = raw.get("players", {}) or {}
+        else:
+            self.file_version = 1            # legacy flat format
+            players = raw or {}
+
+        migrated = self._migrate(players, self.file_version)
+        # Merge defaults so older files without new fields still work.
+        self._data = {pid: self._merge_defaults(rec) for pid, rec in migrated.items()}
+
+        # Persist forward-migration so the file is upgraded on first touch.
+        if self.file_version < SCHEMA_VERSION and self._data:
+            self.file_version = SCHEMA_VERSION
+            self.save()
+
+    @staticmethod
+    def _merge_defaults(record: dict) -> dict:
+        # deepcopy so the mutable defaults ("extra", "tracking") are never shared
+        # between player records (otherwise edits to one leak into all others).
+        merged = {**copy.deepcopy(_DEFAULTS), **record}
+        # tracking is a nested dict — ensure its sub-keys exist without clobbering.
+        tr = {**_default_tracking(), **(record.get("tracking") or {})}
+        tr.setdefault("credentials", {})
+        tr.setdefault("sessions", [])
+        merged["tracking"] = copy.deepcopy(tr)
+        return merged
+
+    @staticmethod
+    def _migrate(players: dict, from_version: int) -> dict:
+        """Apply forward migrations to the players dict (in-place-safe copy)."""
+        out = {pid: dict(rec) for pid, rec in players.items()}
+        # v1 → v2: add the tracking section.
+        if from_version < 2:
+            for rec in out.values():
+                rec.setdefault("tracking", _default_tracking())
+        return out
 
     def save(self) -> None:
-        """Write the registry to disk (creates the file if it doesn't exist)."""
+        """Write the registry to disk in the current versioned format."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         ordered = {
             pid: {k: record.get(k, _DEFAULTS.get(k)) for k in _FIELD_ORDER}
             for pid, record in sorted(self._data.items())
         }
+        payload = {"schema_version": SCHEMA_VERSION, "players": ordered}
         with open(self.path, "w", encoding="utf-8") as fh:
-            json.dump(ordered, fh, indent=2, ensure_ascii=False)
+            json.dump(payload, fh, indent=2, ensure_ascii=False)
 
     # ------------------------------------------------------------------
     # Query
@@ -147,7 +201,8 @@ class PlayerRegistry:
                 f"Player ID '{player_id}' already exists in {self.path}. "
                 "IDs must be unique. Use update() to modify an existing player."
             )
-        record = {**_DEFAULTS, **fields, "added": str(date.today())}
+        record = self._merge_defaults(dict(fields))
+        record["added"] = str(date.today())
         self._data[player_id] = record
         self.save()
         return dict(record)
@@ -165,6 +220,35 @@ class PlayerRegistry:
         if player_id not in self._data:
             raise KeyError(f"Player '{player_id}' not found.")
         del self._data[player_id]
+        self.save()
+
+    # ------------------------------------------------------------------
+    # Training-load tracking helpers (used by load_tracking / GUI)
+    # ------------------------------------------------------------------
+    def _tracking(self, player_id: str) -> dict:
+        if player_id not in self._data:
+            raise KeyError(f"Player '{player_id}' not found.")
+        tr = self._data[player_id].setdefault("tracking", _default_tracking())
+        tr.setdefault("credentials", {})
+        tr.setdefault("sessions", [])
+        return tr
+
+    def get_credentials(self, player_id: str) -> dict:
+        """Return this player's cloud credentials ({zepp:{...}, strava:{...}})."""
+        return dict(self._tracking(player_id).get("credentials", {}))
+
+    def set_credentials(self, player_id: str, credentials: dict) -> None:
+        """Replace this player's cloud credentials and persist."""
+        self._tracking(player_id)["credentials"] = dict(credentials)
+        self.save()
+
+    def get_sessions(self, player_id: str) -> list:
+        """Return this player's cached session summaries (list of dicts)."""
+        return [dict(s) for s in self._tracking(player_id).get("sessions", [])]
+
+    def set_sessions(self, player_id: str, sessions: list) -> None:
+        """Replace this player's cached session summaries and persist."""
+        self._tracking(player_id)["sessions"] = list(sessions)
         self.save()
 
     # ------------------------------------------------------------------

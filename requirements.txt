@@ -12,6 +12,10 @@ c3d
 packaging
 pyperclip
 
+# Load tracking — fitness-tracker imports (.fit needs fitparse; .tcx/.gpx/.csv use stdlib)
+fitparse
+requests   # Zepp/Huami + Strava cloud pulls
+
 # GUI
 customtkinter
 Pillow

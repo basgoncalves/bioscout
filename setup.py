@@ -37,6 +37,8 @@ setup(
         "pyautogui",
         "pygetwindow",
         "screeninfo",
+        "fitparse",
+        "requests",
     ],
     extras_require={
         "recording": ["opencv-python", "mediapipe"],

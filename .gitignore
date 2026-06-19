@@ -53,3 +53,7 @@ bioscout/logs/
 
 # User-specific batch config (contains local paths)
 video_batch_run.json
+
+# Cloud credentials for load tracking (secrets — keep only the .example file)
+load_credentials.json
+.bioscout/

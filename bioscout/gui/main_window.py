@@ -53,6 +53,7 @@ from gui.widgets.analysis_control_session import AnalysisControlSessionTab
 from gui.widgets.batch_processor import BatchProcessorTab
 from gui.widgets.batch_c3d_export import BatchC3DExport
 from gui.widgets.results_viewer import ResultsViewerTab
+from gui.widgets.training_tracking import TrainingTrackingTab
 from gui.widgets.logs import LogsTab
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
 from gui.widgets.configuration import ConfigurationTab
@@ -352,8 +353,9 @@ class MainWindow(ctk.CTk):
             ("CEINMS Calibration", 8),
             ("Batch", 9),
             ("Results", 10),
-            ("Settings", 11),
-            ("Logs", 12)
+            ("Training Tracking", 11),
+            ("Settings", 12),
+            ("Logs", 13)
         ]
         tabs = [(name, row) for name, row in _all_tabs
                 if (name != "Recording" or RecordingTab is not None)
@@ -373,7 +375,7 @@ class MainWindow(ctk.CTk):
             self.nav_buttons[tab_name] = btn
 
         status_frame = ctk.CTkFrame(sidebar, corner_radius=8)
-        status_frame.grid(row=11, column=0, padx=10, pady=10, sticky="ew")
+        status_frame.grid(row=14, column=0, padx=10, pady=10, sticky="ew")
 
         ctk.CTkLabel(status_frame, text="Status:", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
         self.status_label = ctk.CTkLabel(status_frame, text="Ready", text_color="#28a745", font=("Segoe UI", 10))
@@ -381,7 +383,7 @@ class MainWindow(ctk.CTk):
 
         # Utility buttons row (Help + Screen Record)
         button_frame = ctk.CTkFrame(sidebar)
-        button_frame.grid(row=12, column=0, padx=10, pady=10, sticky="ew")
+        button_frame.grid(row=15, column=0, padx=10, pady=10, sticky="ew")
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
 
@@ -399,7 +401,7 @@ class MainWindow(ctk.CTk):
                              sticky="ew")
 
         version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}", text_color="#666666", font=("Segoe UI", 8))
-        version_label.grid(row=13, column=0, padx=10, pady=5, sticky="ew")
+        version_label.grid(row=16, column=0, padx=10, pady=5, sticky="ew")
 
     def _create_main_area(self) -> None:
         """Create main content area with tabs and resizable console."""
@@ -435,6 +437,7 @@ class MainWindow(ctk.CTk):
             "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
             "Batch": {"class": BatchProcessorTab, "args": (self.config_manager, self.update_status)},
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
+            "Training Tracking": {"class": TrainingTrackingTab, "args": (self.config_manager, self.update_status)},
             "Settings": {"class": ConfigurationTab, "args": (self.config_manager, self.update_status)},
             "Logs": {"class": LogsTab, "args": (self.config_manager, self.update_status)},
         })

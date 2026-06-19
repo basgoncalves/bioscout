@@ -93,6 +93,31 @@ parser.add_argument('--hoop', type=str, default=None, metavar='CX,CY,W,H',
                          "(uses HSV ball + this hoop). E.g. --hoop 955,235,70,40")
 parser.add_argument('-p', '--project', type=str, default=None, metavar='PROJECT_PATH',
                     help="With --summary: project root override (defaults to settings.PROJECT_ROOT)")
+parser.add_argument('--load-report', type=str, default=None, dest='load_report',
+                    metavar='FILES_OR_FOLDER',
+                    help="Training-load & fatigue report from fitness-tracker exports "
+                         "(.fit/.tcx/.gpx/.csv). Pass a folder, a glob, or files. "
+                         "e.g. --load-report C:/zepp_exports/")
+parser.add_argument('--load-out', type=str, default=None, dest='load_out', metavar='PDF',
+                    help="With --load-report: output PDF path (default: load_report.pdf)")
+parser.add_argument('--hr-max', type=float, default=None, dest='hr_max',
+                    help="With --load-report: athlete max heart rate (else 220-age)")
+parser.add_argument('--hr-rest', type=float, default=None, dest='hr_rest',
+                    help="With --load-report: athlete resting heart rate (default 60)")
+parser.add_argument('--age', type=int, default=None, dest='age',
+                    help="With --load-report: athlete age (for HRmax fallback)")
+parser.add_argument('--sex', type=str, default='M', choices=['M', 'F'], dest='sex',
+                    help="With --load-report: athlete sex (Banister TRIMP constant)")
+parser.add_argument('--zepp-pull', action='store_true', dest='zepp_pull',
+                    help="Pull workouts straight from your Zepp/Huami cloud account "
+                         "(needs a captured apptoken in the credentials file), then "
+                         "build the load report.")
+parser.add_argument('--strava-pull', action='store_true', dest='strava_pull',
+                    help="Pull activities from Strava (Zepp→Strava sync), then build "
+                         "the load report. Needs Strava creds in the credentials file.")
+parser.add_argument('--creds', type=str, default=None, dest='creds', metavar='JSON',
+                    help="Path to the cloud credentials JSON "
+                         "(default ~/.bioscout/load_credentials.json)")
 args = parser.parse_args()
 
 log_dir = Path(__file__).parent / "logs"
@@ -945,6 +970,55 @@ def run_add_player_mode(project_path: str) -> int:
     return 0 if pid else 1
 
 
+def run_load_report_mode(inputs=None) -> int:
+    """Build a training-load & fatigue PDF report.
+
+    Sources can be combined: local files/folder (``inputs``), the Zepp cloud
+    (``--zepp-pull``), and/or Strava (``--strava-pull``).
+    """
+    from load_tracking import LoadTracker, AthleteProfile, load_credentials, pull_into_tracker
+    athlete = AthleteProfile(
+        name="Athlete", age=args.age, sex=args.sex,
+        hr_max=args.hr_max, hr_rest=args.hr_rest,
+    )
+    tracker = LoadTracker(athlete=athlete)
+    total = 0
+
+    if inputs:
+        n = tracker.add_files(inputs)
+        print(f"[load-report] Loaded {n} session(s) from files.")
+        total += n
+
+    if args.zepp_pull or args.strava_pull:
+        creds = load_credentials(args.creds)
+        if not creds:
+            cpath = args.creds or "~/.bioscout/load_credentials.json"
+            print(f"[load-report] No credentials found at {cpath}. "
+                  "See bioscout/load_tracking/README.md for the format.")
+            return 1
+        res = pull_into_tracker(tracker, creds,
+                                zepp=args.zepp_pull, strava=args.strava_pull)
+        if res["zepp"]:
+            print(f"[load-report] Pulled {res['zepp']} session(s) from Zepp.")
+        if res["strava"]:
+            print(f"[load-report] Pulled {res['strava']} session(s) from Strava.")
+        for err in res["errors"]:
+            print(f"[load-report] {err}")
+        total += res["zepp"] + res["strava"]
+
+    if total == 0:
+        print("[load-report] No sessions loaded. Expected .fit/.tcx/.gpx/.csv files, "
+              "or a valid --zepp-pull / --strava-pull credentials file.")
+        return 1
+
+    tracker.compute()
+    print(tracker.summary_text())
+    out = args.load_out or "load_report.pdf"
+    tracker.report(out)
+    print(f"\n[load-report] PDF written: {out}")
+    return 0
+
+
 def main() -> int:
     if args.install:
         from utils.dependency_installer import install_missing
@@ -969,6 +1043,8 @@ def main() -> int:
                       hoop_side=args.hoop_side, yolo_model=args.yolo_model, hoop=_hoop,
                       model_path=_model if os.path.exists(_model) else None)
         return 0
+    if args.load_report is not None or args.zepp_pull or args.strava_pull:
+        return run_load_report_mode(args.load_report)
     if args.summary is not None:
         from utils.summary import run_summary
         ok = run_summary(settings_path=(args.summary or None),
