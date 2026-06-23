@@ -11,9 +11,18 @@ from pathlib import Path
 
 import webbrowser
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
-import customtkinter as ctk
+# GUI toolkits are optional: importing utils for analysis/headless use must not
+# require (or stall on) a display. The GUI widgets import these themselves.
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, simpledialog
+except Exception:
+    tk = None
+    filedialog = messagebox = simpledialog = None
+try:
+    import customtkinter as ctk
+except Exception:
+    ctk = None
 
 import numpy as np
 import pandas as pd
@@ -91,12 +100,41 @@ emg_normalise = None
 HAS_EMG_NORMALISE = False
 
 
-__version__ = '1.2.0'
+__version__ = '1.3.0'
 
 # Project directories
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.dirname(UTILS_DIR)
-PROJECT_DIR = os.path.dirname(APP_DIR)
+
+
+def _resolve_project_dir():
+    """Locate the project root (the folder holding models/ simulations/ results/).
+
+    Priority:
+      1. BIOSCOUT_PROJECT_DIR environment variable
+      2. current working directory, if it looks like a project
+         (has settings.py or a models/ or simulations/ folder)
+      3. PROJECT_ROOT from an imported project settings.py (if it exists on disk)
+      4. the folder containing the bioscout package (legacy default)
+    """
+    env = os.environ.get('BIOSCOUT_PROJECT_DIR')
+    if env and os.path.isdir(env):
+        return os.path.abspath(env)
+    cwd = os.getcwd()
+    if (os.path.exists(os.path.join(cwd, 'settings.py')) or
+            any(os.path.isdir(os.path.join(cwd, d))
+                for d in ('simulations', 'Simulations', 'models', 'Models'))):
+        return cwd
+    try:
+        _pr = getattr(settings, 'PROJECT_ROOT', None)
+        if _pr and os.path.isdir(str(_pr)):
+            return os.path.abspath(str(_pr))
+    except Exception:
+        pass
+    return os.path.dirname(APP_DIR)
+
+
+PROJECT_DIR = _resolve_project_dir()
 
 # For compatibility with different projects
 CODE_DIR = UTILS_DIR
