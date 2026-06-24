@@ -5,10 +5,7 @@ import os
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).parent
-
-# Version of the settings schema.  Project settings.py files are checked
-# against this at runtime; a mismatch triggers a warning in the UI.
-SETTINGS_VERSION = "2.0"
+__version__ = "2.2.0"
 
 # ============================================================================
 # PROJECT ROOT — the only absolute path you need to change per project.
@@ -17,7 +14,7 @@ SETTINGS_VERSION = "2.0"
 PROJECT_ROOT    = Path.home() / 'Ucloud' / 'FAIS'
 PROJECT_NAME    = 'squatting_fais'
 
-MODELS_DIR      = PROJECT_ROOT / 'Models'
+MODELS_DIR      = PROJECT_ROOT / 'models'
 SETUP_DIR       = PROJECT_ROOT / 'setup_files'
 SIMULATIONS_DIR = PROJECT_ROOT / 'Simulations'
 LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install dir)
@@ -365,10 +362,10 @@ class SummarySettings:
 class UISettings:
     """User interface appearance and layout configuration."""
 
-    FONT_SIZE_SMALL = 10
-    FONT_SIZE_NORMAL = 12
-    FONT_SIZE_LARGE = 14
-    FONT_SIZE_TITLE = 16
+    FONT_SIZE_SMALL = 20
+    FONT_SIZE_NORMAL = 24
+    FONT_SIZE_LARGE = 28
+    FONT_SIZE_TITLE = 32
     FONT_FAMILY = "Segoe UI"
 
     PRIMARY_COLOR = "#2E86AB"
@@ -520,3 +517,91 @@ class Inputs:
 # BACKWARD COMPATIBILITY
 # ============================================================================
 Config = BatchSettings
+
+
+# ============================================================================
+# ANALYSIS / COMPARISON CONFIG   (model comparison, plotting, visualisation)
+# ----------------------------------------------------------------------------
+# Read by the analysis notebook and bioscout.utils.Plot. Subjects are declared
+# as bioscout.Subject objects; model_config is derived from them. Edit SESSION,
+# trial_list and SUBJECTS per project.
+# ============================================================================
+try:
+    from bioscout.subject import Subject, build_model_config
+except Exception:                       # keep settings importable even if not packaged
+    Subject = None
+    def build_model_config(subjects, force_types=("SO", "CEINMS")):
+        return {}
+
+# Session + trials to analyse
+SESSION      = "session1"
+session_list = [SESSION]
+trial_list   = []                       # e.g. ["Walking_02", "Squat_BW_01", "Squat_35kg_01"]
+
+# One Subject per model variant. model_so = static-optimisation model;
+# model_ceinms = CEINMS model.  Or auto-build from the models/ folder with:
+#     import bioscout;  SUBJECTS = bioscout.discover_subjects(session=SESSION)
+SUBJECTS = [
+    # Subject(name="subject_01", label="Subject 01", session=SESSION,
+    #         model_so="scaled_increased_3.00.osim", model_ceinms="scaled.osim",
+    #         setup_folder="default", color="green"),
+]
+SUBJECTS_BY_NAME = {s.name: s for s in SUBJECTS}
+
+# Derived from SUBJECTS (single source of truth)
+model_config  = build_model_config(SUBJECTS, force_types=("SO", "CEINMS"))
+MODEL_FILES   = {s.name: s.model_ceinms for s in SUBJECTS}
+SETUP_FOLDERS = {s.name: s.setup_folder for s in SUBJECTS}
+
+
+def model_for(subject, force_type="SO"):
+    """Model .osim filename for a subject folder name and solver."""
+    s = SUBJECTS_BY_NAME.get(subject)
+    return s.model_for(force_type) if s else None
+
+
+# Named contrasts (curve labels) for comparison figures, e.g.
+#   {"generic_vs_mri": ["Scaled (GPK)", "MRI (GPK)"]}
+CONTRASTS = {}
+
+# Degrees of freedom of interest (right leg) + knee sign-flip
+DOFS = [
+    "hip_flexion_r", "hip_adduction_r", "hip_rotation_r",
+    "knee_angle_r", "knee_adduction_r", "ankle_angle_r",
+]
+DOFS_MOMENTS = [d + "_moment" for d in DOFS]
+MODELS_TO_FLIP_KNEE = []                 # labels whose knee_angle is sign-flipped
+
+# Muscle groups for force / moment aggregation (right-leg defaults)
+MUSCLE_GROUPS = {
+    "R Gluteus maximus":  ["glmax1_r", "glmax2_r", "glmax3_r"],
+    "R Gluteus medius":   ["glmed1_r", "glmed2_r", "glmed3_r"],
+    "R Gluteus minimus":  ["glmin1_r", "glmin2_r", "glmin3_r"],
+    "R Adductor Magnus":  ["addmagDist_r", "addmagIsch_r", "addmagMid_r", "addmagProx_r"],
+    "R Biceps Femoris":   ["bflh_r", "bfsh_r"],
+    "R Semimembranosus":  ["semimem_r"],
+    "R Semitendinosus":   ["semiten_r"],
+    "R Rectus Femoris":   ["recfem_r"],
+    "R Vasti":            ["vasint_r", "vaslat_r", "vasmed_r"],
+    "R Triceps Surae":    ["soleus_r", "gaslat_r", "gasmed_r"],
+}
+
+
+def JRA_COLUMNS(model_name: str) -> dict:
+    """Joint-reaction (contact-force) column names per model (knee differs)."""
+    name = model_name or ""
+    hip = ["hip_r_on_femur_r_in_femur_r_fx",
+           "hip_r_on_femur_r_in_femur_r_fy",
+           "hip_r_on_femur_r_in_femur_r_fz"]
+    ankle = ["ankle_r_on_talus_r_in_talus_r_fx",
+             "ankle_r_on_talus_r_in_talus_r_fy",
+             "ankle_r_on_talus_r_in_talus_r_fz"]
+    if "Lernagopal" in name:
+        knee = ["Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fx",
+                "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fy",
+                "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fz"]
+    else:
+        knee = ["walker_knee_r_on_tibia_r_in_tibia_r_fx",
+                "walker_knee_r_on_tibia_r_in_tibia_r_fy",
+                "walker_knee_r_on_tibia_r_in_tibia_r_fz"]
+    return {"hip": hip, "knee": knee, "ankle": ankle}

@@ -118,3 +118,60 @@ def plot_motion_results(trial_name, data_file, title, ylabel, results_dir, logge
 
     except Exception as e:
         logger.warning(f"Could not create plot for {trial_name}: {e}")
+
+
+def check_cpu_temperature():
+    """
+    Check the CPU temperature and log a warning if it exceeds 80°C.
+    """
+    try:
+        import psutil
+        if not hasattr(psutil, 'sensors_temperatures'):
+            logging.warning("CPU temperature monitoring not available on this system")
+            return None
+        
+        temps = psutil.sensors_temperatures()
+        if not temps:
+            return None
+
+        cpu_temps = temps.get('coretemp', [])
+        if not cpu_temps:
+            return None
+
+        max_temp = max([t.current for t in cpu_temps])
+        if max_temp > 80:
+            logging.warning(f"High CPU temperature detected: {max_temp}°C")
+        return max_temp
+    except Exception as e:
+        logging.warning(f"Could not check CPU temperature: {e}")
+        return None
+    
+if __name__ == "__main__":
+    import argparse
+
+    # List all available functions
+    available_functions = {
+        "setup_logging": ("Set up logging configuration", setup_logging),
+        "plot_motion_results": ("Plot motion analysis results", plot_motion_results),
+        "check_cpu_temperature": ("Check CPU temperature", check_cpu_temperature),
+    }
+
+    print("Available functions:")
+    for i, (name, (description, _)) in enumerate(available_functions.items(), 1):
+        print(f"{i}. {name}: {description}")
+
+    choice = input("\nSelect function by name (or 'exit' to quit): ").strip().lower()
+
+    if choice == "exit":
+        print("Exiting...")
+    elif choice == "setup_logging":
+        log_dir = input("Enter log directory (default: ./logs): ").strip() or "./logs"
+        logger = setup_logging(log_dir)
+        logger.info("Logging setup complete")
+    elif choice == "check_cpu_temperature":
+        temp = check_cpu_temperature()
+        if temp is not None:
+            print(f"Max CPU temperature: {temp}°C")
+    else:
+        print("Invalid selection")
+

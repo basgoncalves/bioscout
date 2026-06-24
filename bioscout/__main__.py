@@ -687,7 +687,7 @@ def run_gui_mode() -> int:
         return 1
     _log("[GUI] Starting GUI...")
     try:
-        gui_main()
+        gui_main(fullscreen=True)
     except SystemExit as e:
         _err(f"[GUI] sys.exit() called with code={e.code}")
         return 1
@@ -1026,7 +1026,7 @@ def main() -> int:
     if args.add_player is not None:
         return run_add_player_mode(args.add_player)
     if args.shots:
-        from shot_analysis import analyze_video
+        from bioscout.load_tracking.shot_analysis import analyze_video
         _model = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'models', 'kinematics_only_model.pkl')
         _hoop = None

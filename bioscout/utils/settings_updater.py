@@ -150,6 +150,15 @@ _PRESERVE: list[tuple[Optional[str], str, str]] = [
     (None, "PROJECT_ROOT",     "Project root path"),
     (None, "PROJECT_NAME",     "Project name"),
     (None, "PLAYERS",          "Player ID list"),
+    # Analysis / comparison config
+    (None, "SESSION",             "Session name"),
+    (None, "session_list",        "Session list"),
+    (None, "trial_list",          "Trials to analyse"),
+    (None, "SUBJECTS",            "Subjects (Subject objects)"),
+    (None, "CONTRASTS",           "Comparison contrasts"),
+    (None, "MODELS_TO_FLIP_KNEE", "Knee sign-flip models"),
+    (None, "MUSCLE_GROUPS",       "Muscle groups"),
+    (None, "DOFS",                "Degrees of freedom"),
     # BatchSettings
     ("BatchSettings", "generic_model",       "OpenSim model path"),
     ("BatchSettings", "markerset",           "Marker set file"),

@@ -127,16 +127,31 @@ class MainWindow(ctk.CTk):
         self._map_event_bound = False  # Prevent multiple Map event bindings
 
         if fullscreen:
-            # Start in fullscreen mode to avoid graphics glitches
-            self.attributes("-zoomed", True)  # Windows
+            # Start maximized to avoid graphics glitches and use the whole screen.
+            # 'zoomed' maximizes the window (keeps the title bar / taskbar) on
+            # Windows; '-zoomed' is the Linux equivalent. Try each safely so a
+            # platform that doesn't support one doesn't crash startup.
+            maximized = False
             try:
-                self.state("zoomed")  # Alternative for Windows
-            except:
+                self.state("zoomed")  # Windows / most platforms
+                maximized = True
+            except Exception:
                 pass
-            try:
-                self.attributes("-fullscreen", True)  # Linux
-            except:
-                pass
+            if not maximized:
+                try:
+                    self.attributes("-zoomed", True)  # Linux (X11)
+                    maximized = True
+                except Exception:
+                    pass
+            if not maximized:
+                # Last resort: size to the full screen geometry.
+                try:
+                    sw = self.winfo_screenwidth()
+                    sh = self.winfo_screenheight()
+                    self.geometry(f"{sw}x{sh}+0+0")
+                except Exception:
+                    self.geometry("1400x900+0+0")
+            self.minsize(1200, 700)
         else:
             self.geometry("1400x900+0+0")
             self.minsize(1200, 700)
@@ -616,14 +631,14 @@ class MainWindow(ctk.CTk):
                 proj_ver = None
                 for node in tree.body:
                     if (isinstance(node, _ast.Assign) and
-                            any(isinstance(t, _ast.Name) and t.id == "SETTINGS_VERSION"
+                            any(isinstance(t, _ast.Name) and t.id == "__version__"
                                 for t in node.targets)):
                         if isinstance(node.value, _ast.Constant):
                             proj_ver = node.value.value
                         break
-                from settings import SETTINGS_VERSION as _SRC_VER
+                from settings import __version__ as _SRC_VER
                 if proj_ver is None:
-                    tooltip = "⚠  settings.py has no SETTINGS_VERSION — click ↑ Update Settings"
+                    tooltip = "⚠  settings.py has no __version__ — click ↑ Update Settings"
                     needs_update = True
                 elif proj_ver != _SRC_VER:
                     tooltip = f"⚠  settings v{proj_ver} ≠ src v{_SRC_VER} — click ↑ Update Settings"

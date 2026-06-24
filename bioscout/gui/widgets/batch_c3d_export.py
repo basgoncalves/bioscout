@@ -56,6 +56,21 @@ try:
 except ImportError:
     HAS_C3D = False
 
+# Optional: scipy for the live EMG filter preview / max-EMG calculation
+try:
+    import scipy.signal as _sps
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
+# Optional: matplotlib (embedded) for the live EMG filter preview
+try:
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    HAS_MPL = True
+except Exception:
+    HAS_MPL = False
+
 # ============================================================================
 # DEFAULT FOOT MARKER PATTERNS - EDIT THESE TO CUSTOMIZE MARKER DETECTION
 # ============================================================================
@@ -288,12 +303,28 @@ class BatchC3DExport(ctk.CTkFrame):
         # ===== RIGHT COLUMN: EMG SETTINGS & MARKERS SECTION =====
         settings_frame = ctk.CTkFrame(self)
         settings_frame.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=(2, 2))
-        settings_frame.grid_rowconfigure(2, weight=0)
-        settings_frame.grid_columnconfigure(0, weight=1)  # EMG settings
-        settings_frame.grid_columnconfigure(1, weight=1)  # Markers (side by side)
+        settings_frame.grid_rowconfigure(0, weight=1)
+        settings_frame.grid_columnconfigure(0, weight=3)  # EMG settings (wider)
+        settings_frame.grid_columnconfigure(1, weight=2)  # Markers
 
-        # Header
-        header_frame2 = ctk.CTkFrame(settings_frame)
+        # Each side gets a single container frame that manages its own internal
+        # grid. This keeps the EMG column (filters + live preview + channels +
+        # max-EMG) and the markers column independent so they can each fill the
+        # full height of the panel.
+        emg_col = ctk.CTkFrame(settings_frame)
+        emg_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        emg_col.grid_columnconfigure(0, weight=1)
+        emg_col.grid_rowconfigure(4, weight=3)   # preview plot
+        emg_col.grid_rowconfigure(6, weight=2)   # channel list
+        emg_col.grid_rowconfigure(8, weight=2)   # max-EMG results
+
+        markers_col = ctk.CTkFrame(settings_frame)
+        markers_col.grid(row=0, column=1, sticky="nsew")
+        markers_col.grid_columnconfigure(0, weight=1)
+        markers_col.grid_rowconfigure(2, weight=1)  # marker columns extend down
+
+        # ----- EMG column: header -----
+        header_frame2 = ctk.CTkFrame(emg_col)
         header_frame2.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 3))
         header_frame2.grid_columnconfigure(0, weight=1)
 
@@ -307,8 +338,8 @@ class BatchC3DExport(ctk.CTkFrame):
             command=self._update_markers_from_c3d,
         ).pack(side="right", padx=0)
 
-        # EMG Label Pattern + Search button
-        emg_pattern_frame = ctk.CTkFrame(settings_frame)
+        # ----- EMG column: label pattern + Search -----
+        emg_pattern_frame = ctk.CTkFrame(emg_col)
         emg_pattern_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 3))
         emg_pattern_frame.grid_columnconfigure(1, weight=1)
 
@@ -323,8 +354,8 @@ class BatchC3DExport(ctk.CTkFrame):
             command=self._filter_emg_channels,
         ).grid(row=0, column=2, padx=(0, 0))
 
-        # EMG Filter Settings (side by side)
-        filter_frame = ctk.CTkFrame(settings_frame)
+        # ----- EMG column: filter settings -----
+        filter_frame = ctk.CTkFrame(emg_col)
         filter_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(3, 3))
         filter_frame.grid_columnconfigure(0, weight=1)
         filter_frame.grid_columnconfigure(1, weight=1)
@@ -338,37 +369,74 @@ class BatchC3DExport(ctk.CTkFrame):
         self.fps_label = ctk.CTkLabel(filter_frame, text="FPS: --", font=("Segoe UI", 7), text_color="#888888")
         self.fps_label.grid(row=0, column=3, sticky="e", padx=5, pady=(0, 5))
 
-        # Low Pass Filter
+        # Low Pass (bandpass high cutoff). Press Enter to refresh the preview.
         ctk.CTkLabel(filter_frame, text="Low (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=0, sticky="w", padx=0, pady=(0, 2))
         self.emg_lowpass_var = ctk.StringVar(value=BATCH_C3D_EMG_LOWPASS_DEFAULT)
-        ctk.CTkEntry(filter_frame, textvariable=self.emg_lowpass_var, height=24, width=50).grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 5))
+        lp_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_lowpass_var, height=24, width=50)
+        lp_entry.grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 5))
 
-        # High Pass Filter
+        # High Pass (bandpass low cutoff)
         ctk.CTkLabel(filter_frame, text="High (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=1, sticky="w", padx=5, pady=(0, 2))
         self.emg_highpass_var = ctk.StringVar(value=BATCH_C3D_EMG_HIGHPASS_DEFAULT)
-        ctk.CTkEntry(filter_frame, textvariable=self.emg_highpass_var, height=24, width=50).grid(row=2, column=1, sticky="ew", padx=5, pady=(0, 5))
+        hp_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_highpass_var, height=24, width=50)
+        hp_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(0, 5))
 
         # Notch Filter
         ctk.CTkLabel(filter_frame, text="Notch (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=2, sticky="w", padx=5, pady=(0, 2))
         self.emg_notch_var = ctk.StringVar(value=BATCH_C3D_EMG_NOTCH_DEFAULT)
-        ctk.CTkEntry(filter_frame, textvariable=self.emg_notch_var, height=24, width=50).grid(row=2, column=2, sticky="ew", padx=5, pady=(0, 5))
+        notch_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_notch_var, height=24, width=50)
+        notch_entry.grid(row=2, column=2, sticky="ew", padx=5, pady=(0, 5))
 
-        # EMG Channels Header
-        ctk.CTkLabel(settings_frame, text="EMG Channels:", font=("Segoe UI", 8, "bold")).grid(
-            row=3, column=0, sticky="w", padx=5, pady=(8, 2)
+        # Pressing Enter in any filter field refreshes the live preview
+        for _e in (lp_entry, hp_entry, notch_entry):
+            _e.bind("<Return>", lambda e: self._update_filter_preview())
+
+        # ----- EMG column: live filter preview controls -----
+        preview_ctrl = ctk.CTkFrame(emg_col)
+        preview_ctrl.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 2))
+        preview_ctrl.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(preview_ctrl, text="Preview ch:", font=("Segoe UI", 7, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 4))
+        self.preview_channel_var = ctk.StringVar(value="")
+        self.preview_channel_menu = ctk.CTkOptionMenu(
+            preview_ctrl, variable=self.preview_channel_var, values=["(no channels)"],
+            font=("Segoe UI", 8), height=24,
+            command=lambda _v: self._update_filter_preview(),
+        )
+        self.preview_channel_menu.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(
+            preview_ctrl, text="Preview", width=70, height=24, font=("Segoe UI", 8),
+            command=self._update_filter_preview,
+        ).grid(row=0, column=2, padx=0)
+
+        # ----- EMG column: live filter preview plot -----
+        self.preview_plot_frame = ctk.CTkFrame(emg_col)
+        self.preview_plot_frame.grid(row=4, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        self.preview_plot_frame.grid_rowconfigure(0, weight=1)
+        self.preview_plot_frame.grid_columnconfigure(0, weight=1)
+
+        self.preview_canvas = None  # FigureCanvasTkAgg, created lazily
+        self.preview_fig = None
+        self._preview_placeholder = ctk.CTkLabel(
+            self.preview_plot_frame,
+            text=("Tick a C3D file, click 'Update Markers', then 'Preview' to\n"
+                  "visualise the filter effect on the EMG signal."
+                  if (HAS_MPL and HAS_SCIPY) else
+                  "Live preview needs matplotlib + scipy installed."),
+            text_color="#888888", font=("Segoe UI", 8), justify="center",
+        )
+        self._preview_placeholder.grid(row=0, column=0, sticky="nsew")
+
+        # ----- EMG column: channels header + list -----
+        ctk.CTkLabel(emg_col, text="EMG Channels:", font=("Segoe UI", 8, "bold")).grid(
+            row=5, column=0, sticky="w", padx=5, pady=(6, 2)
         )
 
-        # EMG Channels Frame (taller, expanded)
-        emg_channels_frame = ctk.CTkFrame(settings_frame)
-        emg_channels_frame.grid(row=4, column=0, sticky="nsew", padx=5, pady=(0, 3))
-        emg_channels_frame.grid_rowconfigure(1, weight=1)  # Make scrollable area expandable
+        emg_channels_frame = ctk.CTkFrame(emg_col)
+        emg_channels_frame.grid(row=6, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        emg_channels_frame.grid_rowconfigure(1, weight=1)
         emg_channels_frame.grid_columnconfigure(0, weight=1)
 
-        # Set minimum height for emg_channels_frame and markers frame
-        settings_frame.grid_rowconfigure(4, weight=1, minsize=250)
-        settings_frame.grid_rowconfigure(1, weight=1, minsize=250)  # Markers frame height
-
-        # EMG Channels buttons
         emg_btn_frame = ctk.CTkFrame(emg_channels_frame)
         emg_btn_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 2))
         emg_btn_frame.grid_columnconfigure(0, weight=1)
@@ -376,23 +444,65 @@ class BatchC3DExport(ctk.CTkFrame):
         ctk.CTkButton(emg_btn_frame, text="All", width=40, font=("Segoe UI", 7), command=self._select_all_emg).pack(side="left", padx=1)
         ctk.CTkButton(emg_btn_frame, text="None", width=40, font=("Segoe UI", 7), command=self._deselect_all_emg).pack(side="left", padx=1)
 
-        self.emg_channels_scroll = ctk.CTkScrollableFrame(emg_channels_frame, height=120)
+        self.emg_channels_scroll = ctk.CTkScrollableFrame(emg_channels_frame, height=100)
         self.emg_channels_scroll.grid(row=1, column=0, sticky="nsew")
         self.emg_channels_scroll.grid_columnconfigure(0, weight=1)
 
         self.emg_channel_vars = {}
         self.emg_channel_checkboxes = []
 
-        # Markers Header (RIGHT COLUMN, at same level as EMG Settings header)
-        ctk.CTkLabel(settings_frame, text="All Markers:", font=("Segoe UI", 8, "bold")).grid(
-            row=0, column=1, sticky="w", padx=5, pady=(0, 2)
+        # ----- EMG column: max-EMG calculator -----
+        maxemg_ctrl = ctk.CTkFrame(emg_col)
+        maxemg_ctrl.grid(row=7, column=0, sticky="ew", padx=5, pady=(6, 2))
+        maxemg_ctrl.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(maxemg_ctrl, text="Max EMG", font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 6))
+        ctk.CTkLabel(maxemg_ctrl, text="Window (frames):", font=("Segoe UI", 7)).grid(row=0, column=1, sticky="e", padx=(0, 2))
+        self.maxemg_window_var = ctk.StringVar(value="100")
+        ctk.CTkEntry(maxemg_ctrl, textvariable=self.maxemg_window_var, height=24, width=55).grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.maxemg_button = ctk.CTkButton(
+            maxemg_ctrl, text="Compute", width=80, height=24, font=("Segoe UI", 8),
+            command=self._on_compute_max_emg,
+        )
+        self.maxemg_button.grid(row=0, column=4, sticky="e", padx=0)
+
+        self.maxemg_results_scroll = ctk.CTkScrollableFrame(emg_col, height=90)
+        self.maxemg_results_scroll.grid(row=8, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        self.maxemg_results_scroll.grid_columnconfigure(0, weight=1)
+        self.maxemg_result_labels = []
+        self.max_emg_results = {}  # channel -> (max_value, trial_name)
+
+        # ----- Markers column: header -----
+        ctk.CTkLabel(markers_col, text="All Markers:", font=("Segoe UI", 8, "bold")).grid(
+            row=0, column=0, sticky="w", padx=5, pady=(0, 2)
         )
 
-        # Markers Frame (RIGHT COLUMN, spans same rows as EMG content, side by side layout)
-        markers_frame = ctk.CTkFrame(settings_frame)
-        markers_frame.grid(row=1, column=1, rowspan=4, sticky="nsew", padx=5, pady=(0, 3))
+        # ----- Markers column: remove-substrings input -----
+        marker_remove_frame = ctk.CTkFrame(markers_col)
+        marker_remove_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 3))
+        marker_remove_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(marker_remove_frame, text="Remove (; sep):", font=("Segoe UI", 7, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(2, 4)
+        )
+        self.marker_remove_var = ctk.StringVar(value="")
+        marker_remove_entry = ctk.CTkEntry(
+            marker_remove_frame, textvariable=self.marker_remove_var,
+            placeholder_text="e.g. Athlete_20:;Bar:", height=24, font=("Segoe UI", 8),
+        )
+        marker_remove_entry.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        marker_remove_entry.bind("<Return>", lambda e: self._update_markers_from_c3d())
+        ctk.CTkButton(
+            marker_remove_frame, text="Apply", width=60, height=24, font=("Segoe UI", 8),
+            command=self._update_markers_from_c3d,
+        ).grid(row=0, column=2, padx=0)
+
+        # ----- Markers column: left/right marker lists -----
+        markers_frame = ctk.CTkFrame(markers_col)
+        markers_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=(0, 3))
         markers_frame.grid_columnconfigure(0, weight=1)
         markers_frame.grid_columnconfigure(1, weight=1)
+        markers_frame.grid_rowconfigure(0, weight=1)
 
         # Left foot markers (ALL markers, not just L-prefixed)
         left_foot_frame = ctk.CTkFrame(markers_frame)
@@ -736,6 +846,36 @@ class BatchC3DExport(ctk.CTkFrame):
             checkbox.pack(anchor="w", padx=5, pady=2)
             self.emg_channel_checkboxes.append(checkbox)
 
+        # Keep the live-preview channel dropdown in sync with available channels
+        self._refresh_preview_channel_menu(sorted(channels))
+
+    def _refresh_preview_channel_menu(self, channels):
+        """Populate the filter-preview channel dropdown with the given channels."""
+        if not hasattr(self, "preview_channel_menu"):
+            return
+        values = list(channels) if channels else ["(no channels)"]
+        try:
+            self.preview_channel_menu.configure(values=values)
+            current = self.preview_channel_var.get()
+            if current not in values:
+                self.preview_channel_var.set(values[0])
+        except Exception as e:
+            logger.debug(f"Could not refresh preview channel menu: {e}")
+
+    def _get_marker_remove_list(self):
+        """Parse the ';'-separated 'Remove from marker names' input into a list.
+
+        Returns a list of non-empty substrings to strip from marker labels.
+        """
+        raw = self.marker_remove_var.get() if hasattr(self, "marker_remove_var") else ""
+        return [s.strip() for s in raw.split(";") if s.strip()]
+
+    def _clean_marker_name(self, name: str) -> str:
+        """Remove user-specified substrings from a marker name (for display)."""
+        for sub in self._get_marker_remove_list():
+            name = name.replace(sub, "")
+        return name.strip()
+
     def _get_selected_markers(self):
         """Get list of selected left and right markers."""
         selected_left = [marker for marker, var in self.left_marker_vars.items() if var.get()]
@@ -801,7 +941,10 @@ class BatchC3DExport(ctk.CTkFrame):
                         if hasattr(reader, 'point_labels'):
                             for label in reader.point_labels:
                                 if label and label.strip():
-                                    marker = label.strip()
+                                    # Strip user-specified substrings for display
+                                    marker = self._clean_marker_name(label.strip())
+                                    if not marker:
+                                        continue
                                     all_markers.add(marker)
                                     file_markers.add(marker)
                                     found_labeled = True
@@ -860,10 +1003,16 @@ class BatchC3DExport(ctk.CTkFrame):
                 left_foot_markers = set()
                 right_foot_markers = set()
 
+                # Match markers that *contain* a foot pattern (case-insensitive),
+                # so variations like "Athlete_20:RHEE" or "R_Heel_1" are caught,
+                # not only labels exactly equal to a pattern.
+                left_patterns = [p.lower() for p in LEFT_FOOT_MARKER_PATTERNS]
+                right_patterns = [p.lower() for p in RIGHT_FOOT_MARKER_PATTERNS]
                 for marker in sorted_markers:
-                    if marker in LEFT_FOOT_MARKER_PATTERNS:
+                    m_low = marker.lower()
+                    if any(p in m_low for p in left_patterns):
                         left_foot_markers.add(marker)
-                    if marker in RIGHT_FOOT_MARKER_PATTERNS:
+                    if any(p in m_low for p in right_patterns):
                         right_foot_markers.add(marker)
 
                 # Show all markers in both columns, but only auto-check foot markers
@@ -891,6 +1040,326 @@ class BatchC3DExport(ctk.CTkFrame):
         except Exception as e:
             logger.error(f"Error updating markers from C3D files: {e}")
             logger.debug(f"Exception details: {e}", exc_info=True)
+
+    # ========================================================================
+    # EMG LIVE FILTER PREVIEW  +  MAX-EMG CALCULATION
+    # ========================================================================
+    def _get_emg_filter_params(self):
+        """Return (highpass, lowpass, notch) cutoffs in Hz from the GUI fields.
+
+        In this UI the 'High (Hz)' field is the band-pass *low* cutoff
+        (high-pass), and 'Low (Hz)' is the band-pass *high* cutoff (low-pass),
+        matching the existing export filter semantics.
+        """
+        def _f(var, default):
+            try:
+                return float(str(var.get()).strip())
+            except Exception:
+                return float(default)
+        highpass = _f(self.emg_highpass_var, BATCH_C3D_EMG_HIGHPASS_DEFAULT)
+        lowpass = _f(self.emg_lowpass_var, BATCH_C3D_EMG_LOWPASS_DEFAULT)
+        notch = _f(self.emg_notch_var, BATCH_C3D_EMG_NOTCH_DEFAULT)
+        return highpass, lowpass, notch
+
+    def _compute_emg_envelope(self, sig, fs, highpass, lowpass, notch, env_lp=6.0):
+        """Band-pass + notch + rectify + low-pass envelope of a 1-D EMG signal.
+
+        Returns (band, envelope). Falls back gracefully if cutoffs are invalid
+        or the signal is too short for filtfilt.
+        """
+        sig = np.asarray(sig, dtype=float)
+        sig = sig[~np.isnan(sig)] if np.isnan(sig).any() else sig
+        if sig.size < 10 or fs <= 0:
+            return sig, np.abs(sig)
+        sig = sig - np.mean(sig)
+        nyq = 0.5 * fs
+        out = sig
+
+        # Band-pass (or low-pass only if high-pass cutoff invalid)
+        lo = max(highpass, 0.0) / nyq
+        hi = min(lowpass, nyq * 0.99) / nyq
+        try:
+            if 0 < lo < hi < 1.0:
+                b, a = _sps.butter(4, [lo, hi], btype='band')
+                out = _sps.filtfilt(b, a, out)
+            elif 0 < hi < 1.0:
+                b, a = _sps.butter(4, hi, btype='low')
+                out = _sps.filtfilt(b, a, out)
+        except Exception as e:
+            logger.debug(f"Bandpass preview failed: {e}")
+
+        # Notch
+        if notch and 0 < notch < nyq:
+            try:
+                b, a = _sps.iirnotch(notch / nyq, Q=30.0)
+                out = _sps.filtfilt(b, a, out)
+            except Exception as e:
+                logger.debug(f"Notch preview failed: {e}")
+
+        band = out
+        rect = np.abs(band)
+        env = rect
+        el = env_lp / nyq
+        if 0 < el < 1.0:
+            try:
+                b, a = _sps.butter(4, el, btype='low')
+                env = _sps.filtfilt(b, a, rect)
+            except Exception as e:
+                logger.debug(f"Envelope preview failed: {e}")
+        return band, env
+
+    def _read_c3d_emg(self, c3d_file, wanted=None):
+        """Read full-resolution analog signals from a C3D file.
+
+        Args:
+            c3d_file: Path to the .c3d file.
+            wanted: optional set of channel labels to keep (None = all).
+
+        Returns:
+            (data, fs) where data maps channel label -> 1-D numpy array, and
+            fs is the analog sampling rate in Hz.
+        """
+        import warnings as _warnings
+        with open(str(c3d_file), 'rb') as f:
+            reader = c3d.Reader(f)
+            labels = [str(l or "").strip() for l in reader.analog_labels]
+            try:
+                fs = float(reader.analog_rate)
+            except Exception:
+                fs = float(getattr(reader, 'point_rate', 1000.0))
+            keep_idx = [i for i, lab in enumerate(labels)
+                        if (wanted is None or lab in wanted)]
+            cols = {labels[i]: [] for i in keep_idx}
+            with _warnings.catch_warnings():
+                _warnings.filterwarnings('ignore', message='No point data found',
+                                         category=UserWarning)
+                for _fno, _pts, analog in reader.read_frames():
+                    for i in keep_idx:
+                        cols[labels[i]].append(np.asarray(analog[i]).ravel())
+        data = {lab: (np.concatenate(v) if v else np.array([]))
+                for lab, v in cols.items()}
+        return data, fs
+
+    def _update_filter_preview(self):
+        """Plot raw vs filtered EMG for the first ticked C3D + selected channel."""
+        if not (HAS_MPL and HAS_SCIPY and HAS_C3D):
+            self._show_preview_message("Live preview needs matplotlib + scipy + c3d installed.")
+            return
+        selected = [f for f, s in zip(self.c3d_files, self.selected_files) if s]
+        if not selected:
+            self._show_preview_message("Tick at least one C3D file to preview.")
+            return
+        ch = self.preview_channel_var.get()
+        if not ch or ch == "(no channels)":
+            self._show_preview_message("Click 'Update Markers' to load EMG channels first.")
+            return
+
+        c3d_file = selected[0]
+        try:
+            data, fs = self._read_c3d_emg(c3d_file, wanted={ch})
+        except Exception as e:
+            self._show_preview_message(f"Could not read EMG: {str(e)[:60]}")
+            return
+
+        sig = data.get(ch)
+        if sig is None or sig.size < 10:
+            self._show_preview_message(f"No usable data for channel '{ch}'.")
+            return
+
+        highpass, lowpass, notch = self._get_emg_filter_params()
+        band, env = self._compute_emg_envelope(sig, fs, highpass, lowpass, notch)
+        t = np.arange(sig.size) / fs if fs > 0 else np.arange(sig.size)
+
+        try:
+            self._render_preview_plot(c3d_file.name, ch, t, sig, band, env,
+                                      fs, highpass, lowpass, notch)
+        except Exception as e:
+            logger.error(f"Preview plot error: {e}", exc_info=True)
+            self._show_preview_message(f"Plot error: {str(e)[:60]}")
+
+    def _show_preview_message(self, msg):
+        """Show a placeholder message in the preview area (clears any plot)."""
+        if self.preview_canvas is not None:
+            try:
+                self.preview_canvas.get_tk_widget().destroy()
+            except Exception:
+                pass
+            self.preview_canvas = None
+        if self.preview_fig is not None:
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(self.preview_fig)
+            except Exception:
+                pass
+            self.preview_fig = None
+        try:
+            self._preview_placeholder.configure(text=msg)
+            self._preview_placeholder.grid(row=0, column=0, sticky="nsew")
+        except Exception:
+            pass
+
+    def _render_preview_plot(self, fname, ch, t, raw, band, env,
+                             fs, highpass, lowpass, notch):
+        """Draw the raw vs filtered EMG figure into the preview frame."""
+        # Remove placeholder + any previous canvas
+        try:
+            self._preview_placeholder.grid_forget()
+        except Exception:
+            pass
+        if self.preview_canvas is not None:
+            try:
+                self.preview_canvas.get_tk_widget().destroy()
+            except Exception:
+                pass
+            self.preview_canvas = None
+        if self.preview_fig is not None:
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(self.preview_fig)
+            except Exception:
+                pass
+
+        bg = "#2b2b2b"
+        fg = "#dddddd"
+        fig = Figure(figsize=(5, 3), dpi=100, facecolor=bg)
+        self.preview_fig = fig
+
+        ax1 = fig.add_subplot(2, 1, 1)
+        ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
+        for ax in (ax1, ax2):
+            ax.set_facecolor(bg)
+            ax.tick_params(colors=fg, labelsize=7)
+            for spine in ax.spines.values():
+                spine.set_color("#555555")
+            ax.grid(True, alpha=0.2)
+
+        ax1.plot(t, raw, color="#5da9e9", linewidth=0.6)
+        ax1.set_title(f"{ch}  —  {fname}", color=fg, fontsize=8, pad=3)
+        ax1.set_ylabel("Raw", color=fg, fontsize=7)
+
+        ax2.plot(t, band, color="#888888", linewidth=0.5, alpha=0.6, label="band-pass")
+        ax2.plot(t, env, color="#ff8c42", linewidth=1.2, label="envelope")
+        ax2.set_ylabel("Filtered", color=fg, fontsize=7)
+        ax2.set_xlabel(
+            f"Time (s)   |   {fs:.0f} Hz   band {highpass:g}-{lowpass:g} Hz   notch {notch:g} Hz",
+            color=fg, fontsize=7)
+        ax2.legend(loc="upper right", fontsize=6, facecolor=bg, edgecolor="#555555",
+                   labelcolor=fg)
+
+        fig.tight_layout(pad=0.6)
+
+        self.preview_canvas = FigureCanvasTkAgg(fig, master=self.preview_plot_frame)
+        self.preview_canvas.draw()
+        self.preview_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+    def _on_compute_max_emg(self):
+        """Compute per-channel max EMG (moving-averaged) across selected trials."""
+        if not (HAS_SCIPY and HAS_C3D):
+            self._render_max_emg_message("Max EMG needs scipy + c3d installed.")
+            return
+        selected = [f for f, s in zip(self.c3d_files, self.selected_files) if s]
+        if not selected:
+            self._render_max_emg_message("Tick at least one C3D file.")
+            return
+        channels = self._get_selected_emg_channels()
+        if not channels:
+            self._render_max_emg_message("Select at least one EMG channel.")
+            return
+        try:
+            window = max(1, int(float(self.maxemg_window_var.get())))
+        except Exception:
+            window = 1
+
+        self.maxemg_button.configure(state="disabled", text="Working…")
+        self._render_max_emg_message("Computing…")
+        thread = threading.Thread(
+            target=self._compute_max_emg_worker,
+            args=(list(selected), list(channels), window),
+            daemon=True,
+        )
+        thread.start()
+
+    def _compute_max_emg_worker(self, files, channels, window):
+        """Background worker: scan trials, build per-channel max envelope table."""
+        results = {}  # channel -> (max_value, trial_name)
+        wanted = set(channels)
+        try:
+            highpass, lowpass, notch = self._get_emg_filter_params()
+            for c3d_file in files:
+                try:
+                    data, fs = self._read_c3d_emg(c3d_file, wanted=wanted)
+                except Exception as e:
+                    logger.warning(f"Max EMG: could not read {c3d_file.name}: {e}")
+                    continue
+                for ch in channels:
+                    sig = data.get(ch)
+                    if sig is None or sig.size < 10:
+                        continue
+                    _band, env = self._compute_emg_envelope(sig, fs, highpass, lowpass, notch)
+                    if window > 1 and env.size >= window:
+                        env = np.convolve(env, np.ones(window) / window, mode="valid")
+                    if env.size == 0:
+                        continue
+                    peak = float(np.nanmax(env))
+                    if (ch not in results) or (peak > results[ch][0]):
+                        results[ch] = (peak, c3d_file.stem)
+            self.max_emg_results = results
+            logger.info(f"Max EMG computed for {len(results)} channels "
+                        f"across {len(files)} trials (window={window} frames)")
+        except Exception as e:
+            logger.error(f"Max EMG worker error: {e}", exc_info=True)
+        finally:
+            # Marshal UI updates back onto the Tk main thread
+            try:
+                self.after(0, self._render_max_emg_results)
+                self.after(0, lambda: self.maxemg_button.configure(
+                    state="normal", text="Compute"))
+            except Exception:
+                self._render_max_emg_results()
+
+    def _render_max_emg_message(self, msg):
+        """Clear the max-EMG results area and show a single status message."""
+        for lbl in self.maxemg_result_labels:
+            try:
+                lbl.destroy()
+            except Exception:
+                pass
+        self.maxemg_result_labels = []
+        lbl = ctk.CTkLabel(self.maxemg_results_scroll, text=msg,
+                           text_color="#888888", font=("Segoe UI", 8))
+        lbl.pack(anchor="w", padx=5, pady=2)
+        self.maxemg_result_labels.append(lbl)
+
+    def _render_max_emg_results(self):
+        """Render the per-channel max-EMG table (value + trial that produced it)."""
+        for lbl in self.maxemg_result_labels:
+            try:
+                lbl.destroy()
+            except Exception:
+                pass
+        self.maxemg_result_labels = []
+
+        if not self.max_emg_results:
+            self._render_max_emg_message("No results.")
+            return
+
+        header = ctk.CTkLabel(
+            self.maxemg_results_scroll,
+            text=f"{'Channel':<18}{'Max':>12}   Trial",
+            font=("Consolas", 8, "bold"), text_color="#bbbbbb", justify="left",
+        )
+        header.pack(anchor="w", padx=5, pady=(2, 1))
+        self.maxemg_result_labels.append(header)
+
+        for ch in sorted(self.max_emg_results):
+            peak, trial = self.max_emg_results[ch]
+            row = ctk.CTkLabel(
+                self.maxemg_results_scroll,
+                text=f"{ch[:18]:<18}{peak:>12.4g}   {trial}",
+                font=("Consolas", 8), justify="left",
+            )
+            row.pack(anchor="w", padx=5, pady=1)
+            self.maxemg_result_labels.append(row)
 
     def _on_export_batch(self):
         """Start batch export."""
@@ -1020,7 +1489,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
                 # Export markers (now from copy in output folder) with all markers
                 try:
-                    exportC3D.export_markers(str(c3d_copy), strings_to_remove=[])
+                    exportC3D.export_markers(str(c3d_copy), strings_to_remove=self._get_marker_remove_list())
                     marker_file = output_folder / "marker_experimental.trc"
                     if marker_file.exists():
                         # Ensure ALL markers are in the TRC file
@@ -1612,7 +2081,7 @@ class BatchC3DExport(ctk.CTkFrame):
         except Exception as exc:
             logger.warning(f"Could not create GRF.xml: {exc}")
 
-    def _on_cancel(self):
+    def _on_cancel(self):  # noqa: D401
         """Cancel batch export."""
         self.is_processing = False
         self.progress_label.configure(text="Cancelling...")

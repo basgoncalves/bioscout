@@ -100,7 +100,7 @@ emg_normalise = None
 HAS_EMG_NORMALISE = False
 
 
-__version__ = '1.3.0'
+__version__ = '1.4.0'
 
 # Project directories
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5334,3 +5334,16 @@ try:
 except ImportError:
     HAS_EMG_NORMALISE = False
     emg_normalise = None
+
+# Analysis object model (Project -> Subject -> Session -> Trial). Loaded here,
+# after Analyse is defined, because Trial subclasses Analyse. These are the
+# typed entry points re-exported by the top-level `bioscout` package.
+try:
+    from .analysis import (
+        Subject, Session, Project,
+        build_model_config, discover_subjects, init_project,
+        check_settings_version, migrate_settings, ensure_editor_paths,
+    )
+    from . import analysis
+except Exception as _e:
+    print(f"[bioscout.utils] analysis model not loaded: {_e}")

@@ -175,34 +175,78 @@ class TrainingTrackingTab(ctk.CTkFrame):
 
     def _add_player_dialog(self):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Add player"); dlg.geometry("340x360"); dlg.transient(self); dlg.grab_set()
-        fields = {}
-        for label, key, default in [
-            ("Player ID (unique)", "id", ""), ("Name", "name", ""),
-            ("Age", "age", ""), ("Sex (M/F)", "sex", "M"),
-            ("Mass (kg)", "mass_kg", ""), ("Max HR (bpm)", "hr_max", ""),
-            ("Resting HR (bpm)", "hr_rest", ""),
-        ]:
-            ctk.CTkLabel(dlg, text=label).pack(anchor="w", padx=16, pady=(8, 0))
+        dlg.title("Add player"); dlg.geometry("400x540")
+        dlg.transient(self); dlg.grab_set()
+        dlg.grid_rowconfigure(0, weight=1); dlg.grid_columnconfigure(0, weight=1)
+
+        # scrollable fields + a fixed bottom bar (button always visible)
+        body = ctk.CTkScrollableFrame(dlg)
+        body.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        bar = ctk.CTkFrame(dlg, fg_color="transparent")
+        bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+
+        fields, entries = {}, {}
+
+        def add_field(label, key, default=""):
+            ctk.CTkLabel(body, text=label).pack(anchor="w", padx=16, pady=(8, 0))
             var = ctk.StringVar(value=default)
-            ctk.CTkEntry(dlg, textvariable=var).pack(fill="x", padx=16)
-            fields[key] = var
+            ent = ctk.CTkEntry(body, textvariable=var)
+            ent.pack(fill="x", padx=16)
+            fields[key] = var; entries[key] = ent
+            return var, ent
+
+        id_var, id_ent = add_field("Player ID (unique)", "id")
+        add_field("Name", "name")
+        age_var, _ = add_field("Age", "age")
+        add_field("Sex (M/F)", "sex", "M")
+        add_field("Mass (kg)", "mass_kg")
+        hrmax_var, hrmax_ent = add_field("Max HR (bpm) — auto from age, editable", "hr_max")
+        add_field("Resting HR (bpm) — default 60, editable", "hr_rest", "60")
+
+        default_border = id_ent.cget("border_color")
+        msg = ctk.CTkLabel(bar, text="", font=("Segoe UI", 9), text_color="#e03131")
+        msg.pack(anchor="w")
+        add_btn = ctk.CTkButton(bar, text="Add")
+        add_btn.pack(fill="x", pady=(4, 0))
+
+        # --- Max HR auto-prediction from age (Tanaka 208 - 0.7·age), until edited ---
+        state = {"hrmax_manual": bool(hrmax_var.get().strip())}
+        hrmax_ent.bind("<KeyRelease>", lambda _e: state.update(hrmax_manual=True))
+
+        def predict_hrmax(*_):
+            if state["hrmax_manual"]:
+                return
+            a = age_var.get().strip()
+            if a.isdigit() and int(a) > 0:
+                hrmax_var.set(str(int(round(208 - 0.7 * int(a)))))
+        age_var.trace_add("write", predict_hrmax)
+
+        # --- live ID validation: red border + disabled Add if taken/empty ---
+        def validate_id(*_):
+            pid = id_var.get().strip()
+            taken = pid in self.registry
+            id_ent.configure(border_color="#e03131" if (taken or not pid) else default_border)
+            if taken:
+                msg.configure(text=f"ID '{pid}' already exists — choose another.")
+                add_btn.configure(state="disabled")
+            elif not pid:
+                msg.configure(text=""); add_btn.configure(state="disabled")
+            else:
+                msg.configure(text=""); add_btn.configure(state="normal")
+        id_var.trace_add("write", validate_id)
+        validate_id()
 
         def save():
-            pid = fields["id"].get().strip()
-            if not pid:
-                messagebox.showwarning("Missing ID", "Player ID is required."); return
-            if pid in self.registry:
-                messagebox.showerror("Exists", f"Player '{pid}' already exists."); return
+            pid = id_var.get().strip()
+            if not pid or pid in self.registry:
+                return
             rec = {"name": fields["name"].get().strip(),
                    "sex": (fields["sex"].get().strip() or "M")[:1].upper()}
-            for k in ("age",):
-                v = fields[k].get().strip()
-                rec[k] = int(v) if v.isdigit() else None
+            a = fields["age"].get().strip()
+            rec["age"] = int(a) if a.isdigit() else None
             v = fields["mass_kg"].get().strip()
             try: rec["mass_kg"] = float(v) if v else None
             except ValueError: rec["mass_kg"] = None
-            # HR overrides live under tracking.hr
             hr = {}
             for k, kk in (("hr_max", "max"), ("hr_rest", "rest")):
                 v = fields[k].get().strip()
@@ -217,7 +261,7 @@ class TrainingTrackingTab(ctk.CTkFrame):
             dlg.destroy()
             self.player_var.set(pid); self._refresh_players()
 
-        ctk.CTkButton(dlg, text="Add", command=save).pack(pady=14)
+        add_btn.configure(command=save)
 
     def _credentials_dialog(self):
         pid = self.player

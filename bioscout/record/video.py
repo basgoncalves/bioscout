@@ -1569,6 +1569,24 @@ class MovementTracker:
                             c = model_config.angle_columns[col_idx[k]]
                             angle_vals[col_idx[k]] = float(np.clip(ankle_val, c[5], c[6]))
 
+                # DOFs that a single monocular camera cannot resolve. Leaving
+                # them to the generic angle loop pinned them to their joint
+                # limits (constant ±30/±40/±45), which made the .mot not track
+                # the video at all. Hold them at neutral (0) instead so the
+                # model moves only in the observed sagittal plane.
+                _UNOBSERVABLE = (
+                    'pelvis_list', 'pelvis_rotation', 'pelvis_tz',
+                    'hip_adduction_r', 'hip_adduction_l',
+                    'hip_rotation_r', 'hip_rotation_l',
+                    'knee_adduction_r', 'knee_adduction_l',
+                    'subtalar_angle_r', 'subtalar_angle_l',
+                    'mtp_angle_r', 'mtp_angle_l',
+                    'lumbar_bending', 'lumbar_rotation',
+                )
+                for _dof in _UNOBSERVABLE:
+                    if _dof in col_idx:
+                        angle_vals[col_idx[_dof]] = 0.0
+
             # --- Ball columns (optional) ---
             if has_ball:
                 anchor = (lm.get(model_config.ball_anchor_landmark)
