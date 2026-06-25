@@ -840,7 +840,7 @@ def init_project(project_dir=None, verbose=True, setup_editor=True):
 # test-heavy task. They are re-exported here lazily so the whole analysis API is
 # reachable from one place: `from bioscout.utils.analysis import Analyse`.
 # Lazy (PEP 562) to avoid a circular import at module load.
-_REEXPORT = {"Analyse", "Plot", "Summarize"}
+_REEXPORT = {"Analyse", "Plot"}
 
 
 def __getattr__(name):
@@ -852,7 +852,7 @@ def __getattr__(name):
 
 __all__ = [
     "Subject", "Session", "Project",
-    "Analyse", "Plot", "Summarize",
+    "Analyse", "Plot",
     "build_model_config", "discover_subjects", "init_project",
     "sessions_from_subjects", "players_from_subjects",
     "check_settings_version", "migrate_settings", "ensure_editor_paths",
