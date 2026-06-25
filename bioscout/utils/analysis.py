@@ -53,6 +53,7 @@ class Subject:
     name: str                                  # folder under simulations/<name>/ and models/<name>/
     label: Optional[str] = None                # display name on plots (defaults to name)
     session: Optional[str] = None              # default session, e.g. "25_03_31"
+    static_trial: Optional[str] = None         # static/MVC trial folder for this session (batch path)
     model_so: Optional[str] = None             # .osim used for static optimisation
     model_ceinms: Optional[str] = None         # .osim used for CEINMS (defaults to model_so)
     setup_folder: Optional[str] = None         # subfolder of setupFiles/ with the OpenSim setup XMLs
@@ -207,6 +208,43 @@ def build_model_config(subjects, force_types=("SO", "CEINMS")) -> dict:
     return cfg
 
 
+# ---------------------------------------------------------------------------
+# Single source of truth: derive the legacy batch structures from SUBJECTS so
+# there is ONE subject/session model (these Subjects), not two. Project
+# settings can do:  PLAYERS  = players_from_subjects(SUBJECTS)
+#                   SESSIONS = sessions_from_subjects(SUBJECTS, SIMULATIONS_DIR)
+# instead of maintaining a separate PLAYERS list + build_sessions().
+# ---------------------------------------------------------------------------
+
+def sessions_from_subjects(subjects, simulations_dir=None, default_static="static1") -> dict:
+    """Legacy batch ``SESSIONS`` dict ({abs_session_path: static_trial}) derived
+    from Subjects — what ``BatchSettings.sessions`` consumes."""
+    if simulations_dir is None:
+        from bioscout import utils
+        simulations_dir = getattr(utils, "SIMULATIONS_DIR", "")
+    out = {}
+    for s in subjects:
+        sess = getattr(s, "session", None)
+        path = (os.path.join(str(simulations_dir), s.name, sess) if sess
+                else os.path.join(str(simulations_dir), s.name))
+        out[str(path)] = getattr(s, "static_trial", None) or default_static
+    return out
+
+
+def players_from_subjects(subjects) -> dict:
+    """Legacy ``PLAYERS`` dict ({name: {session, static_trial, group}}) derived
+    from Subjects — for code/GUI paths that still read PLAYERS."""
+    out = {}
+    for s in subjects:
+        rec = {}
+        for key in ("session", "static_trial", "group"):
+            val = getattr(s, key, None)
+            if val is not None:
+                rec[key] = val
+        out[s.name] = rec
+    return out
+
+
 # ===========================================================================
 # Hierarchy: Subject -> Session -> Trial (a Trial IS an Analyse)
 # ===========================================================================
@@ -249,31 +287,180 @@ def _trial_class():
 
 
 class Session:
-    """One recording session of a Subject; navigates to its trials."""
+    """One recording session of a Subject.
+
+    Two roles:
+
+    * **Navigation** — ``.trials``, ``.trial(name)``, ``.path``.
+    * **Session-level analysis** — operations that span the whole session
+      rather than a single trial. EMG normalisation builds one session-wide
+      envelope and applies it to every trial; CEINMS calibration produces one
+      calibrated model per subject/session from the calibration trials. Both
+      are already session-scoped inside ``Analyse``; this class drives them at
+      the right granularity. Add future session-scoped steps here (e.g. MVC
+      processing, per-session quality checks).
+
+    Example::
+
+        sess = proj.subject("Athlete_03_GPK").get_session("25_03_31")
+        sess.run_emg_normalise(replace=True)     # all trials, one envelope
+        sess.run_ceinms_calibration(replace=True)  # one calibrated model
+        # or both in order:
+        sess.prepare_ceinms(replace=True)
+    """
 
     def __init__(self, subject, name):
         self.subject = subject     # Subject
         self.name = name           # session folder name, e.g. "25_03_31"
 
+    # -- navigation ---------------------------------------------------------
     @property
     def path(self):
         return os.path.join(_sim_dir(), self.subject.name, self.name or "")
 
-    @property
-    def trials(self):
-        """List of Trial objects (one per trial folder in this session)."""
+    def _trial_names(self):
         p = self.path
         if not os.path.isdir(p):
             return []
-        return [self.subject.make_trial(os.path.join(p, d))
-                for d in sorted(os.listdir(p)) if os.path.isdir(os.path.join(p, d))]
+        return [d for d in sorted(os.listdir(p)) if os.path.isdir(os.path.join(p, d))]
+
+    @property
+    def trials(self):
+        """List of Trial objects (one per trial folder in this session)."""
+        return [self.subject.make_trial(os.path.join(self.path, d))
+                for d in self._trial_names()]
 
     def trial(self, name, force_type="SO"):
         """Trial by name (e.g. 'Squat_BW_01')."""
         return self.subject.make_trial(os.path.join(self.path, name), force_type=force_type)
 
+    # -- session-level analysis --------------------------------------------
+    @property
+    def calibration_trials(self):
+        """CEINMS calibration trial names (from
+        ``settings.CEINMSSettings.calibration_trial_names``) that actually
+        exist in this session."""
+        from bioscout import utils
+        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
+        names = getattr(cs, "calibration_trial_names", None) or []
+        here = set(self._trial_names())
+        return [n for n in names if n in here]
+
+    def _ref_trial(self, force_type="CEINMS", prefer=None):
+        """A single Trial used to drive a session-level op. Prefers ``prefer``,
+        then a configured calibration trial present in the session, else the
+        first trial."""
+        names = self._trial_names()
+        if not names:
+            return None
+        if prefer and prefer in names:
+            pick = prefer
+        else:
+            calib = self.calibration_trials
+            pick = calib[0] if calib else names[0]
+        return self.trial(pick, force_type=force_type)
+
+    def run_emg_normalise(self, replace=None):
+        """Normalise EMG across the whole session.
+
+        ``Analyse.run_emg_normalise`` computes the session-wide envelope (over
+        all trials' EMG in the session folder) and writes the normalised EMG for
+        the trial it is called on, so here it is applied to **every** trial in
+        the session. Returns the list of trials that normalised successfully.
+        """
+        done = []
+        for t in self.trials:
+            if replace is not None:
+                t.update_trial_attribute("replace", replace)
+            try:
+                t.run_emg_normalise()
+                done.append(t)
+            except Exception as e:
+                print(f"[Session] {self.subject.name}/{self.name}: EMG normalise "
+                      f"failed for {os.path.basename(t.path)}: {e}")
+        return done
+
+    def run_ceinms_calibration(self, replace=None, prefer_trial=None):
+        """Calibrate CEINMS once for this subject/session.
+
+        ``Analyse.run_ceinms_calibration`` is itself session-scoped (it collects
+        the calibration trials under the session folder), so it is driven here
+        from a single CEINMS-configured reference trial. Produces the calibrated
+        model that every trial's CEINMS execution then uses.
+        """
+        t = self._ref_trial(force_type="CEINMS", prefer=prefer_trial)
+        if t is None:
+            print(f"[Session] {self.subject.name}/{self.name}: no trials to calibrate.")
+            return None
+        if replace is not None:
+            t.update_trial_attribute("replace", replace)
+        return t.run_ceinms_calibration()
+
+    def prepare_ceinms(self, replace=None):
+        """Convenience: session-level EMG normalisation, then CEINMS
+        calibration (the two steps a session needs before per-trial CEINMS
+        execution)."""
+        self.normalise_emg(replace=replace)
+        return self.calibrate(replace=replace)
+
+    # ---- clean public verbs ----------------------------------------------
+    def normalise_emg(self, replace=None):
+        """Session-wide EMG normalisation (alias of run_emg_normalise)."""
+        return self.run_emg_normalise(replace=replace)
+
+    def _resolve_calibration_trials(self):
+        """Which trial folders to calibrate on for THIS session.
+
+        Reads ``settings.CEINMSSettings.calibration_trial_names`` and matches
+        them to this session's actual trial folders (case-insensitive). If none
+        match (e.g. a stale or mistyped name in settings), falls back to the
+        session's squat trials, then to all trials, so calibration still runs.
+        """
+        here = self._trial_names()
+        lower = {t.lower(): t for t in here}
+        from bioscout import utils
+        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
+        wanted = list(getattr(cs, "calibration_trial_names", None) or [])
+        matched = [lower[w.lower()] for w in wanted if w.lower() in lower]
+        if matched:
+            return matched
+        if wanted:
+            print(f"[Session] {self.subject.name}/{self.name}: calibration trials "
+                  f"{wanted} not found in this session; falling back.")
+        squats = [t for t in here if "squat" in t.lower()]
+        return squats or here
+
+    def calibrate(self, replace=None, calibration_trials=None):
+        """Calibrate CEINMS for THIS session.
+
+        Uses the calibration trials named in ``settings.CEINMSSettings``
+        (matched to this session's folders via :meth:`_resolve_calibration_trials`),
+        or the explicit ``calibration_trials`` you pass. The resolved names are
+        fed to the underlying session-scoped calibration so it collects the
+        right input trials even if the settings value is stale.
+
+        Example::
+
+            proj.subjects[0].sessions[0].calibrate(replace=True)
+        """
+        names = list(calibration_trials) if calibration_trials else self._resolve_calibration_trials()
+        if not names:
+            print(f"[Session] {self.subject.name}/{self.name}: no calibration trials found.")
+            return None
+        from bioscout import utils
+        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
+        old = getattr(cs, "calibration_trial_names", None) if cs is not None else None
+        try:
+            if cs is not None:
+                cs.calibration_trial_names = names   # point calibration at real folders
+            print(f"[Session] {self.subject.name}/{self.name}: calibrating CEINMS on {names}")
+            return self.run_ceinms_calibration(replace=replace, prefer_trial=names[0])
+        finally:
+            if cs is not None:
+                cs.calibration_trial_names = old
+
     def __repr__(self):
-        n = len(self.trials) if os.path.isdir(self.path) else 0
+        n = len(self._trial_names())
         return f"<Session {self.subject.name}/{self.name} — {n} trials>"
 
 
@@ -477,10 +664,16 @@ def ensure_editor_paths(project_dir, verbose=True):
                 return  # unparseable / commented JSONC — leave the user's file alone
         paths = data.get("python.analysis.extraPaths", [])
         changed = False
-        if "." not in paths:
-            paths.append(".")
+        # Add both "." (portable, works when this folder is the workspace root)
+        # and the absolute path (works regardless of the workspace root, e.g.
+        # multi-root or a parent folder opened) so Pylance resolves `import
+        # settings` / the project's own modules in either case.
+        for entry in (".", str(Path(project_dir).resolve())):
+            if entry not in paths:
+                paths.append(entry)
+                changed = True
+        if changed:
             data["python.analysis.extraPaths"] = paths
-            changed = True
         sev = data.setdefault("python.analysis.diagnosticSeverityOverrides", {})
         for k in ("reportMissingImports", "reportMissingModuleSource"):
             if k not in sev:
@@ -642,8 +835,25 @@ def init_project(project_dir=None, verbose=True, setup_editor=True):
     return p.utils, p.settings
 
 
+# The pipeline engine classes (Analyse, Plot, Summarize) still live in
+# utils/__init__.py — moving ~2500 lines of tightly-coupled code is a separate,
+# test-heavy task. They are re-exported here lazily so the whole analysis API is
+# reachable from one place: `from bioscout.utils.analysis import Analyse`.
+# Lazy (PEP 562) to avoid a circular import at module load.
+_REEXPORT = {"Analyse", "Plot", "Summarize"}
+
+
+def __getattr__(name):
+    if name in _REEXPORT:
+        from bioscout import utils
+        return getattr(utils, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "Subject", "Session", "Project",
+    "Analyse", "Plot", "Summarize",
     "build_model_config", "discover_subjects", "init_project",
+    "sessions_from_subjects", "players_from_subjects",
     "check_settings_version", "migrate_settings", "ensure_editor_paths",
 ]

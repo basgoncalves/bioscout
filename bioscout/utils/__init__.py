@@ -100,7 +100,7 @@ emg_normalise = None
 HAS_EMG_NORMALISE = False
 
 
-__version__ = '1.4.0'
+__version__ = '1.7.0'
 
 # Project directories
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -4562,56 +4562,10 @@ def create_color_and_style_dict(labels):
             style_dict[label] = '-'
     return color_dict, style_dict
 
-def rsquared(y_true, y_pred):
-    """Calculate the R-squared value between true and predicted values.
-    
-    Args:
-        y_true (array-like): The true values.
-        y_pred (array-like): The predicted values.
-    """
-    r = np.corrcoef(y_true, y_pred)[0, 1]
-    return r ** 2
-
-def rmse(y_true, y_pred):
-    """Calculate the Root Mean Square Error (RMSE) between true and predicted values.
-    
-    Args:
-        y_true (array-like): The true values.
-        y_pred (array-like): The predicted values.
-    """
-    return np.sqrt(np.mean((y_true - y_pred) ** 2))    
-
-def compare_curves(dataFrame1, dataFrame2, mapping=None):
-    """Calculate RMSE and R-squared the common columns between two dataFrames.
-    
-    mapping: dict
-        A dictionary mapping column names from dataFrame1 to dataFrame2.
-        
-    """
-    
-    if mapping is None:
-        common_columns = dataFrame1.columns.intersection(dataFrame2.columns)
-        mapping = dict(common_columns.to_series())
-    else:
-        common_columns = list(mapping.keys())
-        
-    results = pd.DataFrame(columns=['RMSE', 'R2'], index=common_columns)
-    for col in common_columns:
-        mapped_col = mapping.get(col, col)
-        y_true_col = dataFrame1[mapped_col].values
-        y_pred_col = dataFrame2[col].values
-        rmse_value = rmse(y_true_col, y_pred_col)
-        r2_value = rsquared(y_true_col, y_pred_col)
-        results.loc[col] = [rmse_value, r2_value]
-    
-    return results
-
-def sum3d(df, columns):
-    x = df[columns[0]]
-    y = df[columns[1]]
-    z = df[columns[2]]
-    sum = np.sqrt(x**2 +  y**2 + z**2)
-    return sum
+# Curve-agreement metrics moved to utils/stats.py (re-exported here so existing
+# `utils.rmse` / `utils.rsquared` / `utils.compare_curves` / `utils.sum3d` and
+# every internal reference keep working unchanged).
+from .stats import rsquared, rmse, compare_curves, sum3d
 
 # dir manipulation
 def rename_all_files_in_dir(dir_path, old_str, new_str):
