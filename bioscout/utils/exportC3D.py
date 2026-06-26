@@ -20,7 +20,7 @@ import numpy as np
 # Access functions defined in utils/__init__.py
 try:
     # Works when imported as package: app.utils.exportC3D
-    from . import load_any_data_file, filter_emg, osimTools, write_mot
+    from . import load_any_data_file, filter_emg_file as filter_emg, osimTools, write_mot
 except (ImportError, ValueError):
     # Works when running file directly or dynamically loaded
     import sys
@@ -32,7 +32,7 @@ except (ImportError, ValueError):
     # (re-executing it would trigger circular imports again)
     import utils as _utils_mod
     load_any_data_file = _utils_mod.load_any_data_file
-    filter_emg = _utils_mod.filter_emg
+    filter_emg = _utils_mod.filter_emg_file
     osimTools = _utils_mod.osimTools
     write_mot = _utils_mod.write_mot
 
