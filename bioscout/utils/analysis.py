@@ -244,9 +244,9 @@ def build_model_config(subjects, force_types=("SO", "CEINMS")) -> dict:
 # ---------------------------------------------------------------------------
 # Single source of truth: derive the legacy batch structures from SUBJECTS so
 # there is ONE subject/session model (these Subjects), not two. Project
-# settings can do:  PLAYERS  = players_from_subjects(SUBJECTS)
+# settings can do:  SUBJECTS  = subjects_from_subjects(SUBJECTS)
 #                   SESSIONS = sessions_from_subjects(SUBJECTS, SIMULATIONS_DIR)
-# instead of maintaining a separate PLAYERS list + build_sessions().
+# instead of maintaining a separate SUBJECTS list + build_sessions().
 # ---------------------------------------------------------------------------
 
 def sessions_from_subjects(subjects, simulations_dir=None, default_static="static1") -> dict:
@@ -264,9 +264,9 @@ def sessions_from_subjects(subjects, simulations_dir=None, default_static="stati
     return out
 
 
-def players_from_subjects(subjects) -> dict:
-    """Legacy ``PLAYERS`` dict ({name: {session, static_trial, group}}) derived
-    from Subjects — for code/GUI paths that still read PLAYERS."""
+def subjects_from_subjects(subjects) -> dict:
+    """Legacy ``SUBJECTS`` dict ({name: {session, static_trial, group}}) derived
+    from Subjects — for code/GUI paths that still read SUBJECTS."""
     out = {}
     for s in subjects:
         rec = {}
@@ -399,7 +399,12 @@ class Session:
         p = self.path
         if not os.path.isdir(p):
             return []
-        return [d for d in sorted(os.listdir(p)) if os.path.isdir(os.path.join(p, d))]
+        # Exclude CEINMS output folders ("calibrationOutput", timestamped
+        # "calibrationOutput_run_*") — they live in the session dir but are not
+        # trials, so they must never be EMG-normalised / calibrated / iterated.
+        return [d for d in sorted(os.listdir(p))
+                if os.path.isdir(os.path.join(p, d))
+                and not d.startswith("calibrationOutput")]
 
     @property
     def trials(self):
@@ -438,23 +443,58 @@ class Session:
         return self.trial(pick, force_type=force_type)
 
     def run_emg_normalise(self, replace=None):
-        """Normalise EMG across the whole session.
+        """Build CEINMS excitations for the whole session.
 
-        ``Analyse.run_emg_normalise`` computes the session-wide envelope (over
-        all trials' EMG in the session folder) and writes the normalised EMG for
-        the trial it is called on, so here it is applied to **every** trial in
-        the session. Returns the list of trials that normalised successfully.
+        For each trial, compute the rectified low-pass EMG envelope from the RAW
+        emg.mot, take the per-channel max ACROSS the session (MVC-style), then
+        write each trial's ``emg_ceinms.mot`` = envelope / session-max clipped to
+        [0, 1] — exactly the excitation range CEINMS expects. This replaces the
+        old per-trial divide-by-own-max on the raw bipolar signal (which left
+        excitations negative / >1 and cascaded ``*_normalised_normalised`` files).
+        Returns the list of trials that produced valid excitations.
         """
-        done = []
+        envelopes = {}
         for t in self.trials:
             if replace is not None:
                 t.update_trial_attribute("replace", replace)
             try:
-                t.run_emg_normalise()
+                env = t._emg_envelope()
+            except Exception as e:
+                print(f"[Session] {self.subject.name}/{self.name}: EMG envelope "
+                      f"failed for {os.path.basename(t.path)}: {e}")
+                env = None
+            if env is not None:
+                envelopes[t] = env
+
+        if not envelopes:
+            print(f"[Session] {self.subject.name}/{self.name}: no EMG to normalise.")
+            return []
+
+        # per-channel session max envelope (MVC reference)
+        chans = set()
+        for env in envelopes.values():
+            chans |= {c for c in env.columns if c != 'time'}
+        session_max = {}
+        for c in chans:
+            m = max((float(env[c].max()) for env in envelopes.values() if c in env),
+                    default=0.0)
+            session_max[c] = m if m > 1e-9 else 1.0
+
+        done = []
+        for t, env in envelopes.items():
+            out = env[['time']].copy()
+            for c in chans:
+                if c in env:
+                    out[c] = (env[c] / session_max[c]).clip(0.0, 1.0)
+            try:
+                _u.emg_normalise.write_sto_file(out, os.path.join(t.path, 'emg_ceinms.mot'))
+                t.update_trial_attribute('ceinms_excitations', 'emg_ceinms.mot')
                 done.append(t)
             except Exception as e:
                 print(f"[Session] {self.subject.name}/{self.name}: EMG normalise "
                       f"failed for {os.path.basename(t.path)}: {e}")
+        print(f"[Session] {self.subject.name}/{self.name}: wrote emg_ceinms.mot "
+              f"for {len(done)} trials (session-max normalised, [0,1]).")
         return done
 
     def run_ceinms_calibration(self, replace=None, prefer_trial=None):
@@ -800,12 +840,13 @@ class Project:
         # If the settings (e.g. a freshly scaffolded template) declares no
         # subjects, populate them by scanning models/ so the project is usable.
         try:
-            if self.settings is not None and not getattr(self.settings, "SUBJECTS", None):
+            _bs = getattr(self.settings, "BatchSettings", None)
+            if _bs is not None and not getattr(_bs, "SUBJECTS", None):
                 subs = self.discover_subjects()
                 if subs:
-                    self.settings.SUBJECTS = subs
-                    if not getattr(self.settings, "model_config", None):
-                        self.settings.model_config = build_model_config(subs)
+                    _bs.SUBJECTS = subs
+                    if not getattr(_bs, "model_config", None):
+                        _bs.model_config = build_model_config(subs)
                     if verbose:
                         print(f"[bioscout] discovered {len(subs)} subject(s) from models/")
         except Exception:
@@ -819,7 +860,7 @@ class Project:
             print(f"BioScout {getattr(bioscout, '__version__', '?')}  |  project: {self.dir.name}")
             print(f"openSim ready: {utils.openSim is not None}   "
                   f"ceinms ready: {getattr(utils, 'ceinms', None) is not None}   "
-                  f"settings.SESSION: {getattr(self.settings, 'SESSION', None)}")
+                  f"settings.SESSION: {getattr(getattr(self.settings, 'BatchSettings', None), 'SESSION', None)}")
 
     # -- setup steps ---------------------------------------------------------
     def _load_settings(self, verbose=True, scaffold=True):
@@ -883,8 +924,8 @@ class Project:
     # ---- hierarchy: Project -> Subject -> Session -> Trial ----------------
     @property
     def subjects(self) -> "list[Subject]":
-        """The project's Subject objects (from settings.SUBJECTS)."""
-        return list(getattr(self.settings, "SUBJECTS", []) or [])
+        """The project's Subject objects (from settings.BatchSettings.SUBJECTS)."""
+        return list(getattr(getattr(self.settings, "BatchSettings", None), "SUBJECTS", []) or [])
 
     def subject(self, name) -> "Subject":
         """Subject by folder name or label."""
@@ -933,7 +974,7 @@ __all__ = [
     "Subject", "Session", "Project",
     "Analyse", "Plot",
     "build_model_config", "discover_subjects", "init_project",
-    "sessions_from_subjects", "players_from_subjects",
+    "sessions_from_subjects", "subjects_from_subjects",
     "check_settings_version", "migrate_settings", "ensure_editor_paths",
 ]
 
@@ -1923,8 +1964,44 @@ class Analyse(_u.settings.Inputs):
         except Exception as e:
             self._log(f"[Error] EMG filter failed: {e}")
 
+    def _emg_envelope(self):
+        """Rectified linear envelope of this trial's RAW EMG channels.
+
+        Bandpass -> full-wave rectify -> low-pass (via emg_normalise.filter_emg),
+        returning a DataFrame with ``time`` + one non-negative envelope column per
+        ``EMG_Channels_EMG*`` channel (base-named, e.g. ``EMG_Channels_EMG09_gast_med_l``).
+        Always reads the RAW emg.mot so it never compounds a previously
+        normalised/filtered file. Returns ``None`` if no EMG is available.
+        """
+        raw = os.path.join(self.path, 'emg.mot')
+        if not os.path.exists(raw):
+            raw = os.path.join(self.path, self.emg)
+        data = _u.load_any_data_file(raw)
+        if data is None or 'time' not in data.columns:
+            return None
+        emg_cols = [c for c in data.columns if c.startswith('EMG_Channels_EMG')]
+        if not emg_cols:
+            return None
+        data = data.copy()
+        # Sampling frequency: prefer the file's own time vector, else settings.
+        n = len(data)
+        t = pd.to_numeric(data['time'], errors='coerce').values.astype(float)
+        if n >= 2 and np.all(np.isfinite(t)) and np.all(np.diff(t) > 0):
+            fs = 1.0 / ((t[-1] - t[0]) / (n - 1))
+        else:
+            fs = getattr(_u.settings.BatchSettings, 'emg_sampling_freq', None) or 1000.0
+        filtered = _u.emg_normalise.filter_emg(data, emg_prefix='EMG_Channels_EMG',
+                                               sampling_freq=fs)
+        out = filtered[['time']].copy()
+        for col in [c for c in filtered.columns if c.endswith('_envelope')]:
+            base = col[:-len('_envelope')]
+            # non-negative envelope (low-pass of a rectified signal can dip
+            # slightly negative at the edges)
+            out[base] = np.clip(filtered[col].values, 0.0, None)
+        return out
+
     def run_emg_normalise(self):
-        
+
         os.chdir(self.path)
         emg_normalise_list = []
         
@@ -2300,29 +2377,43 @@ class Analyse(_u.settings.Inputs):
     def plot_ik(self, columns_to_plot='all'):
         os.chdir(self.path)
         self.joint_angles = _u.load_any_data_file(self.ik)
-        
-        if columns_to_plot == 'all':
-            columns_to_plot = list(self.joint_angles.columns)
-            columns_to_plot.remove('time')
-        
-        n_vars = len(columns_to_plot)
-        fig, axes = self.plot_create_subplot(n_vars)
-        
-        fig.suptitle(f"Inverse Kinematics Joint Angles", fontsize=16)
-        for var in columns_to_plot:
-            ax = axes[columns_to_plot.index(var)]
-            ax.plot(self.joint_angles['time'], self.joint_angles[var], label='')
-            ax.set_title(f"{var}")
+
+        cols = list(self.joint_angles.columns)
+        if 'time' in cols:
+            cols.remove('time')
+        if columns_to_plot != 'all':
+            cols = [c for c in cols if c in columns_to_plot]
+
+        # group left/right coordinates onto a single subplot per base name
+        # (mirrors plot_id), e.g. hip_flexion_r + hip_flexion_l -> one subplot.
+        groups, order = {}, []
+        for c in cols:
+            base, side = self._split_side(c)
+            if base not in groups:
+                groups[base] = {}
+                order.append(base)
+            groups[base][side or 'none'] = c
+
+        fig, axes = self.plot_create_subplot(len(order))
+        fig.suptitle("Inverse Kinematics Joint Angles", fontsize=16)
+        side_style = {'r': ('tab:blue', 'right'), 'l': ('tab:red', 'left'), 'none': ('black', None)}
+        t = self.joint_angles['time']
+        for i, base in enumerate(order):
+            ax = axes[i]
+            for side, colname in groups[base].items():
+                color, lab = side_style.get(side, ('black', None))
+                ax.plot(t, self.joint_angles[colname], color=color, label=lab)
+            ax.set_title(base)
             ax.set_xlabel("Time")
             ax.set_ylabel("Angle (degrees)")
-        
-        axes[0].legend()
-        
+            if any(s in groups[base] for s in ('r', 'l')):
+                ax.legend(fontsize=8)
+
         # save figure and return
         save_path = os.path.join(self.path, f"{self.ik.replace('.mot', '.png')}")
         plt.savefig(save_path)
         print(f'Figure saved to {save_path}')
-        
+
         return fig, axes
     
     @staticmethod
@@ -2579,38 +2670,6 @@ class Analyse(_u.settings.Inputs):
 
                 return pd.DataFrame(cols, index=muscle_forces.index)
         
-        def create_colors_for_muscles(muscle_names):
-                import matplotlib
-                color_palette = matplotlib.colormaps['tab20'].resampled(max(len(muscle_names), 1))
-                colors = {muscle: color_palette(i) for i, muscle in enumerate(muscle_names)}
-                return colors
-        
-        def plot_muscle_moments(ax, id_moments, muscle_moments, dof, colors, label_prefix):
-                line, = ax.plot(id_moments['time'], id_moments[f'{dof}_moment'], label='ID', color=colors['externalBiomech'])
-                if 'ID' not in legend_handles:
-                        legend_handles['ID'] = line
-
-                colors_muscles = create_colors_for_muscles(muscle_moments.columns)
-                for muscle in muscle_moments.columns:
-                        line, = ax.plot(muscle_moments['time'], muscle_moments[muscle], label=muscle, color=colors_muscles[muscle], linestyle='-')
-                        if muscle not in legend_handles:
-                                legend_handles[muscle] = line
-
-                total_muscle_moment = muscle_moments.sum(axis=1)
-                line, = ax.plot(muscle_moments['time'], total_muscle_moment, label=f'{label_prefix} Total', color='black', linestyle='--')
-                if f'{label_prefix} Total' not in legend_handles:
-                        legend_handles[f'{label_prefix} Total'] = line
-
-                # add space in the y axis to display metrics RMSE and R2
-                y_min, y_max = ax.get_ylim()
-                ax.set_ylim(y_min, y_max + abs(y_max - y_min)*0.5)
-                rmse_moment = rmse(id_moments[f'{dof}_moment'], total_muscle_moment)
-                r2_moment = _u.rsquared(id_moments[f'{dof}_moment'], total_muscle_moment)
-
-                rmse_percentage = (rmse_moment / (y_max - y_min)) * 100 if (y_max - y_min) != 0 else 0
-
-                ax.text(0.05, 0.95, f'RMSE: {rmse_moment:.2f} (% {rmse_percentage:.2f})\nR2: {r2_moment:.2f}', transform=ax.transAxes, fontsize=6, verticalalignment='top')
-
         def plot_emg_vs_activations(ax, analysis: Analyse, emg, muscle_activations_so, muscle_activations_ceinms, dof, colors):
                 emg_mapping = _u.settings.EMG_muscle_mapping
 
@@ -2680,10 +2739,22 @@ class Analyse(_u.settings.Inputs):
         jra_so = self.load_results('jra_so', time_normalise=True)
         jra_ceinms = self.load_results('jra_ceinms', time_normalise=True)
 
-        row_ylabels = ['Angle (°)', 'Moment - SO (Nm)', 'Moment - CEINMS (Nm)', 'EMG', 'JRA (N)']
+        # normalised fibre lengths: MuscleAnalysis (SO side) vs CEINMS NormFibreLengths
+        def _load_norm_fibre(path):
+                try:
+                        if path and os.path.exists(path):
+                                return _u.time_normalise_df(_u.load_any_data_file(path))
+                except Exception:
+                        pass
+                return None
+        fibre_so = _load_norm_fibre(os.path.join(self.path, self.ma, "_MuscleAnalysis_NormalizedFiberLength.sto"))
+        fibre_ceinms = None
+        _cf = getattr(self, 'jra_forces_ceinms', None)
+        if _cf:
+                fibre_ceinms = _load_norm_fibre(os.path.join(self.path, _cf.replace('MuscleForces.sto', 'NormFibreLengths.sto')))
 
-        # Collect unique legend handles/labels for the muscle moment rows
-        legend_handles = {}  # label -> handle, deduplicated
+        row_ylabels = ['Angle (°)', 'EMG / activation', 'Moment (Nm)', 'Norm. fibre length', 'JRA (N)']
+
         jra_plotted = []
         for col_idx, dof in enumerate(dofs):
                 col_name = f'{dof}_angle' if ik_angles is not None and f'{dof}_angle' in ik_angles.columns else dof
@@ -2711,17 +2782,56 @@ class Analyse(_u.settings.Inputs):
                         ax[0, col_idx].plot(ik_angles['time'], ik_angles[col_name], color='blue')
                         ax[0, col_idx].set_title(dof, fontsize=8)
                 
-                # plot ID moments and muscle contributions to moments (SO)
-                if id_moments is not None and f'{dof}_moment' in id_moments.columns and muscle_moments_so is not None:
-                        plot_muscle_moments(ax[1, col_idx], id_moments, muscle_moments_so, dof, colors, label_prefix='SO')
-
-                # plot ID moments and muscle contributions to moments (CEINMS)
-                if id_moments is not None and f'{dof}_moment' in id_moments.columns and muscle_moments_ceinms is not None:
-                        plot_muscle_moments(ax[2, col_idx], id_moments, muscle_moments_ceinms, dof, colors, label_prefix='CEINMS')
-
-                # plot EMG vs SO excitations vs CEINMS excitations (with RMSE and R2 metrics)
+                # row 2: EMG vs SO and CEINMS activations
                 if emg is not None or so_activations is not None or ceinms_activations is not None:
-                        plot_emg_vs_activations(ax[3, col_idx], self, emg, so_activations, ceinms_activations, dof, colors)
+                        plot_emg_vs_activations(ax[1, col_idx], self, emg, so_activations, ceinms_activations, dof, colors)
+
+                # row 3: joint moments + muscle contributions, SO vs CEINMS (vs ID)
+                ax_m = ax[2, col_idx]
+                # CEINMS execution weights used (alpha/beta/gamma), shown on its label
+                abg = f" (a{getattr(self, 'alpha', '?')} b{getattr(self, 'beta', '?')} g{getattr(self, 'gamma', '?')})"
+                if id_moments is not None and f'{dof}_moment' in id_moments.columns:
+                        ax_m.plot(id_moments['time'], id_moments[f'{dof}_moment'], color='black', linewidth=1.5, label='ID')
+                for mm_src, src_color, src_label, src_ls in (
+                        (muscle_moments_so, colors['SO'], 'SO', '-'),
+                        (muscle_moments_ceinms, colors['CEINMS'], 'CEINMS', ':')):
+                        if mm_src is None:
+                                continue
+                        mcols = [c for c in mm_src.columns if c != 'time']
+                        for muscle in mcols:
+                                ax_m.plot(mm_src['time'], mm_src[muscle], color=src_color, linewidth=0.5, alpha=0.35, linestyle=src_ls)
+                        if mcols:
+                                total = mm_src[mcols].sum(axis=1)
+                                lbl = f'{src_label} total' + (abg if src_label == 'CEINMS' else '')
+                                ax_m.plot(mm_src['time'], total, color=src_color, linewidth=1.5, linestyle='--', label=lbl)
+                                if id_moments is not None and f'{dof}_moment' in id_moments.columns:
+                                        try:
+                                                r = rmse(id_moments[f'{dof}_moment'], total)
+                                                r2 = _u.rsquared(id_moments[f'{dof}_moment'], total)
+                                                ax_m.text(0.02, 0.98 - (0.10 if src_label == 'CEINMS' else 0.0),
+                                                          f'{src_label}: RMSE {r:.1f}, R2 {r2:.2f}',
+                                                          transform=ax_m.transAxes, fontsize=6, va='top', color=src_color)
+                                        except Exception:
+                                                pass
+                if col_idx == len(dofs) - 1:
+                        ax_m.legend(loc='upper right', fontsize=6)
+
+                # row 4: normalised muscle-fibre lengths, SO (MuscleAnalysis) vs CEINMS
+                try:
+                        _mlist = self.muscles_per_coordinate(coord_name=dof)
+                        _muscles = set(_mlist[0]) if _mlist and _mlist[0] else set()
+                except Exception:
+                        _muscles = set()
+                for _src, _c, _ls, _lab in ((fibre_so, colors['SO'], '-', 'SO'),
+                                            (fibre_ceinms, colors['CEINMS'], '--', 'CEINMS')):
+                        if _src is None:
+                                continue
+                        _fcols = [c for c in _src.columns if c != 'time' and (not _muscles or c in _muscles)]
+                        for _i, _m in enumerate(_fcols):
+                                ax[3, col_idx].plot(_src['time'], _src[_m], color=_c, linewidth=0.7,
+                                                    alpha=0.7, linestyle=_ls, label=_lab if _i == 0 else None)
+                if col_idx == len(dofs) - 1:
+                        ax[3, col_idx].legend(loc='upper right', fontsize=6)
 
                 # plot JRA reaction loads (SO vs CEINMS)
                 jra_groups = _u.settings.JCF_Groups
@@ -2758,24 +2868,7 @@ class Analyse(_u.settings.Inputs):
         for row_idx, ylabel in enumerate(row_ylabels):
                 ax[row_idx, 0].set_ylabel(ylabel)
 
-        # Single legend on the right side of the figure for muscle moment rows
-        if legend_handles:
-                fig.legend(
-                        handles=list(legend_handles.values()),
-                        labels=list(legend_handles.keys()),
-                        loc='center right',
-                        fontsize=6,
-                        title='Muscles',
-                        title_fontsize=7,
-                        framealpha=0.9,
-                )
-                plt.subplots_adjust(right=0.85)
-
         _u.mmfn(fig, n_rows, n_cols)
-
-        # Re-apply right margin after tight_layout to keep legend in position
-        if legend_handles:
-                plt.subplots_adjust(right=0.85)
 
         # save figure
         save_path = os.path.join(self.path, 'summary_plot.png')
@@ -2855,22 +2948,23 @@ class Analyse(_u.settings.Inputs):
 
     def create_ceinms_input_data(self):
         os.chdir(self.path)
-        # Remove legacy temp file from older pipeline versions
-        legacy_tmp = os.path.join(self.path, 'emg_ceinms.mot')
-        if os.path.exists(legacy_tmp):
-            try:
-                os.remove(legacy_tmp)
-                self._log('[Info] Removed legacy emg_ceinms.mot')
-            except Exception:
-                pass
-        # Always use the best available EMG — normalised > filtered > raw.
-        # This bypasses whatever trial_settings.xml says (which may be stale).
-        for candidate in ('emg_filtered_normalised.mot', 'emg_filtered.mot', self.emg):
-            if os.path.exists(os.path.join(self.path, candidate)):
+        # Prefer the session-normalised CEINMS excitations (emg_ceinms.mot): a
+        # rectified, low-pass enveloped, session-max normalised signal clipped to
+        # [0,1] — the only range CEINMS accepts. Fall back to older normalised /
+        # filtered / raw EMG only if it hasn't been built yet.
+        excitations = None
+        for candidate in (self.ceinms_excitations, 'emg_ceinms.mot'):
+            if candidate and os.path.exists(os.path.join(self.path, candidate)):
                 excitations = candidate
                 break
-        else:
-            excitations = self.emg  # absolute fallback
+        if excitations is None:
+            for candidate in ('emg_filtered_normalised.mot', 'emg_normalised.mot',
+                              'emg_filtered.mot', self.emg):
+                if os.path.exists(os.path.join(self.path, candidate)):
+                    excitations = candidate
+                    break
+            else:
+                excitations = self.emg  # absolute fallback
 
         self._log(f"CEINMS excitations: selected '{excitations}' "
                   f"(exists={os.path.exists(os.path.join(self.path, excitations))}), "
@@ -3360,95 +3454,12 @@ class Analyse(_u.settings.Inputs):
             muscles = _u.openSim.find_non_zero_mom_arm_muscles(ma, muscle_list)
             print(f"Non-zero moment arm muscles for {dof}: {muscles}")
 
-            colors = plt.cm.tab20(np.linspace(0, 1, max(len(muscles), 1)))
 
-            if count == 0:
-                ax[count, 0].set_title('SO', fontsize=fontsize)
-                ax[count, 1].set_title('CEINMS', fontsize=fontsize)
-
-            # Plot ID (static)
-            ax[count, 0].plot(id['time'], id[f'{dof}_moment'], label='ID', color='blue')
-            ax[count, 0].set_ylabel(f'{dof} (Nm)', fontsize=fontsize)
-            ax[count, 0].tick_params(labelsize=fontsize)
-
-            ax[count, 1].plot(id['time'], id[f'{dof}_moment'], label='ID', color='blue')
-            ax[count, 1].tick_params(labelsize=fontsize)
-
-            
-            # Plot muscle moments SO (static)
-            for i, m in enumerate(muscles):
-                ax[count, 0].plot(so_forces['time'], so_forces[m] * ma[m],
-                                label=m, color=colors[i], linestyle='--')
-
-            sum_moments_so = so_forces[muscles].mul(ma[muscles], axis=0).sum(axis=1)
-            ax[count, 0].fill_between(so_forces['time'], 0, sum_moments_so, color='grey', alpha=0.2, label='Sum')
-
-            # Plot muscle moments CEINMS (static)
-            for i, m in enumerate(muscles):
-                ax[count, 1].plot(ceinms_forces['time'], ceinms_forces[m] * ma[m],
-                                label=m, color=colors[i], linestyle='--')
-            
-            sum_moments_ce = ceinms_forces[muscles].mul(ma[muscles], axis=0).sum(axis=1)
-            ax[count, 1].fill_between(ceinms_forces['time'], 0, sum_moments_ce, color='grey', alpha=0.2, label='Sum')
-
-            # add RMSE and R2 values between ID and SO, and ID and CEINMS
-            rmse_so = rmse(id[f'{dof}_moment'], sum_moments_so)
-            r2_so = _u.rsquared(id[f'{dof}_moment'], sum_moments_so)
-            rmse_ce = rmse(id[f'{dof}_moment'], sum_moments_ce)
-            r2_ce = _u.rsquared(id[f'{dof}_moment'], sum_moments_ce)
-            textstr_so = f'RMSE={rmse_so:.2f} Nm\nR²={r2_so:.3f}'
-            textstr_ce = f'RMSE={rmse_ce:.2f} Nm\nR²={r2_ce:.3f}'
-            ax[count, 0].text(0.95, 0.95, textstr_so, transform=ax[count, 0].transAxes, fontsize=fontsize,
-                            verticalalignment='top', horizontalalignment='right',
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-            ax[count, 1].text(0.95, 0.95, textstr_ce, transform=ax[count, 1].transAxes, fontsize=fontsize,
-                            verticalalignment='top', horizontalalignment='right',
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))    
-
-
-        plt.tight_layout()
-        save_path = os.path.join(self.path, 'muscle_moments.png')
-        plt.savefig(save_path)
-        print(f"Muscle moments comparison plot saved: {save_path}")
-
-        _u.convert_to_interactive_fig(fig, html_path=os.path.join(self.path, 'muscle_moments_interactive.html'))
-
-    #--- git integration
-    def git_status(self):
-        '''Check git status of the trial and subject directories
-        
-        Outputs uncommitted changes in trial and subject directories to log.
-        
-        Returns a dictionary with boolean values indicating if trial and subject directories are clean (no uncommitted changes).
-
-            git_status() -> {'trial_dir': bool, 'subject_dir': bool}
-
-            True: No uncommitted changes in the directory
-            False: Uncommitted changes present in the directory
-
-        '''
-        os.chdir(self.path)
-
-        isClean = {'trial_dir': True, 'subject_dir': True}
-        try:
-            result = _u.subprocess.run(['git', 'status', '--porcelain'], check=True, stdout=_u.subprocess.PIPE, text=False, cwd=os.getcwd())
-
-            if result.stdout:
-                self._log(f'[Git Status] Uncommitted changes in trial directory: {self.path}')
-                isClean['trial_dir'] = False
-            else:
-                self._log(f'[Git Status] No uncommitted changes in trial directory: {self.path}')
-                isClean['trial_dir'] = True
-            subject_path = _u.updir(self.path, levels=2)
-            result_subject = _u.subprocess.run(['git', 'status', '--porcelain'], check=True, stdout=_u.subprocess.PIPE, text=False, cwd=subject_path)
-            if result_subject.stdout:
-                self._log(f'[Git Status] Uncommitted changes in subject directory: {subject_path}')
-                isClean['subject_dir'] = False
-            else:
-                self._log(f'[Git Status] No uncommitted changes in subject directory: {subject_path}', terminal=True)
-                isClean['subject_dir'] = True
-        except _u.subprocess.CalledProcessError as e:
-            self._log(f'[Error] Failed to check git status: {e}')
-
-        return isClean
-    
+# --- subject video/anthropometry profile (defined in subject_profile.py) ------
+# Co-located with Subject so every subject-side model is reachable straight from
+# the analysis module, e.g. `from bioscout.utils.analysis import SubjectProfile`.
+# (Distinct data model from Subject: anthropometry, segment fractions, pose
+# calibration and per-task detection settings for the video pipeline.)
+from .subject_profile import (  # noqa: E402,F401
+    SubjectProfile, SubjectStore, ProjectSubjectStore, DEFAULT_SEGMENT_FRACTIONS,
+)

@@ -19,7 +19,7 @@ from bioscout import utils as _u
 class Plot():
     def __init__(self, session='25_03_31', trialName='Squat_bw_01', results_dir=_u.RESULTS_DIR):
 
-        model_config = _u.settings.model_config
+        model_config = getattr(getattr(_u.settings, 'BatchSettings', None), 'model_config', {})
 
         self.trialName = trialName
         subject_names = {k: v['subject'] for k, v in model_config.items()}

@@ -535,8 +535,15 @@ def export_markers(c3d_filepath, strings_to_remove=[], output_dir=None):
 
     # remove unwanted strings from labels
     labels = list(markers_task.getColumnLabels())
+    # Strip any capture namespace prefix ("Subject:RASI" -> "RASI"). Some trials
+    # (e.g. the squat/static captures) store markers with a namespace while others
+    # (walking) don't; without this the TRC labels don't match the OpenSim model
+    # markers and IK fails with "Marker data does not correspond to any model
+    # markers". Bare labels are unaffected by the split.
+    labels = [lbl.split(':')[-1].strip() for lbl in labels]
     for s in strings_to_remove:
         labels = [re.sub(s, '', lbl) for lbl in labels]
+    print(f"  [markers] {len(labels)} labels e.g. {labels[:8]}")
 
     markers_task.setColumnLabels(labels)
 

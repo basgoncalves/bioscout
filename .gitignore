@@ -57,3 +57,8 @@ video_batch_run.json
 # Cloud credentials for load tracking (secrets — keep only the .example file)
 load_credentials.json
 .bioscout/
+bioscout/tests/_results/
+__wtest.tmp
+__probe_bw.py
+_*.txt
+*.bak_pre_fix

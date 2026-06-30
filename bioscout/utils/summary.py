@@ -23,7 +23,7 @@ CLI (wired in __main__.py):
     python -m bioscout --summary "<...>/SomeTrial"      # ONE trial only (fast)
     python -m bioscout --summary -t "<...>/SomeTrial"   # ONE trial only (explicit)
     python -m bioscout --summary -overall               # overall only
-    python -m bioscout --summary -s 012                 # one player
+    python -m bioscout --summary -s 012                 # one subject
 """
 
 import os
@@ -411,23 +411,23 @@ def discover(project_root, subject=None):
     out = []
     if not sims.exists():
         return out
-    players = [subject] if subject else sorted(
+    subjects = [subject] if subject else sorted(
         d.name for d in sims.iterdir() if d.is_dir())
-    for pid in players:
+    for pid in subjects:
         pdir = sims / pid
         if not pdir.is_dir():
             continue
         for sdir in sorted(p for p in pdir.iterdir() if p.is_dir()):
             for tdir in sorted(p for p in sdir.iterdir() if p.is_dir()):
                 if _is_processed(str(tdir)):
-                    out.append({"player": pid, "session": sdir.name,
+                    out.append({"subject": pid, "session": sdir.name,
                                 "trial": tdir.name, "path": str(tdir)})
     return out
 
 
 def _info_from_path(trial_path):
     p = Path(trial_path).resolve()
-    return {"player": p.parent.parent.name, "session": p.parent.name,
+    return {"subject": p.parent.parent.name, "session": p.parent.name,
             "trial": p.name, "path": str(p)}
 
 
@@ -529,7 +529,7 @@ def plot_trial(info, save_dir=None):
                                 rmsep = (utils.rmse(idm[idcol].values, mm["moment"].values)
                                          / rng * 100) if rng else np.nan
                                 metric_rows.append({
-                                    "player": info["player"], "session": info["session"],
+                                    "subject": info["subject"], "session": info["session"],
                                     "trial": info["trial"], "trial_type": _trial_type(info["trial"]),
                                     "dof": sd["dof"], "moment_R2": r2, "moment_RMSE_pct": rmsep})
                             except Exception:
@@ -581,7 +581,7 @@ def plot_trial(info, save_dir=None):
             if ri == nrows - 1:
                 a.set_xlabel("% trial")
 
-    fig.suptitle(f"{info['player']} / {info['session']} / {info['trial']}", fontsize=12)
+    fig.suptitle(f"{info['subject']} / {info['session']} / {info['trial']}", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     # Saved in the trial folder -> simply "summary.png". When routed elsewhere
     # (e.g. the overall-only temp dir) keep the trial name to avoid collisions.
@@ -718,15 +718,15 @@ def _write_csv(rows, out_dir):
 def _write_report(rows, overall_pngs, out_dir, project_root, subject=None):
     df = pd.DataFrame(rows) if rows else pd.DataFrame()
     md = os.path.join(out_dir, "summary_report.md")
-    scope = f"player {subject}" if subject else "all players"
+    scope = f"subject {subject}" if subject else "all subjects"
     lines = ["# BioScout Summary Report", "",
              f"Scope: **{scope}**  |  Project: `{project_root}`", "",
              "Columns = joints (left red, right blue). Rows: "
              + ", ".join(_rows()) + ".", ""]
     if not df.empty:
-        n_tr = df[["player", "session", "trial"]].drop_duplicates().shape[0]
+        n_tr = df[["subject", "session", "trial"]].drop_duplicates().shape[0]
         lines += [f"- Trials summarised: **{n_tr}**",
-                  f"- Players: {', '.join(sorted(df['player'].unique()))}",
+                  f"- Subjects: {', '.join(sorted(df['subject'].unique()))}",
                   f"- Trial types: {', '.join(sorted(df['trial_type'].unique()))}", "",
                   "## Mean metrics by trial type & DOF", "",
                   "| Trial type | DOF | Marker err (mm) | Moment R2 | Moment RMSE% |",
@@ -816,7 +816,7 @@ def run_summary(settings_path=None, subject=None, overall_only=False,
             logger.error(f"Not a processed trial (no joint_angles.mot): {trial_path}")
             return False
         info = _info_from_path(trial_path)
-        logger.info(f"Single trial   : {info['player']}/{info['session']}/{info['trial']}")
+        logger.info(f"Single trial   : {info['subject']}/{info['session']}/{info['trial']}")
         logger.info("=" * 70)
         try:
             _, png = plot_trial(info)
@@ -830,7 +830,7 @@ def run_summary(settings_path=None, subject=None, overall_only=False,
 
     targets = discover(root, subject=subject)
     logger.info(f"Project        : {root}")
-    logger.info(f"Scope          : {'player ' + subject if subject else 'all players'}")
+    logger.info(f"Scope          : {'subject ' + subject if subject else 'all subjects'}")
     logger.info(f"Mode           : {'overall only' if overall_only else 'per-trial + overall'}")
     logger.info(f"Processed trials found : {len(targets)}")
     logger.info("=" * 70)
@@ -845,9 +845,9 @@ def run_summary(settings_path=None, subject=None, overall_only=False,
             try:
                 rows, png = plot_trial(t)
                 all_rows.extend(rows)
-                logger.info(f"  [OK] {t['player']}/{t['session']}/{t['trial']} -> {png}")
+                logger.info(f"  [OK] {t['subject']}/{t['session']}/{t['trial']} -> {png}")
             except Exception as e:
-                logger.error(f"  [ERROR] {t['player']}/{t['session']}/{t['trial']}: {e}")
+                logger.error(f"  [ERROR] {t['subject']}/{t['session']}/{t['trial']}: {e}")
                 logger.debug(traceback.format_exc())
     else:
         tmp = _summary_dir(root, "_per_trial_tmp")
@@ -863,7 +863,7 @@ def run_summary(settings_path=None, subject=None, overall_only=False,
     csv_path = _write_csv(all_rows, out_dir)
     md_path, pdf_path = _write_report(all_rows, overall_pngs, out_dir, root, subject=subject)
     if subject:
-        _write_csv([r for r in all_rows if r["player"] == subject],
+        _write_csv([r for r in all_rows if r["subject"] == subject],
                    _summary_dir(root, subject))
 
     logger.info("-" * 70)

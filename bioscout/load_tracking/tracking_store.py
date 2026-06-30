@@ -1,18 +1,18 @@
 """
-Per-player tracking store.
+Per-subject tracking store.
 
-Bridges the load_tracking engine and the project's ``players.json`` (managed by
-``utils.player_registry.PlayerRegistry``). Responsibilities:
+Bridges the load_tracking engine and the project's ``subjects.json`` (managed by
+``utils.subject_registry.SubjectRegistry``). Responsibilities:
 
-    * Build an :class:`AthleteProfile` from a player's registry record.
-    * Import sessions (files / Zepp / Strava) for a player, compute load metrics,
-      store lightweight **summaries** in players.json and cache the raw per-sample
-      traces on disk under ``<project>/Models/<player_id>/tracking/<id>.json``.
+    * Build an :class:`AthleteProfile` from a subject's registry record.
+    * Import sessions (files / Zepp / Strava) for a subject, compute load metrics,
+      store lightweight **summaries** in subjects.json and cache the raw per-sample
+      traces on disk under ``<project>/Models/<subject_id>/tracking/<id>.json``.
     * Reload cached sessions as :class:`SessionData` for the dashboard.
-    * Export a player's sessions to CSV.
+    * Export a subject's sessions to CSV.
 
-players.json stays small (summaries only); the bulky HR/GPS arrays live in the
-per-player cache files.
+subjects.json stays small (summaries only); the bulky HR/GPS arrays live in the
+per-subject cache files.
 """
 
 from __future__ import annotations
@@ -77,18 +77,18 @@ class TrackingStore:
         self.root = Path(project_root)
 
     # ----- paths ----------------------------------------------------------- #
-    def tracking_dir(self, player_id: str) -> Path:
-        d = self.root / "Models" / player_id / "tracking"
+    def tracking_dir(self, subject_id: str) -> Path:
+        d = self.root / "Models" / subject_id / "tracking"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     # ----- athlete --------------------------------------------------------- #
-    def athlete_for(self, player_id: str) -> AthleteProfile:
-        rec = self.reg.get(player_id)
+    def athlete_for(self, subject_id: str) -> AthleteProfile:
+        rec = self.reg.get(subject_id)
         tr = rec.get("tracking", {}) or {}
         hr = tr.get("hr", {}) if isinstance(tr.get("hr"), dict) else {}
         return AthleteProfile(
-            name=rec.get("name") or player_id,
+            name=rec.get("name") or subject_id,
             age=rec.get("age"),
             sex=(rec.get("sex") or "M")[:1].upper() or "M",
             hr_max=hr.get("max"),
@@ -97,28 +97,28 @@ class TrackingStore:
         )
 
     # ----- raw cache ------------------------------------------------------- #
-    def save_raw(self, player_id: str, s: SessionData) -> str:
+    def save_raw(self, subject_id: str, s: SessionData) -> str:
         sid = session_id(s)
-        path = self.tracking_dir(player_id) / f"{sid}.json"
+        path = self.tracking_dir(subject_id) / f"{sid}.json"
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(serialize_session(s), fh)
         return sid
 
-    def load_raw(self, player_id: str, sid: str) -> Optional[SessionData]:
-        path = self.tracking_dir(player_id) / f"{sid}.json"
+    def load_raw(self, subject_id: str, sid: str) -> Optional[SessionData]:
+        path = self.tracking_dir(subject_id) / f"{sid}.json"
         if not path.is_file():
             return None
         with open(path, "r", encoding="utf-8") as fh:
             return deserialize_session(json.load(fh))
 
-    def load_all_sessions(self, player_id: str) -> list[SessionData]:
-        """Reconstruct all cached SessionData for a player (sorted by time)."""
+    def load_all_sessions(self, subject_id: str) -> list[SessionData]:
+        """Reconstruct all cached SessionData for a subject (sorted by time)."""
         out = []
-        for summ in self.reg.get_sessions(player_id):
+        for summ in self.reg.get_sessions(subject_id):
             sid = summ.get("id")
             if not sid:
                 continue
-            s = self.load_raw(player_id, sid)
+            s = self.load_raw(subject_id, sid)
             if s is not None:
                 out.append(s)
         out.sort(key=lambda s: s.start_time)
@@ -143,41 +143,41 @@ class TrackingStore:
         }
 
     # ----- import ---------------------------------------------------------- #
-    def import_sessions(self, player_id: str, sessions: list) -> int:
-        """Cache raw traces + merge session summaries into players.json.
+    def import_sessions(self, subject_id: str, sessions: list) -> int:
+        """Cache raw traces + merge session summaries into subjects.json.
 
         De-duplicates by session id (re-importing the same workout updates it).
         Returns the number of new/updated sessions.
         """
-        athlete = self.athlete_for(player_id)
-        existing = {s["id"]: s for s in self.reg.get_sessions(player_id)}
+        athlete = self.athlete_for(subject_id)
+        existing = {s["id"]: s for s in self.reg.get_sessions(subject_id)}
         n = 0
         for s in sessions:
-            sid = self.save_raw(player_id, s)
+            sid = self.save_raw(subject_id, s)
             existing[sid] = self._summary(s, athlete, sid)
             n += 1
         merged = sorted(existing.values(), key=lambda d: d.get("date", ""))
-        self.reg.set_sessions(player_id, merged)
+        self.reg.set_sessions(subject_id, merged)
         return n
 
-    def import_files(self, player_id: str, paths) -> int:
+    def import_files(self, subject_id: str, paths) -> int:
         from .importers import load_sessions
-        return self.import_sessions(player_id, load_sessions(paths))
+        return self.import_sessions(subject_id, load_sessions(paths))
 
-    def import_zepp(self, player_id: str, token: str, region: str = "de2",
+    def import_zepp(self, subject_id: str, token: str, region: str = "de2",
                     limit: Optional[int] = None) -> int:
         from .zepp_cloud import pull_zepp
-        return self.import_sessions(player_id, pull_zepp(token, region=region, limit=limit))
+        return self.import_sessions(subject_id, pull_zepp(token, region=region, limit=limit))
 
-    def import_strava(self, player_id: str, client_id, client_secret,
+    def import_strava(self, subject_id: str, client_id, client_secret,
                       refresh_token, limit: Optional[int] = None) -> int:
         from .strava_api import pull_strava
         return self.import_sessions(
-            player_id, pull_strava(client_id, client_secret, refresh_token, limit=limit))
+            subject_id, pull_strava(client_id, client_secret, refresh_token, limit=limit))
 
     # ----- export ---------------------------------------------------------- #
-    def export_csv(self, player_id: str, path) -> str:
-        rows = self.reg.get_sessions(player_id)
+    def export_csv(self, subject_id: str, path) -> str:
+        rows = self.reg.get_sessions(subject_id)
         cols = ["id", "date", "activity", "raw_sport", "source", "duration_min",
                 "distance_m", "avg_hr", "max_hr", "load", "trimp", "basis"]
         with open(path, "w", newline="", encoding="utf-8") as fh:

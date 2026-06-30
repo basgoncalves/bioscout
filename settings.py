@@ -23,92 +23,92 @@ LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install
 
 
 # ============================================================================
-# PLAYERS — subjects (and optionally sessions) to process in this batch.
+# SUBJECTS — subjects (and optionally sessions) to process in this batch.
 #
-# Full player data (height, mass, group, etc.) lives in players.json at the
-# project root.  Add players with:  python -m bioscout --add_player .
+# Full subject data (height, mass, group, etc.) lives in subjects.json at the
+# project root.  Add subjects with:  python -m bioscout --add_subject .
 #
 # Three formats are supported:
 #
 #   Simple list — IDs only, processes entire subject folder:
-#       PLAYERS = ['012', '078']
+#       SUBJECTS = ['012', '078']
 #
 #   With session + static trial per subject (recommended for clinical projects):
-#       PLAYERS = {
+#       SUBJECTS = {
 #           '012': {'session': 'session1', 'static_trial': 'static01'},
 #           '078': {'session': 'session2', 'static_trial': 'static02'},
 #       }
 #       → processes simulations/012/session1  and  simulations/078/session2
 #
 #   With other per-subject overrides (any BatchSettings field):
-#       PLAYERS = {
+#       SUBJECTS = {
 #           '012': {'session': 'session1', 'static_trial': 'static01', 'tested_leg': 'l'},
 #           '078': {'session': 'session2', 'static_trial': 'static02', 'tested_leg': 'r'},
 #       }
 # ============================================================================
-PLAYERS = ['012', '078']
+SUBJECTS = ['012', '078']
 
 
-def build_sessions(players=None, simulations_dir: Path = None,
+def build_sessions(subjects=None, simulations_dir: Path = None,
                    project_root: Path = None) -> dict:
     """Build the {abs_session_path: static_trial_name} dict BatchSettings expects.
 
-    Loads per-player data (static_trial, etc.) from players.json.
+    Loads per-subject data (static_trial, etc.) from subjects.json.
     Falls back to 'static1' if the registry doesn't exist yet.
 
-    If a player entry contains a 'session' key, the path is built as:
+    If a subject entry contains a 'session' key, the path is built as:
         simulations_dir / pid / session
     Otherwise the entire subject folder is used:
         simulations_dir / pid
 
     Args:
-        players:         list of IDs or {id: override_dict}. Defaults to PLAYERS.
+        subjects:         list of IDs or {id: override_dict}. Defaults to SUBJECTS.
         simulations_dir: parent folder of subject sub-folders. Defaults to SIMULATIONS_DIR.
-        project_root:    folder containing players.json. Defaults to PROJECT_ROOT.
+        project_root:    folder containing subjects.json. Defaults to PROJECT_ROOT.
     Returns:
         {str(abs_path): static_trial_name}
     """
-    if players is None:
-        players = PLAYERS
+    if subjects is None:
+        subjects = SUBJECTS
     if simulations_dir is None:
         simulations_dir = SIMULATIONS_DIR
     if project_root is None:
         project_root = PROJECT_ROOT
 
     # Normalise to {pid: override_dict}
-    if isinstance(players, (list, tuple)):
-        player_map = {pid: {} for pid in players}
-    elif isinstance(players, dict):
-        player_map = {
+    if isinstance(subjects, (list, tuple)):
+        subject_map = {pid: {} for pid in subjects}
+    elif isinstance(subjects, dict):
+        subject_map = {
             pid: (vars(v) if not isinstance(v, dict) else v)
-            for pid, v in players.items()
+            for pid, v in subjects.items()
         }
     else:
-        player_map = {}
+        subject_map = {}
 
     # Try loading the registry; degrade gracefully when it doesn't exist yet.
     # Import is attempted via multiple paths so this works whether settings.py
     # is run from the project folder, the bioscout package dir, or installed.
     registry = {}
     try:
-        PlayerRegistry = None
+        SubjectRegistry = None
         for _import in [
-            lambda: __import__('bioscout.utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
-            lambda: __import__('utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
+            lambda: __import__('bioscout.utils.subject_registry', fromlist=['SubjectRegistry']).SubjectRegistry,
+            lambda: __import__('utils.subject_registry', fromlist=['SubjectRegistry']).SubjectRegistry,
         ]:
             try:
-                PlayerRegistry = _import()
+                SubjectRegistry = _import()
                 break
             except ImportError:
                 continue
-        if PlayerRegistry is not None:
-            reg = PlayerRegistry(project_root)
-            registry = reg.all_players()
+        if SubjectRegistry is not None:
+            reg = SubjectRegistry(project_root)
+            registry = reg.all_subjects()
     except Exception:
         pass
 
     out = {}
-    for pid, overrides in player_map.items():
+    for pid, overrides in subject_map.items():
         rec = {**registry.get(pid, {}), **overrides}
         static = rec.get('static_trial') or 'static1'
         # If a specific session is given, drill down into simulations/<pid>/<session>
@@ -529,7 +529,7 @@ Config = BatchSettings
 # trial_list and SUBJECTS per project.
 # ============================================================================
 try:
-    from bioscout.subject import Subject, build_model_config
+    from bioscout.utils.analysis import Subject, build_model_config
 except Exception:                       # keep settings importable even if not packaged
     Subject = None
     def build_model_config(subjects, force_types=("SO", "CEINMS")):
@@ -606,4 +606,4 @@ def JRA_COLUMNS(model_name: str) -> dict:
         knee = ["walker_knee_r_on_tibia_r_in_tibia_r_fx",
                 "walker_knee_r_on_tibia_r_in_tibia_r_fy",
                 "walker_knee_r_on_tibia_r_in_tibia_r_fz"]
-    return {"hip": hip, "knee": knee, "ankle": ankle}
+    return {"hip": hip, "knee": knee, "ankle": 

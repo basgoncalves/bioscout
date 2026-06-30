@@ -615,7 +615,7 @@ class MainWindow(ctk.CTk):
         self._project_dir.set(str(p))
 
         # ── Version check (AST-only — avoids executing the file, which can
-        #    fail if the project's settings.py references names like PlayerConfig
+        #    fail if the project's settings.py references names like SubjectConfig
         #    that are no longer in the template's global scope) ────────────────
         settings_file = p / "settings.py"
         ok = False

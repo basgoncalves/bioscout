@@ -137,7 +137,7 @@ def _resolve_project_dir():
                 for d in ('simulations', 'Simulations', 'models', 'Models'))):
         return cwd
     try:
-        _pr = getattr(settings, 'PROJECT_ROOT', None)
+        _pr = getattr(getattr(settings, 'BatchSettings', None), 'PROJECT_ROOT', None)
         if _pr and os.path.isdir(str(_pr)):
             return os.path.abspath(str(_pr))
     except Exception:
@@ -154,7 +154,7 @@ CODE_DIR = UTILS_DIR   # where this package physically lives (e.g. for log.txt)
 # utils.SIMULATIONS_DIR / utils.RESULTS_DIR. They are None until a project's
 # settings define them, and bioscout.Project() (re)points them via _point_dirs().
 def _dir_from_settings(name):
-    val = getattr(settings, name, None) if settings is not None else None
+    val = getattr(getattr(settings, "BatchSettings", None), name, None)
     return str(val) if val is not None else None
 
 MODELS_DIR       = _dir_from_settings('MODELS_DIR')
@@ -244,6 +244,27 @@ def create_session(subject, session):
 ## utils.updir / utils.print_to_log / utils.time_normalise_df and every bare-name
 ## internal reference keep working unchanged.
 from .shared import updir, print_to_log, time_normalise_df, start_logging, trial_type
+
+
+def summarize_results(settings_path=None):
+    """Build the results summary (figures + JASP CSV) for a project.
+
+    Uses the folder of ``settings_path`` if given, else the current working
+    directory — which must contain a ``settings.py`` and a ``summarize_results.py``.
+
+        import bioscout
+        bioscout.summarize_results()                       # cwd project
+        bioscout.summarize_results(r"C:/proj/settings.py")  # explicit
+    """
+    import os as _os
+    import runpy as _runpy
+    proj = _os.path.dirname(_os.path.abspath(settings_path)) if settings_path else _os.getcwd()
+    if not _os.path.exists(_os.path.join(proj, "settings.py")):
+        raise FileNotFoundError(f"no settings.py in {proj} — pass settings_path=...")
+    script = _os.path.join(proj, "summarize_results.py")
+    if not _os.path.exists(script):
+        raise FileNotFoundError(f"no summarize_results.py in {proj}")
+    return _runpy.run_path(script, run_name="__main__")
 
 # File I/O (loaders/writers/XML) moved to utils/io.py — re-exported so
 # utils.load_any_data_file / utils.check_path / utils.save_pretty_xml etc. and
@@ -1077,20 +1098,12 @@ except (ImportError, ValueError):
     except Exception:
         openSim = None
 
-try:
-    # Load utils/ceinms.py explicitly — `import ceinms` would grab the
-    # utils/ceinms/ binary package instead (package takes precedence over
-    # the .py module when both share the same name).
-    import importlib.util as _ilu_c
-    _ceinms_py_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ceinms.py')
-    _ceinms_spec = _ilu_c.spec_from_file_location('ceinms_py', _ceinms_py_path)
-    _ceinms_mod = _ilu_c.module_from_spec(_ceinms_spec)
-    _ceinms_spec.loader.exec_module(_ceinms_mod)
-    ceinms = _ceinms_mod
-    HAS_CEINMS = True
-except Exception:
-    HAS_CEINMS = False
-    ceinms = None
+# CEINMS helpers are bound at the BOTTOM of this file (after analysis/emg/plot
+# are loaded). Loading them here, mid-init, hit an import cycle (ceinms.py ->
+# import utils/settings -> back into this module before it is complete) and
+# silently failed, leaving utils.ceinms = None. Placeholder until then:
+ceinms = None
+HAS_CEINMS = False
 
 try:
     import emg_normalise as _emg_mod
@@ -1109,7 +1122,7 @@ try:
         build_model_config, discover_subjects, init_project,
         check_settings_version, migrate_settings, ensure_editor_paths,
         select_subjects, subjects_in_simulations, resolve_subject_selection,
-        sessions_from_subjects, players_from_subjects,
+        sessions_from_subjects, subjects_from_subjects,
     )
     from . import analysis
 except Exception as _e:
@@ -1129,3 +1142,11 @@ from .plot import Plot
 
 # Analyse now lives in utils/analysis.py (with Project/Subject/Session).
 from .analysis import Analyse
+
+# ---------------------------------------------------------------------------
+# CEINMS helpers — bound LAST, on purpose.
+#
+# utils/ceinms.py holds the Python helpers (create_input_data, create_ceinms_cfg,
+# create_ceinms_model, calibrate, …); the sibling binary package utils/ceinms/
+# shadows it on import. The package __init__ re-exports the .py helpers, so the
+# package object carries both helpers and the .exe paths. Import

@@ -1,232 +1,166 @@
 """
-Unified Settings Module
+Project settings — powerlifting squat study.
+
+Everything lives inside classes (no loose module-level variables or functions):
+  * BatchSettings  — paths, subjects, trials, analysis config + batch/IK/GRF/EMG.
+  * CEINMSSettings / SummarySettings / UISettings / RecordingSettings / Inputs.
+bioscout reads it all via ``settings.BatchSettings.X`` etc.
+
+KEEP THIS FILE — bioscout.Project()/init_project() loads it. ``__version__`` is
+the settings-schema version (separate from the bioscout package version).
 """
 import os
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).parent
-# Shares major.minor with the package (bioscout.__version__); the patch differs
-# per component / branch. Keep the major.minor in step with bioscout/__init__.py.
+# Guarded: this BUNDLED template is exec'd by bioscout.utils.settings DURING
+# bioscout's own import, so a bare top-level import of bioscout.utils.* would be
+# circular. The try/except lets it load; a real project's own settings.py
+# (loaded after bioscout is ready) imports these directly without guarding.
+try:
+    from bioscout.utils.analysis import Subject, build_model_config, select_subjects, sessions_from_subjects
+    from bioscout.utils.shared import trial_type as _trial_type
+except Exception:
+    Subject = None
+    def build_model_config(*a, **k): return {}
+    def select_subjects(subs=(), *a, **k): return list(subs)
+    def sessions_from_subjects(*a, **k): return {}
+    def _trial_type(name, *a, **k): return name
+
 __version__ = "1.2.9"
 
-# ============================================================================
-# PROJECT ROOT — the only absolute path you need to change per project.
-# All other paths are derived from it.
-# ============================================================================
-PROJECT_ROOT    = Path.home() / 'Ucloud' / 'FAIS'
-PROJECT_NAME    = 'squatting_fais'
-
-MODELS_DIR      = PROJECT_ROOT / 'models'
-SETUP_DIR       = PROJECT_ROOT / 'setup_files'
-SIMULATIONS_DIR = PROJECT_ROOT / 'Simulations'
-LOG_DIR         = PROJECT_ROOT / 'logs'   # batch/analysis logs (not app install dir)
-
-
-# ============================================================================
-# PLAYERS — subjects (and optionally sessions) to process in this batch.
-#
-# Full player data (height, mass, group, etc.) lives in players.json at the
-# project root.  Add players with:  python -m bioscout --add_player .
-#
-# Three formats are supported:
-#
-#   Simple list — IDs only, processes entire subject folder:
-#       PLAYERS = ['012', '078']
-#
-#   With session + static trial per subject (recommended for clinical projects):
-#       PLAYERS = {
-#           '012': {'session': 'session1', 'static_trial': 'static01'},
-#           '078': {'session': 'session2', 'static_trial': 'static02'},
-#       }
-#       → processes simulations/012/session1  and  simulations/078/session2
-#
-#   With other per-subject overrides (any BatchSettings field):
-#       PLAYERS = {
-#           '012': {'session': 'session1', 'static_trial': 'static01', 'tested_leg': 'l'},
-#           '078': {'session': 'session2', 'static_trial': 'static02', 'tested_leg': 'r'},
-#       }
-# ============================================================================
-PLAYERS = ['012', '078']
+# ---------------------------------------------------------------------------
+# Run flags — read by `python -m bioscout -b settings.py` (bioscout.pipeline).
+#   RUN_PIPELINE : rebuild inputs from c3d + IK/ID/MA/SO/JRA + CEINMS per session
+#   RUN_SUMMARY  : build the results/manuscript summary (summarize_results.py)
+#   RUN_SCALING  : (optional) re-scale models before the pipeline
+#   RUN_CEINMS   : include the CEINMS stage in the pipeline (default True)
+# ---------------------------------------------------------------------------
+RUN_PIPELINE = True
+RUN_SUMMARY  = True
+RUN_SCALING  = False
+RUN_CEINMS   = True
 
 
-def build_sessions(players=None, simulations_dir: Path = None,
-                   project_root: Path = None) -> dict:
-    """Build the {abs_session_path: static_trial_name} dict BatchSettings expects.
-
-    Loads per-player data (static_trial, etc.) from players.json.
-    Falls back to 'static1' if the registry doesn't exist yet.
-
-    If a player entry contains a 'session' key, the path is built as:
-        simulations_dir / pid / session
-    Otherwise the entire subject folder is used:
-        simulations_dir / pid
-
-    Args:
-        players:         list of IDs or {id: override_dict}. Defaults to PLAYERS.
-        simulations_dir: parent folder of subject sub-folders. Defaults to SIMULATIONS_DIR.
-        project_root:    folder containing players.json. Defaults to PROJECT_ROOT.
-    Returns:
-        {str(abs_path): static_trial_name}
-    """
-    if players is None:
-        players = PLAYERS
-    if simulations_dir is None:
-        simulations_dir = SIMULATIONS_DIR
-    if project_root is None:
-        project_root = PROJECT_ROOT
-
-    # Normalise to {pid: override_dict}
-    if isinstance(players, (list, tuple)):
-        player_map = {pid: {} for pid in players}
-    elif isinstance(players, dict):
-        player_map = {
-            pid: (vars(v) if not isinstance(v, dict) else v)
-            for pid, v in players.items()
-        }
-    else:
-        player_map = {}
-
-    # Try loading the registry; degrade gracefully when it doesn't exist yet.
-    # Import is attempted via multiple paths so this works whether settings.py
-    # is run from the project folder, the bioscout package dir, or installed.
-    registry = {}
-    try:
-        PlayerRegistry = None
-        for _import in [
-            lambda: __import__('bioscout.utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
-            lambda: __import__('utils.player_registry', fromlist=['PlayerRegistry']).PlayerRegistry,
-        ]:
-            try:
-                PlayerRegistry = _import()
-                break
-            except ImportError:
-                continue
-        if PlayerRegistry is not None:
-            reg = PlayerRegistry(project_root)
-            registry = reg.all_players()
-    except Exception:
-        pass
-
-    out = {}
-    for pid, overrides in player_map.items():
-        rec = {**registry.get(pid, {}), **overrides}
-        static = rec.get('static_trial') or 'static1'
-        # If a specific session is given, drill down into simulations/<pid>/<session>
-        session = rec.get('session')
-        if session:
-            path = simulations_dir / pid / session
-        else:
-            path = simulations_dir / pid
-        out[str(path)] = static
-    return out
-
-
-# Flat dict consumed by BatchSettings.sessions.
-SESSIONS = build_sessions()
-
-# ============================================================================
-# BATCH SETTINGS
-# ============================================================================
 class BatchSettings:
-    """Unified batch processing settings for motion capture session analysis."""
+    """All project + batch-analysis configuration."""
 
-    # SESSION CONFIGURATION
-    # Edit SESSIONS at the top of this file to choose what to batch-process.
-    # (Each session's static-trial name lives in SESSIONS; a None value there
-    #  auto-detects any trial whose name starts with "static".)
-    sessions = SESSIONS
+    # ---- paths -----------------------------------------------------------
+    PROJECT_ROOT    = Path(__file__).resolve().parent
+    PROJECT_NAME    = "powerlifting_squat"
+    MODELS_DIR      = PROJECT_ROOT / "models"
+    SETUP_DIR       = PROJECT_ROOT / "setupFiles"
+    SIMULATIONS_DIR = PROJECT_ROOT / "simulations"
+    LOG_DIR         = PROJECT_ROOT / "logs"
+
+    # ---- session & trials ------------------------------------------------
+    SESSION      = "25_03_31"
+    session_list = [SESSION]
+    trial_list   = ["Walking_02", "Squat_BW_01", "Squat_35kg_01"]
+    TRIAL_TYPE_PATTERN = r"(.+?)_(\d+)$"
+
+    # ---- subjects --------------------------------------------------------
+    # Curated metadata; choose which to process with RUN_/SKIP_ (names or indices).
+    ALL_SUBJECTS = [] if Subject is None else [
+        Subject("Athlete_03_Cateli",     label="Scaled (Cateli)",     session=SESSION,
+                model_so="scaled_opt_N10_increased_3.00.osim", model_ceinms="scaled_opt_N10.osim",
+                setup_folder="Purzel",     color="green",  group="generic"),
+        Subject("Athlete_03_Lernagopal", label="Scaled (Lernagopal)", session=SESSION,
+                model_so="scaled_89_opt_N10_increased_3.00.osim", model_ceinms="scaled_89_opt_N10.osim",
+                setup_folder="Lernagopal", color="blue",   group="generic"),
+        Subject("Athlete_03_GPK",        label="Scaled (GPK)",        session=SESSION,
+                model_so="scaled_increased_3.00.osim", model_ceinms="scaled.osim",
+                setup_folder="GPK",        color="red",    group="generic"),
+        Subject("Athlete_03_GPK_MRI",    label="MRI (GPK)",           session=SESSION,
+                model_so="GPK_MRI_scaled_increased_3.00.osim", model_ceinms="GPK_MRI_scaled.osim",
+                setup_folder="GPK",        color="purple", group="MRI"),
+    ]
+    RUN_SUBJECTS  = None      # None/[] = all; e.g. ["Athlete_03_GPK"] or [2, 3]
+    SKIP_SUBJECTS = []        # e.g. ["Athlete_03_Cateli"] or [0]
+
+    SUBJECTS         = select_subjects(ALL_SUBJECTS, RUN_SUBJECTS, SKIP_SUBJECTS)
+    SUBJECTS_BY_NAME = {s.name: s for s in SUBJECTS}
+    model_config     = build_model_config(SUBJECTS, force_types=("SO", "CEINMS"))
+    MODEL_FILES      = {s.name: s.model_ceinms for s in SUBJECTS}
+    SETUP_FOLDERS    = {s.name: s.setup_folder for s in SUBJECTS}
+    # session map {path: static_trial} — Project also derives this at runtime.
+    sessions         = sessions_from_subjects(SUBJECTS, SIMULATIONS_DIR)
+
+    # ---- analysis / comparison config ------------------------------------
+    DOFS = ["hip_flexion_r", "hip_adduction_r", "hip_rotation_r",
+            "knee_angle_r", "knee_adduction_r", "ankle_angle_r"]
+    DOFS_MOMENTS = [d + "_moment" for d in DOFS]
+    MODELS_TO_FLIP_KNEE = ["Lernagopal", "GPK"]
+    CONTRASTS = {
+        "generic_vs_mri": ["Scaled (GPK)", "MRI (GPK)"],
+        "so_vs_ceinms":   ["Scaled (GPK)", "Scaled (GPK) - CEINMS"],
+        "across_models":  ["Scaled (Cateli)", "Scaled (Lernagopal)", "Scaled (GPK)"],
+    }
+    MUSCLE_GROUPS = {
+        "R Gluteus maximus":  ["glmax1_r", "glmax2_r", "glmax3_r"],
+        "R Gluteus medius":   ["glmed1_r", "glmed2_r", "glmed3_r"],
+        "R Gluteus minimus":  ["glmin1_r", "glmin2_r", "glmin3_r"],
+        "R Adductor Magnus":  ["addmagDist_r", "addmagIsch_r", "addmagMid_r", "addmagProx_r"],
+        "R Biceps Femoris":   ["bflh_r", "bfsh_r"],
+        "R Semimembranosus":  ["semimem_r"],
+        "R Semitendinosus":   ["semiten_r"],
+        "R Rectus Femoris":   ["recfem_r"],
+        "R Vasti":            ["vasint_r", "vaslat_r", "vasmed_r"],
+        "R Triceps Surae":    ["soleus_r", "gaslat_r", "gasmed_r"],
+    }
+
+    # Time-normalise (downsample) exported inputs/results to this many frames.
+    # 0 = native sampling. ~100 is near-lossless for kinematics/moments.
+    normalise_inputs = 100
+
+    # ---- batch / IK / GRF / EMG processing -------------------------------
     setup_files_folder = SETUP_DIR
-    generic_model = os.path.join(MODELS_DIR, 'Rajagopal2015_FAI_os4.osim')
+    generic_model = os.path.join(MODELS_DIR, "Rajagopal2015_FAI_os4.osim")
     markerset = os.path.join(SETUP_DIR, "markers_FAIS.xml")
-    trials_to_skip: list = []   # skip these trials (blacklist)
-    trials_to_run:  list = []   # if non-empty, only run these trials (whitelist)
-
+    trials_to_skip: list = []
+    trials_to_run:  list = []
     auto_create_dirs = True
     replace_existing = True
-
-    # DEGREES OF FREEDOM — single canonical list used across IK, ID, MA, and CEINMS
     dof_list = [
-        'hip_flexion_l', 'hip_flexion_r',
-        'hip_adduction_l', 'hip_adduction_r',
-        'hip_rotation_l', 'hip_rotation_r',
-        'knee_angle_l', 'knee_angle_r',
-        'ankle_angle_l', 'ankle_angle_r',
+        "hip_flexion_l", "hip_flexion_r", "hip_adduction_l", "hip_adduction_r",
+        "hip_rotation_l", "hip_rotation_r", "knee_angle_l", "knee_angle_r",
+        "ankle_angle_l", "ankle_angle_r",
     ]
-
-    # MARKER WEIGHTS for model scaling
     marker_weights = {
-        'pelvis': 10.0,
-        'femur_r': 1.0, 'tibia_r': 1.0, 'talus_r': 1.0, 'calcn_r': 2.0, 'toes_r': 2.0,
-        'femur_l': 1.0, 'tibia_l': 1.0, 'talus_l': 1.0, 'calcn_l': 2.0, 'toes_l': 2.0,
+        "pelvis": 10.0,
+        "femur_r": 1.0, "tibia_r": 1.0, "talus_r": 1.0, "calcn_r": 2.0, "toes_r": 2.0,
+        "femur_l": 1.0, "tibia_l": 1.0, "talus_l": 1.0, "calcn_l": 2.0, "toes_l": 2.0,
     }
-
-    # EMG CHANNEL → OPENSIM MUSCLE MAPPING (used for C3D export and plotting)
     emg_muscle_mapping = {
-        # Left Leg
-        'EMG_Channels_EMG02_L_gastro_med': ['fdl_l', 'fhl_l', 'gasmed_l', 'gaslat_l', 'perbrev_l', 'perlong_l', 'soleus_l', 'tibpost_l'],
-        'EMG_Channels_EMG05_L_rect_fem':   ['recfem_l', 'sart_l', 'tfl_l'],
-        'EMG_Channels_EMG06_L_vast_med':   ['vaslat_l', 'vasmed_l', 'vasint_l'],
-        'EMG_Channels_EMG07_L_semitend':   ['bflh_l', 'bfsh_l', 'semimem_l', 'semiten_l'],
-        'EMG_Channels_EMG08_L_glut_med':   ['glmed1_l', 'glmed2_l', 'glmed3_l'],
-        # Right Leg
-        'EMG_Channels_EMG10_R_gastro_med': ['fdl_r', 'fhl_r', 'gasmed_r', 'gaslat_r', 'perbrev_r', 'perlong_r', 'soleus_r', 'tibpost_r'],
-        'EMG_Channels_EMG13_R_rect_fem':   ['recfem_r', 'sart_r', 'tfl_r'],
-        'EMG_Channels_EMG14_R_vast_med':   ['vaslat_r', 'vasmed_r', 'vasint_r'],
-        'EMG_Channels_EMG15_R_semitend':   ['bflh_r', 'bfsh_r', 'semimem_r', 'semiten_r'],
-        'EMG_Channels_EMG16_R_glut_med':   ['glmed1_r', 'glmed2_r', 'glmed3_r'],
+        "EMG_Channels_EMG02_L_gastro_med": ["fdl_l", "fhl_l", "gasmed_l", "gaslat_l", "perbrev_l", "perlong_l", "soleus_l", "tibpost_l"],
+        "EMG_Channels_EMG05_L_rect_fem":   ["recfem_l", "sart_l", "tfl_l"],
+        "EMG_Channels_EMG06_L_vast_med":   ["vaslat_l", "vasmed_l", "vasint_l"],
+        "EMG_Channels_EMG07_L_semitend":   ["bflh_l", "bfsh_l", "semimem_l", "semiten_l"],
+        "EMG_Channels_EMG08_L_glut_med":   ["glmed1_l", "glmed2_l", "glmed3_l"],
+        "EMG_Channels_EMG10_R_gastro_med": ["fdl_r", "fhl_r", "gasmed_r", "gaslat_r", "perbrev_r", "perlong_r", "soleus_r", "tibpost_r"],
+        "EMG_Channels_EMG13_R_rect_fem":   ["recfem_r", "sart_r", "tfl_r"],
+        "EMG_Channels_EMG14_R_vast_med":   ["vaslat_r", "vasmed_r", "vasint_r"],
+        "EMG_Channels_EMG15_R_semitend":   ["bflh_r", "bfsh_r", "semimem_r", "semiten_r"],
+        "EMG_Channels_EMG16_R_glut_med":   ["glmed1_r", "glmed2_r", "glmed3_r"],
     }
-
-    # C3D EXPORT SETTINGS
     emg_label_default = "Voltage"
     emg_lowpass_default = "500"
     emg_highpass_default = "10"
     emg_notch_default = "50"
     emg_string_list = ["EMG", "Voltage", "muscle"]
-    emg_sampling_freq = 1000  # Hz — set to your actual EMG sampling rate
-    right_foot_markers = ['RTOE', 'RHEE', 'RFMH', 'RSMH', 'RVMH']
-    left_foot_markers = ['LTOE', 'LHEE', 'LFMH', 'LSMH', 'LVMH']
-
-    # Coordinate axes in the exported TRC file.
-    # exportC3D rotates the lab frame to the OpenSim frame, so the axes that
-    # distinguish left/right (mediolateral) and vertical change depending on
-    # the source system.
-    #
-    #   Raw Vicon/lab frame  →  OpenSim frame (after exportC3D)
-    #     X = mediolateral        X = anterior-posterior
-    #     Y = anterior-post.      Y = vertical
-    #     Z = vertical            Z = mediolateral   ← used for foot assignment
-    #
-    # Change trc_lateral_axis to 'X' if your TRC is in the original lab frame.
-    trc_lateral_axis  = 'Z'   # column used to tell left foot from right foot
-    trc_vertical_axis = 'Y'   # column representing height
-    trc_ap_axis       = 'X'   # column representing anterior-posterior direction
-
-    # GRF AXIS CONVERSION: mocap/C3D lab frame (Z-up) -> OpenSim frame (Y-up).
-    # This is a 90-degree rotation about X, NOT a plain Y/Z swap. Each entry maps
-    # an OpenSim axis to (source mocap axis, sign):
-    #     OpenSim x =  mocap x        (x -> x)
-    #     OpenSim y =  mocap z        (z -> y)  vertical, positive up
-    #     OpenSim z = -mocap y        (y -> z, sign flipped to stay right-handed)
-    # Applied to forces, CoP positions and free moments. Matches the Vicon export.
-    grf_axis_map = {
-        'x': ('x',  1.0),
-        'y': ('z',  1.0),
-        'z': ('y', -1.0),
-    }
-    # Unit scaling applied AFTER the rotation (C3D points/moments are in mm):
-    grf_cop_scale_to_m = 0.001   # centre-of-pressure  mm   -> m
-    grf_moment_scale   = 0.001   # free moment         N*mm -> N*m
-    # Some systems export the free (vertical) moment with the opposite sign to a
-    # plain rotation of the C3D moment; flip the whole moment vector if so.
+    emg_sampling_freq = 1000
+    right_foot_markers = ["RTOE", "RHEE", "RFMH", "RSMH", "RVMH"]
+    left_foot_markers = ["LTOE", "LHEE", "LFMH", "LSMH", "LVMH"]
+    trc_lateral_axis  = "Z"
+    trc_vertical_axis = "Y"
+    trc_ap_axis       = "X"
+    grf_axis_map = {"x": ("x", 1.0), "y": ("z", 1.0), "z": ("y", -1.0)}
+    grf_cop_scale_to_m = 0.001
+    grf_moment_scale   = 0.001
     grf_moment_sign    = -1.0
-
-    # UI Layout settings
     c3d_file_col_weight = 3
     c3d_settings_col_weight = 7
     c3d_emg_channels_height = 40
     c3d_markers_height = 40
-
-    # ANALYSIS PIPELINE - OPENSIM
     enable_c3d_export = True
     enable_scale_model = True
     enable_muscle_scaling = False
@@ -235,375 +169,170 @@ class BatchSettings:
     enable_inverse_dynamics = True
     enable_static_optimization = True
     enable_muscle_analysis = True
+    enable_emg_normalise = True
 
-    # session-amplitude-normalise EMG after C3D export
-    enable_emg_normalise      = True
+    # ---- helpers (as static methods, not loose functions) ----------------
+    @staticmethod
+    def trial_type(trial_name):
+        """'Squat_35kg_02' -> 'Squat_35kg' (groups reps of a task)."""
+        return _trial_type(trial_name, BatchSettings.TRIAL_TYPE_PATTERN)
+
+    @staticmethod
+    def model_for(subject, force_type="SO"):
+        s = BatchSettings.SUBJECTS_BY_NAME.get(subject)
+        return s.model_for(force_type) if s else None
+
+    @staticmethod
+    def JRA_COLUMNS(model_name):
+        """Joint-reaction (contact-force) column names per model (knee differs)."""
+        name = model_name or ""
+        hip = ["hip_r_on_femur_r_in_femur_r_fx", "hip_r_on_femur_r_in_femur_r_fy", "hip_r_on_femur_r_in_femur_r_fz"]
+        ankle = ["ankle_r_on_talus_r_in_talus_r_fx", "ankle_r_on_talus_r_in_talus_r_fy", "ankle_r_on_talus_r_in_talus_r_fz"]
+        if "Lernagopal" in name or "MRI" in name:   # both use the Lerner knee joint
+            knee = ["Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fx",
+                    "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fy",
+                    "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fz"]
+        else:
+            knee = ["walker_knee_r_on_tibia_r_in_tibia_r_fx", "walker_knee_r_on_tibia_r_in_tibia_r_fy", "walker_knee_r_on_tibia_r_in_tibia_r_fz"]
+        return {"hip": hip, "knee": knee, "ankle": ankle}
 
     @property
-    def results_dir(self) -> Path:
-        """First session folder (kept for backward compatibility)."""
-        return Path(next(iter(self.sessions))) if self.sessions else Path('.')
+    def results_dir(self):
+        return Path(next(iter(self.sessions))) if self.sessions else Path(".")
 
 
-# ============================================================================
-# CEINMS SETTINGS
-# ============================================================================
 class CEINMSSettings:
-    """
-    All CEINMS-specific parameters in one place.
-    Previously scattered across ceinms.py as TemplateParameters.
-    """
-
-    # --- Pipeline switches ---
     enable_calibration = True
     enable_execution   = True
-    calibration_trial_names = ['sq_bw_01']  # trials used for CEINMS calibration
-
-    # --- Calibration algorithm ---
-    calibration_type             = 'hybrid'   # 'hybrid' or 'ceinms'
-    tendon_type                  = 'elastic'  # 'elastic' or 'rigid'
-    learning_rate                = 0.02
-    max_iterations               = 1000
-    early_stopping_patience      = 20
+    calibration_trial_names = ["Walking_02", "Squat_BW_01"]
+    calibration_type = "hybrid"
+    tendon_type = "elastic"
+    learning_rate = 0.02
+    max_iterations = 1000
+    early_stopping_patience = 20
     early_stopping_min_improvement = 0.1
-    num_synergies                = 4
-    hybrid_calibration           = 'true'
-    number_of_synergies          = 8
-
-    # Default execution weights (overridable per trial via Analyse attributes)
+    num_synergies = 4
+    hybrid_calibration = "true"
+    number_of_synergies = 8
     alpha = 10
     beta  = 1
     gamma = 1000
-
-    # Search ranges for beta/gamma optimisation
-    beta_min   = 1;    beta_max   = 100;  beta_delta   = 10
-    gamma_min  = 1;    gamma_max  = 100;  gamma_delta  = 50
-
-    # Grid search values used in loop optimisation
-    alphas = '1 10 100'
-    betas  = '1 10'
-    gammas = '1 10 100 500 1000 1500 2000 3000 4000 5000'
-
-    # Degrees of freedom included in the CEINMS model (derived from BatchSettings.dof_list,
-    # excluding pelvis DOFs which have no muscle crossings)
-    dof_set = ' '.join(d for d in BatchSettings.dof_list if 'pelvis' not in d)
-
-    # --- Muscle parameter bounds (calibration) ---
-    c1                   = '-0.99 -0.05'
-    c2                   = '-0.95 -0.05'
-    shape_factor         = '-2.999 -0.001'
-    optimal_fiber_length = '0.5 3'
-    tendon_slack_length  = '0.5 3'
-    strength_coefficient = '0.75 3.5'
-
-    # Target muscles ('all' or a list, e.g. ['glmax1_r', 'glmax2_r'])
-    target_muscles = 'all'
-
-    # EMG channel → OpenSim muscle mapping
-    # Keys = EMG column names in the .mot file
-    # Values = list of muscle names in the OpenSim model
-    emg_muscle_mapping = {
-        # Left leg
-        'EMG_Channels_EMG01_vast_lat_l': ['vaslat_l', 'vasmed_l'],
-        'EMG_Channels_EMG03_rect_fem_l': ['recfem_l', 'sart_l', 'tfl_l'],
-        'EMG_Channels_EMG05_bic_fem_l':  ['bflh_l', 'bfsh_l', 'semimem_l', 'semiten_l'],
-        'EMG_Channels_EMG07_glut_l':     ['glmax1_l', 'glmax2_l', 'glmax3_l'],
-        'EMG_Channels_EMG09_gast_med_l': [],
-        # Right leg
-        'EMG_Channels_EMG02_vast_lat_r': ['vaslat_r', 'vasmed_r'],
-        'EMG_Channels_EMG04_rect_fem_r': ['recfem_r', 'sart_r', 'tfl_r'],
-        'EMG_Channels_EMG06_bic_fem_r':  ['bflh_r', 'bfsh_r', 'semimem_r', 'semiten_r'],
-        'EMG_Channels_EMG08_glut_r':     ['glmax1_r', 'glmax2_r', 'glmax3_r'],
-        'EMG_Channels_EMG10_gast_med_r': [],
-    }
-
-    # Calibration objective functions (order matters)
+    beta_min = 1;  beta_max = 100;  beta_delta = 10
+    gamma_min = 1; gamma_max = 100; gamma_delta = 50
+    alphas = "1 10 100"
+    betas  = "1 10"
+    gammas = "1 10 100 500 1000 1500 2000 3000 4000 5000"
+    dof_set = " ".join(d for d in BatchSettings.dof_list if "pelvis" not in d)
+    c1 = "-0.99 -0.05"
+    c2 = "-0.95 -0.05"
+    shape_factor = "-2.999 -0.001"
+    optimal_fiber_length = "0.5 3"
+    tendon_slack_length = "0.5 3"
+    strength_coefficient = "0.75 3.5"
+    target_muscles = "all"
+    emg_muscle_mapping = BatchSettings.emg_muscle_mapping
     objective_functions = [
-        {'name': 'MomentError',  'targets': 'all', 'weight': 1},
-        {'name': 'Penalty', 'targetType': 'normalisedFibreLength',
-         'weight': 10,   'exponent': 2, 'range': '0.5 1.5'},
-        {'name': 'Penalty', 'targetType': 'tendonStrain',
-         'weight': 1000, 'exponent': 2, 'range': '0. 0.5'},
-        {'name': 'ExcitationsSquared', 'weight': 1},
-        {'name': 'SynergyExtraction',
-         'mseWeight': 100, 'range': '0. 1.', 'rangeExponent': 2, 'rangeWeight': 1000},
+        {"name": "MomentError", "targets": "all", "weight": 1},
+        {"name": "Penalty", "targetType": "normalisedFibreLength", "weight": 10, "exponent": 2, "range": "0.5 1.5"},
+        {"name": "Penalty", "targetType": "tendonStrain", "weight": 1000, "exponent": 2, "range": "0. 0.5"},
+        {"name": "ExcitationsSquared", "weight": 1},
+        {"name": "SynergyExtraction", "mseWeight": 100, "range": "0. 1.", "rangeExponent": 2, "rangeWeight": 1000},
     ]
 
 
-# ============================================================================
-# SUMMARY SETTINGS  (python -m bioscout --summary)
-# ============================================================================
 class SummarySettings:
-    """Configuration for the kinematics/kinetics summary plots."""
-
-    # Put the left and right DOFs of each joint in the SAME column.
     combine_legs = True
-    left_color   = 'tab:red'
-    right_color  = 'tab:blue'
-
-    # Row order, top to bottom. Any subset of:
-    #   angle, emg, moment, moment_arms, muscle_forces, activations, energetics
-    rows = ['angle', 'emg', 'moment', 'moment_arms',
-            'muscle_forces', 'activations', 'energetics']
-
-    # Per-joint marker error: substrings matched against the per-marker columns
-    # of _ik_marker_errors_all.sto, averaged per side for the angle-row box.
+    left_color = "tab:red"
+    right_color = "tab:blue"
+    rows = ["angle", "emg", "moment", "moment_arms", "muscle_forces", "activations", "energetics"]
     joint_marker_patterns = {
-        'hip':   ['ASI', 'PSI', 'SACR', 'THI'],
-        'knee':  ['THI', 'FC', 'TIB', 'KNE'],
-        'ankle': ['TIB', 'MAL', 'ANK', 'HEE', 'MT'],
+        "hip":   ["ASI", "PSI", "SACR", "THI"],
+        "knee":  ["THI", "FC", "TIB", "KNE"],
+        "ankle": ["TIB", "MAL", "ANK", "HEE", "MT"],
     }
-
-    # Optional explicit joint -> [muscles] override for the EMG / force panels.
     joint_muscles = {}
 
 
-# ============================================================================
-# UI SETTINGS
-# ============================================================================
 class UISettings:
-    """User interface appearance and layout configuration."""
-
-    FONT_SIZE_SMALL = 20
-    FONT_SIZE_NORMAL = 24
-    FONT_SIZE_LARGE = 28
-    FONT_SIZE_TITLE = 32
+    FONT_SIZE_SMALL = 20; FONT_SIZE_NORMAL = 24; FONT_SIZE_LARGE = 28; FONT_SIZE_TITLE = 32
     FONT_FAMILY = "Segoe UI"
-
-    PRIMARY_COLOR = "#2E86AB"
-    SECONDARY_COLOR = "#A23B72"
-    ACCENT_COLOR = "#F18F01"
-    BACKGROUND_COLOR = "#F4F4F4"
-    TEXT_COLOR = "#1A1A1A"
-    ERROR_COLOR = "#C1121F"
-
-    PADDING_SMALL = 5
-    PADDING_NORMAL = 10
-    PADDING_LARGE = 15
-
-    BUTTON_HEIGHT = 35
-    FRAME_HEIGHT = 200
-    WINDOW_WIDTH = 1200
-    WINDOW_HEIGHT = 800
-
-    sidebar_weight = 1
-    content_weight = 3
-
-    # Default tab shown on launch (must match a key in main_window tab_definitions)
+    PRIMARY_COLOR = "#2E86AB"; SECONDARY_COLOR = "#A23B72"; ACCENT_COLOR = "#F18F01"
+    BACKGROUND_COLOR = "#F4F4F4"; TEXT_COLOR = "#1A1A1A"; ERROR_COLOR = "#C1121F"
+    PADDING_SMALL = 5; PADDING_NORMAL = 10; PADDING_LARGE = 15
+    BUTTON_HEIGHT = 35; FRAME_HEIGHT = 200; WINDOW_WIDTH = 1200; WINDOW_HEIGHT = 800
+    sidebar_weight = 1; content_weight = 3
     DEFAULT_TAB_ON_LAUNCH = "Session Analysis"
 
 
-# ============================================================================
-# RECORDING SETTINGS
-# ============================================================================
 class RecordingSettings:
-    """Configuration for video recording during motion capture sessions."""
-
     enabled = False
     frame_rate = 30
     resolution = "1920x1080"
     codec = "H264"
     bitrate = "5000k"
-
     auto_name = True
     output_format = "mp4"
-
-    # Recording tab defaults
-    # Recordings are saved inside the project so they live alongside the
-    # subject's simulations/ data (was ~/Videos/recordings).
-    OUTPUT_DIR_TEMPLATE = str(PROJECT_ROOT / "recordings")
+    OUTPUT_DIR_TEMPLATE = str(BatchSettings.PROJECT_ROOT / "recordings")
     DEFAULT_DURATION_SECONDS = 5
     DEFAULT_VIDEO_SOURCE = "webcam"
     IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"
     DEFAULT_OSIM_MODEL = "GPK_generic"
-
-    # Video Analysis tab — set to the model name you want pre-selected in the
-    # dropdown so you don't have to change it every time.
-    # Must match a key in record.video.AVAILABLE_MODELS (or leave blank to use
-    # the first entry in the list).
     DEFAULT_VIDEO_ANALYSIS_MODEL = "GPK_generic"
-
-    # Temporal pose smoothing: maximum pixel distance a landmark may move
-    # between consecutive estimated frames. Set to 0 to disable smoothing.
     DEFAULT_POSE_MAX_DELTA_PX = 50
 
 
-# ============================================================================
-# INPUTS - TRIAL-LEVEL FILE CONFIGURATION
-# ============================================================================
 class Inputs:
-    """Configuration for trial-level file names and relative paths."""
-
     def __init__(self, parentdir=None):
-        """Initialize default trial inputs."""
         self._parentdir = parentdir
-
-        # Model files
-        self.setup_dir = ''
-        self.model_dir = ''
-
-        # Timing
-        self.start_time = '0.0000'
-        self.end_time = '1.0000'
-
-        # Input data files
-        self.c3d = 'c3dfile.c3d'
-        self.emg = 'emg.mot'
-        self.emg_filtered_normalised = 'emg_filtered_normalised.mot'
-        self.grf_mot = 'grf.mot'
-        self.markerset = 'markers_FAIS.xml'
-        self.markers = 'marker_experimental.trc'
-        self.events = 'events.csv'
-
-        # OpenSim setup files
-        self.setup_ik = 'setup_IK.xml'
-        self.setup_grf = 'GRF.xml'
-        self.setup_id = 'setup_ID.xml'
-        self.setup_ma = 'setup_MA.xml'
-        self.actuators_so = 'actuators_so.xml'
-        self.setup_so = 'setup_SO.xml'
-        self.jra_forces = 'SO_StaticOptimization_force.sto'
-        self.setup_jra = 'setup_JRA.xml'
-
-        # CEINMS files
+        self.setup_dir = ""
+        self.model_dir = ""
+        self.start_time = "0.0000"
+        self.end_time = "1.0000"
+        self.c3d = "c3dfile.c3d"
+        self.emg = "emg.mot"
+        self.emg_filtered_normalised = "emg_filtered_normalised.mot"
+        self.grf_mot = "grf.mot"
+        self.markerset = "markers_FAIS.xml"
+        self.markers = "marker_experimental.trc"
+        self.events = "events.csv"
+        self.setup_ik = "setup_IK.xml"
+        self.setup_grf = "GRF.xml"
+        self.setup_id = "setup_ID.xml"
+        self.setup_ma = "setup_MA.xml"
+        self.actuators_so = "actuators_so.xml"
+        self.setup_so = "setup_SO.xml"
+        self.jra_forces = "SO_StaticOptimization_force.sto"
+        self.setup_jra = "setup_JRA.xml"
         self.ceinms_excitations = self.emg_filtered_normalised
-        self.ceinms_uncalibrated_model = os.path.join('..', 'subjectUncalibrated.xml')
-        self.ceinms_calibrated_model = os.path.join('..', 'subjectCalibrated.xml')
-        self.ceinms_calibration_cfg = os.path.join('..', 'calibrationCfg.xml')
-        self.ceinms_calibration_setup = os.path.join('..', 'calibrationSetup.xml')
-        self.ceinms_input_data = 'inputData.xml'
-        self.ceinms_excitation_generator = os.path.join('..', 'excitationGenerator.xml')
-        self.ceinms_optimise_setup = 'ceinms_setup_optimise.xml'
-        self.ceinms_optimise_cfg = 'ceinms_cfg_optimise.xml'
-
-        # CEINMS parameters
-        self.alpha = '10'
-        self.beta = '1'
-        self.gamma = '1000'
-
-        # CEINMS execution files
-        self.ceinms_exe_cfg = 'ceinms_cfg.xml'
-        self.ceinms_exe_setup = 'ceinms_setup.xml'
-
-        # OpenSim output files
-        self.ik = 'joint_angles.mot'
-        self.model_markers = '_ik_model_marker_locations.sto'
-        self.id = 'inverse_dynamics.sto'
-        self.ma = 'muscleAnalysis'
-        self.so_forces = 'SO_StaticOptimization_force.sto'
-        self.so_activations = 'SO_StaticOptimization_activation.sto'
-        self.jra = 'Analyse_JRA_ReactionLoads_SO.sto'
-
-        # CEINMS output directories
-        self.ceinms_calibration_dir = os.path.join('..', 'calibrationOutput')
-        self.ceinms_optimisation_dir = 'Optimised'
-        self.ceinms_exe_dir = 'Execution'
-
-        # Dynamic CEINMS output paths
-        self.ceinms_muscle_forces = os.path.join(
-            f'{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}',
-            'MuscleForces.sto'
-        )
-        self.ceinms_activations = os.path.join(
-            f'{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}',
-            'Activations.sto'
-        )
-        self.jra_ceinms = 'Analyse_JRA_ReactionLoads_CEINMS.sto'
+        self.ceinms_uncalibrated_model = os.path.join("..", "subjectUncalibrated.xml")
+        self.ceinms_calibrated_model = os.path.join("..", "subjectCalibrated.xml")
+        self.ceinms_calibration_cfg = os.path.join("..", "calibrationCfg.xml")
+        self.ceinms_calibration_setup = os.path.join("..", "calibrationSetup.xml")
+        self.ceinms_input_data = "inputData.xml"
+        self.ceinms_excitation_generator = os.path.join("..", "excitationGenerator.xml")
+        self.ceinms_optimise_setup = "ceinms_setup_optimise.xml"
+        self.ceinms_optimise_cfg = "ceinms_cfg_optimise.xml"
+        self.alpha = "10"
+        self.beta = "1"
+        self.gamma = "1000"
+        self.ceinms_exe_cfg = "ceinms_cfg.xml"
+        self.ceinms_exe_setup = "ceinms_setup.xml"
+        self.ik = "joint_angles.mot"
+        self.model_markers = "_ik_model_marker_locations.sto"
+        self.id = "inverse_dynamics.sto"
+        self.ma = "muscleAnalysis"
+        self.so_forces = "SO_StaticOptimization_force.sto"
+        self.so_activations = "SO_StaticOptimization_activation.sto"
+        self.jra = "Analyse_JRA_ReactionLoads_SO.sto"
+        self.ceinms_calibration_dir = os.path.join("..", "calibrationOutput")
+        self.ceinms_optimisation_dir = "Optimised"
+        self.ceinms_exe_dir = "Execution"
+        self.ceinms_muscle_forces = os.path.join(f"{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}", "MuscleForces.sto")
+        self.ceinms_activations = os.path.join(f"{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}", "Activations.sto")
+        self.jra_ceinms = "Analyse_JRA_ReactionLoads_CEINMS.sto"
 
     def to_dict(self):
-        """Return all attributes as a dictionary."""
-        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
-# ============================================================================
-# BACKWARD COMPATIBILITY
-# ============================================================================
 Config = BatchSettings
-
-
-# ============================================================================
-# ANALYSIS / COMPARISON CONFIG   (model comparison, plotting, visualisation)
-# ----------------------------------------------------------------------------
-# Read by the analysis notebook and bioscout.utils.Plot. Subjects are declared
-# as bioscout.Subject objects; model_config is derived from them. Edit SESSION,
-# trial_list and SUBJECTS per project.
-# ============================================================================
-try:
-    from bioscout.subject import Subject, build_model_config
-except Exception:                       # keep settings importable even if not packaged
-    Subject = None
-    def build_model_config(subjects, force_types=("SO", "CEINMS")):
-        return {}
-
-# Session + trials to analyse
-SESSION      = "session1"
-session_list = [SESSION]
-trial_list   = []                       # e.g. ["Walking_02", "Squat_BW_01", "Squat_35kg_01"]
-
-# One Subject per model variant. model_so = static-optimisation model;
-# model_ceinms = CEINMS model.  Or auto-build from the models/ folder with:
-#     import bioscout;  SUBJECTS = bioscout.discover_subjects(session=SESSION)
-SUBJECTS = [
-    # Subject(name="subject_01", label="Subject 01", session=SESSION,
-    #         model_so="scaled_increased_3.00.osim", model_ceinms="scaled.osim",
-    #         setup_folder="default", color="green"),
-]
-SUBJECTS_BY_NAME = {s.name: s for s in SUBJECTS}
-
-# Derived from SUBJECTS (single source of truth)
-model_config  = build_model_config(SUBJECTS, force_types=("SO", "CEINMS"))
-MODEL_FILES   = {s.name: s.model_ceinms for s in SUBJECTS}
-SETUP_FOLDERS = {s.name: s.setup_folder for s in SUBJECTS}
-
-
-def model_for(subject, force_type="SO"):
-    """Model .osim filename for a subject folder name and solver."""
-    s = SUBJECTS_BY_NAME.get(subject)
-    return s.model_for(force_type) if s else None
-
-
-# Named contrasts (curve labels) for comparison figures, e.g.
-#   {"generic_vs_mri": ["Scaled (GPK)", "MRI (GPK)"]}
-CONTRASTS = {}
-
-# Degrees of freedom of interest (right leg) + knee sign-flip
-DOFS = [
-    "hip_flexion_r", "hip_adduction_r", "hip_rotation_r",
-    "knee_angle_r", "knee_adduction_r", "ankle_angle_r",
-]
-DOFS_MOMENTS = [d + "_moment" for d in DOFS]
-MODELS_TO_FLIP_KNEE = []                 # labels whose knee_angle is sign-flipped
-
-# Muscle groups for force / moment aggregation (right-leg defaults)
-MUSCLE_GROUPS = {
-    "R Gluteus maximus":  ["glmax1_r", "glmax2_r", "glmax3_r"],
-    "R Gluteus medius":   ["glmed1_r", "glmed2_r", "glmed3_r"],
-    "R Gluteus minimus":  ["glmin1_r", "glmin2_r", "glmin3_r"],
-    "R Adductor Magnus":  ["addmagDist_r", "addmagIsch_r", "addmagMid_r", "addmagProx_r"],
-    "R Biceps Femoris":   ["bflh_r", "bfsh_r"],
-    "R Semimembranosus":  ["semimem_r"],
-    "R Semitendinosus":   ["semiten_r"],
-    "R Rectus Femoris":   ["recfem_r"],
-    "R Vasti":            ["vasint_r", "vaslat_r", "vasmed_r"],
-    "R Triceps Surae":    ["soleus_r", "gaslat_r", "gasmed_r"],
-}
-
-
-def JRA_COLUMNS(model_name: str) -> dict:
-    """Joint-reaction (contact-force) column names per model (knee differs)."""
-    name = model_name or ""
-    hip = ["hip_r_on_femur_r_in_femur_r_fx",
-           "hip_r_on_femur_r_in_femur_r_fy",
-           "hip_r_on_femur_r_in_femur_r_fz"]
-    ankle = ["ankle_r_on_talus_r_in_talus_r_fx",
-             "ankle_r_on_talus_r_in_talus_r_fy",
-             "ankle_r_on_talus_r_in_talus_r_fz"]
-    if "Lernagopal" in name:
-        knee = ["Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fx",
-                "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fy",
-                "Lerner_knee_r_on_sagittal_articulation_frame_r_in_sagittal_articulation_frame_r_fz"]
-    else:
-        knee = ["walker_knee_r_on_tibia_r_in_tibia_r_fx",
-                "walker_knee_r_on_tibia_r_in_tibia_r_fy",
-                "walker_knee_r_on_tibia_r_in_tibia_r_fz"]
-    return {"hip": hip, "knee": knee, "ankle": ankle}

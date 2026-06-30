@@ -55,8 +55,8 @@ parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file
 parser.add_argument('-g', '--gui',   action='store_true', help="Launch GUI (default when no flags given)")
 parser.add_argument('--init', type=str, metavar='PROJECT_PATH',
                     help="Initialise a new project: create folder structure and copy settings template")
-parser.add_argument('--add_player', type=str, nargs='?', const='.', metavar='PROJECT_PATH',
-                    help="Interactively add a player to players.json in PROJECT_PATH (default: cwd)")
+parser.add_argument('--add_subject', type=str, nargs='?', const='.', metavar='PROJECT_PATH',
+                    help="Interactively add a subject to subjects.json in PROJECT_PATH (default: cwd)")
 parser.add_argument('--install', action='store_true',
                     help="Check dependencies and install missing ones (opensim via conda, others via pip)")
 parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SETTINGS_OR_PROJECT',
@@ -64,8 +64,8 @@ parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SET
                          "or project path; defaults to ./settings.py then the package settings.")
 parser.add_argument('-overall', '--overall', dest='overall', action='store_true',
                     help="With --summary: only (re)build the overall plots/metrics in <project>/summary")
-parser.add_argument('-s', '--subject', type=str, default=None, metavar='PLAYER_ID',
-                    help="With --summary: restrict to one player (e.g. -s 012)")
+parser.add_argument('-s', '--subject', type=str, default=None, metavar='SUBJECT_ID',
+                    help="With --summary: restrict to one subject (e.g. -s 012)")
 parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL_PATH',
                     help="With --summary: build only this one trial folder (fast iteration)")
 parser.add_argument('--shots', type=str, default=None, metavar='VIDEO',
@@ -344,6 +344,30 @@ def _load_settings_from_path(settings_path: str):
     except Exception as e:
         logger.warning(f"Could not load settings from '{settings_path}': {e}; "
                        f"using default settings.py.")
+
+
+def _load_settings_module(settings_path: str):
+    """Import an arbitrary settings .py file and return the module object.
+
+    Used to read project-level flags (RUN_PIPELINE / RUN_SUMMARY / RUN_SCALING)
+    that live at module scope (outside the BatchSettings class). Returns None if
+    the file can't be loaded.
+    """
+    try:
+        p = Path(settings_path)
+        if not (p.suffix == '.py' and p.is_file()):
+            alt = Path(__file__).parent / p.name
+            if not alt.is_file():
+                return None
+            p = alt
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location('_project_settings_flags', str(p))
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        logger.warning(f"Could not read project flags from '{settings_path}': {e}")
+        return None
 
 
 def run_batch_mode(settings_path: str) -> bool:
@@ -801,7 +825,7 @@ def run_init_mode(project_path: str) -> int:
     3. Copy the package settings.py template to <project_path>/settings.py,
        updating PROJECT_ROOT to the given path (skipped if already exists).
     4. If simulations/ already contains participant sub-folders, compare them
-       against PLAYERS in the existing settings.py and warn about mismatches.
+       against SUBJECTS in the existing settings.py and warn about mismatches.
     """
     import shutil
     import re as _re
@@ -887,12 +911,12 @@ def run_init_mode(project_path: str) -> int:
             )
             settings_dest.write_text(content, encoding='utf-8')
             print(f"\n  [created]  {settings_dest}")
-            print(f"  ⚠  Edit PLAYERS and generic_model / markerset paths before running --batch.")
+            print(f"  ⚠  Edit SUBJECTS and generic_model / markerset paths before running --batch.")
         else:
             print(f"\n  [warn] Package settings.py template not found at {settings_src}.")
 
     # ---------------------------------------------------------------------- #
-    # 3. Check existing simulations against PLAYERS in settings.py
+    # 3. Check existing simulations against SUBJECTS in settings.py
     # ---------------------------------------------------------------------- #
     sims_dir = project / 'simulations'
     if sims_dir.exists():
@@ -901,44 +925,44 @@ def run_init_mode(project_path: str) -> int:
         )
 
         if sim_folders:
-            # Try to load PLAYERS from the settings file
-            players_in_settings: Optional[set] = None
+            # Try to load SUBJECTS from the settings file
+            subjects_in_settings: Optional[set] = None
             try:
                 import importlib.util as _ilu
                 _spec = _ilu.spec_from_file_location('_init_settings', str(settings_dest))
                 _mod  = _ilu.module_from_spec(_spec)
                 _spec.loader.exec_module(_mod)
-                if hasattr(_mod, 'PLAYERS'):
-                    players_in_settings = set(_mod.PLAYERS.keys())
+                if hasattr(_mod, 'SUBJECTS'):
+                    subjects_in_settings = set(_mod.SUBJECTS.keys())
             except Exception as _e:
-                print(f"\n  [warn] Could not parse PLAYERS from settings.py: {_e}")
+                print(f"\n  [warn] Could not parse SUBJECTS from settings.py: {_e}")
 
             print(f"\n  Simulation folders found  : {sim_folders}")
 
-            if players_in_settings is not None:
-                print(f"  PLAYERS in settings.py    : {sorted(players_in_settings)}")
-                missing_from_settings = set(sim_folders) - players_in_settings
-                missing_from_disk     = players_in_settings - set(sim_folders)
+            if subjects_in_settings is not None:
+                print(f"  SUBJECTS in settings.py    : {sorted(subjects_in_settings)}")
+                missing_from_settings = set(sim_folders) - subjects_in_settings
+                missing_from_disk     = subjects_in_settings - set(sim_folders)
 
                 if missing_from_settings:
-                    print(f"\n  ⚠  WARNING: these folders exist in simulations/ but are NOT in PLAYERS:")
+                    print(f"\n  ⚠  WARNING: these folders exist in simulations/ but are NOT in SUBJECTS:")
                     for m in sorted(missing_from_settings):
                         print(f"       {m}")
                 if missing_from_disk:
-                    print(f"\n  ⚠  WARNING: these PLAYERS entries have no folder in simulations/:")
+                    print(f"\n  ⚠  WARNING: these SUBJECTS entries have no folder in simulations/:")
                     for m in sorted(missing_from_disk):
                         print(f"       {m}")
                 if not missing_from_settings and not missing_from_disk:
-                    print(f"\n  ✓  simulations/ folders match PLAYERS in settings.py.")
+                    print(f"\n  ✓  simulations/ folders match SUBJECTS in settings.py.")
             else:
-                print(f"\n  [info] Add these folder names to PLAYERS in settings.py:")
+                print(f"\n  [info] Add these folder names to SUBJECTS in settings.py:")
                 for f in sim_folders:
-                    print(f"           '{f}': PlayerConfig(group=''),")
+                    print(f"           '{f}': SubjectConfig(group=''),")
 
     print(f"\n{'='*60}")
     print(f"Project ready. Next steps:")
     print(f"  1. Edit {settings_dest}")
-    print(f"     — set PLAYERS, generic_model, markerset")
+    print(f"     — set SUBJECTS, generic_model, markerset")
     print(f"  2. cd {project}")
     print(f"  3. python -m bioscout -b settings.py")
     print(f"{'='*60}\n")
@@ -955,18 +979,18 @@ def _is_video_batch_settings(settings_path: str) -> bool:
         return False
 
 
-def run_add_player_mode(project_path: str) -> int:
-    """Interactively add a player to players.json in *project_path*."""
-    from utils.player_registry import PlayerRegistry, prompt_add_player
+def run_add_subject_mode(project_path: str) -> int:
+    """Interactively add a subject to subjects.json in *project_path*."""
+    from utils.subject_registry import SubjectRegistry, prompt_add_subject
     root = Path(project_path).resolve()
     if not root.is_dir():
         print(f"[error] Project path does not exist: {root}")
         return 1
-    registry = PlayerRegistry(root)
+    registry = SubjectRegistry(root)
     existing = registry.all_ids()
     if existing:
-        print(f"  {len(existing)} player(s) already registered: {', '.join(existing)}")
-    pid = prompt_add_player(registry)
+        print(f"  {len(existing)} subject(s) already registered: {', '.join(existing)}")
+    pid = prompt_add_subject(registry)
     return 0 if pid else 1
 
 
@@ -1023,8 +1047,8 @@ def main() -> int:
     if args.install:
         from utils.dependency_installer import install_missing
         return 0 if install_missing(interactive=True) else 1
-    if args.add_player is not None:
-        return run_add_player_mode(args.add_player)
+    if args.add_subject is not None:
+        return run_add_subject_mode(args.add_subject)
     if args.shots:
         from bioscout.load_tracking.shot_analysis import analyze_video
         _model = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1042,26 +1066,4 @@ def main() -> int:
                       min_gap_s=args.min_gap, n_points=args.n_points,
                       hoop_side=args.hoop_side, yolo_model=args.yolo_model, hoop=_hoop,
                       model_path=_model if os.path.exists(_model) else None)
-        return 0
-    if args.load_report is not None or args.zepp_pull or args.strava_pull:
-        return run_load_report_mode(args.load_report)
-    if args.summary is not None:
-        from utils.summary import run_summary
-        ok = run_summary(settings_path=(args.summary or None),
-                         subject=args.subject,
-                         overall_only=args.overall,
-                         project_root=args.project,
-                         trial_path=args.trial)
-        return 0 if ok else 1
-    if args.init:
-        return run_init_mode(args.init)
-    if args.batch:
-        if _is_video_batch_settings(args.batch):
-            return 0 if run_video_batch_mode(args.batch) else 1
-        return 0 if run_batch_mode(args.batch) else 1
-    # GUI mode: explicit --gui flag, or no arguments at all
-    return run_gui_mode()
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+  

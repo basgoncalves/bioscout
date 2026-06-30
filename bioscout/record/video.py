@@ -365,7 +365,7 @@ class MovementTracker:
         self._frame_shape = None    # (h, w) set on first captured frame
 
         # MediaPipe Pose (Tasks API)
-        # Use 'full' model for better accuracy on small/distant players
+        # Use 'full' model for better accuracy on small/distant subjects
         _record_dir = Path(__file__).parent
         model_path = _record_dir / "pose_landmarker_full.task"
         if not model_path.exists():

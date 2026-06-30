@@ -268,7 +268,7 @@ def extract_poses(video_path: str, every: int = 1, vis_thresh: float = 0.0,
     poses = {frame_idx: {landmark_name: (x_px, y_px)}}. Uses MovementTracker's
     ``_pose_landmarker`` (Tasks API, num_poses=1). Landmarks are kept in
     full-frame pixel coords. ``roi_zoom`` re-detects on a crop around the last
-    detection to better catch a small/distant player (common in game footage).
+    detection to better catch a small/distant subject (common in game footage).
     """
     import cv2  # noqa
     import sys

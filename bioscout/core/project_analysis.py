@@ -1,23 +1,23 @@
 """
-project_analysis.py — project-level analysis across players and sessions.
+project_analysis.py — project-level analysis across subjects and sessions.
 
 Sits above the session/trial level:
 
     Project
-    ├── Player (P03, P05, …)        ← group membership, demographics
+    ├── Subject (P03, P05, …)        ← group membership, demographics
     │   ├── Session (P03/)          ← one calibration / model
     │   │   ├── Trial (sq_bw_01/)
     │   │   └── Trial (sq_nw_01/)
     │   └── Session (P03_follow_up/)
-    └── Player (P08, …)
+    └── Subject (P08, …)
 
 Key entry points
 ----------------
-load_player_results(player_id, result_type)
-    → {trial_path: DataFrame}  for all sessions of that player
+load_subject_results(subject_id, result_type)
+    → {trial_path: DataFrame}  for all sessions of that subject
 
 load_group_results(group, result_type)
-    → {player_id: {trial_path: DataFrame}}
+    → {subject_id: {trial_path: DataFrame}}
 
 compute_mean_curve(results)
     → (mean, sd) as DataFrames/arrays, time-normalised to 0–100 %
@@ -45,7 +45,7 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
-from settings import PLAYERS, SIMULATIONS_DIR, PlayerConfig
+from settings import SUBJECTS, SIMULATIONS_DIR, SubjectConfig
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +111,12 @@ def _get_trial_dirs(session_dir: Path, trials_to_skip: List[str] = None) -> List
     return out
 
 
-def _sessions_for_player(player_id: str) -> List[str]:
-    """Return session folder names for a player (from PLAYERS registry)."""
-    cfg: PlayerConfig = PLAYERS.get(player_id)
+def _sessions_for_subject(subject_id: str) -> List[str]:
+    """Return session folder names for a subject (from SUBJECTS registry)."""
+    cfg: SubjectConfig = SUBJECTS.get(subject_id)
     if cfg is None:
-        return [player_id]
-    return cfg.sessions if cfg.sessions else [player_id]
+        return [subject_id]
+    return cfg.sessions if cfg.sessions else [subject_id]
 
 
 # ---------------------------------------------------------------------------
@@ -150,19 +150,19 @@ def load_trial_result(
     return _read_mot_sto(path)
 
 
-def load_player_results(
-    player_id: str,
+def load_subject_results(
+    subject_id: str,
     result_type: str,
     trials_to_skip: List[str] = None,
     simulations_dir: Path = None,
 ) -> Dict[str, "pd.DataFrame"]:
-    """Load result files for *all sessions and trials* of one player.
+    """Load result files for *all sessions and trials* of one subject.
 
     Returns:
         {str(trial_dir): DataFrame}  — keyed by the absolute trial path string.
     """
     simulations_dir = simulations_dir or SIMULATIONS_DIR
-    sessions = _sessions_for_player(player_id)
+    sessions = _sessions_for_subject(subject_id)
     out: Dict[str, "pd.DataFrame"] = {}
     for sess in sessions:
         session_dir = Path(simulations_dir) / sess
@@ -181,15 +181,15 @@ def load_group_results(
     trials_to_skip: List[str] = None,
     simulations_dir: Path = None,
 ) -> Dict[str, Dict[str, "pd.DataFrame"]]:
-    """Load results for all players belonging to *group*.
+    """Load results for all subjects belonging to *group*.
 
     Returns:
-        {player_id: {trial_path: DataFrame}}
+        {subject_id: {trial_path: DataFrame}}
     """
-    group_players = [pid for pid, cfg in PLAYERS.items() if cfg.group == group]
+    group_subjects = [pid for pid, cfg in SUBJECTS.items() if cfg.group == group]
     return {
-        pid: load_player_results(pid, result_type, trials_to_skip, simulations_dir)
-        for pid in group_players
+        pid: load_subject_results(pid, result_type, trials_to_skip, simulations_dir)
+        for pid in group_subjects
     }
 
 
@@ -221,7 +221,7 @@ def compute_mean_curve(
     """Compute mean ± SD across a set of trials (time-normalised).
 
     Args:
-        results: {any_key: DataFrame} — e.g. output of load_player_results.
+        results: {any_key: DataFrame} — e.g. output of load_subject_results.
         n_points: number of time-normalised points (default 101 = 0–100 %).
 
     Returns:
@@ -252,7 +252,7 @@ def compare_groups(
     """Compare group mean ± SD for a single DOF / variable.
 
     Args:
-        groups: list of group labels (must match PlayerConfig.group).
+        groups: list of group labels (must match SubjectConfig.group).
         result_type: e.g. 'ik', 'so_forces'.
         dof: column name in the result file (e.g. 'hip_flexion_r').
         n_points: time-normalisation points.
@@ -265,10 +265,10 @@ def compare_groups(
     out = {}
     for group in groups:
         group_data = load_group_results(group, result_type, trials_to_skip, simulations_dir)
-        # Collect all trials across all players in this group
+        # Collect all trials across all subjects in this group
         all_curves = []
-        for pid, player_results in group_data.items():
-            for trial_path, df in player_results.items():
+        for pid, subject_results in group_data.items():
+            for trial_path, df in subject_results.items():
                 if dof not in df.columns:
                     continue
                 time_col = 'time' if 'time' in df.columns else df.columns[0]
@@ -287,33 +287,33 @@ def compare_groups(
     return out
 
 
-def compare_players(
-    player_ids: List[str],
+def compare_subjects(
+    subject_ids: List[str],
     result_type: str,
     dof: str,
     n_points: int = 101,
     trials_to_skip: List[str] = None,
     simulations_dir: Path = None,
 ) -> Dict[str, Dict]:
-    """Mean ± SD per-player for a single variable (for individual comparisons).
+    """Mean ± SD per-subject for a single variable (for individual comparisons).
 
     Returns:
-        {player_id: {"mean": array, "sd": array, "n": int, "group": str}}
+        {subject_id: {"mean": array, "sd": array, "n": int, "group": str}}
     """
     if not _HAS_NUMPY:
-        raise ImportError("numpy is required for compare_players")
+        raise ImportError("numpy is required for compare_subjects")
     out = {}
-    for pid in player_ids:
-        player_results = load_player_results(pid, result_type, trials_to_skip, simulations_dir)
+    for pid in subject_ids:
+        subject_results = load_subject_results(pid, result_type, trials_to_skip, simulations_dir)
         curves = []
-        for df in player_results.values():
+        for df in subject_results.values():
             if dof not in df.columns:
                 continue
             time_col = 'time' if 'time' in df.columns else df.columns[0]
             sub = df[[time_col, dof]].copy()
             curve = time_normalise(sub, n_points)[:, 0]
             curves.append(curve)
-        group = PLAYERS.get(pid, PlayerConfig()).group
+        group = SUBJECTS.get(pid, SubjectConfig()).group
         if not curves:
             out[pid] = {"mean": None, "sd": None, "n": 0, "group": group}
         else:
@@ -327,11 +327,11 @@ def compare_players(
     return out
 
 
-def list_all_players() -> Dict[str, str]:
-    """Return {player_id: group} for all registered players."""
-    return {pid: cfg.group for pid, cfg in PLAYERS.items()}
+def list_all_subjects() -> Dict[str, str]:
+    """Return {subject_id: group} for all registered subjects."""
+    return {pid: cfg.group for pid, cfg in SUBJECTS.items()}
 
 
 def list_groups() -> List[str]:
-    """Return unique group labels across all registered players."""
-    return sorted(set(cfg.group for cfg in PLAYERS.values() if cfg.group))
+    """Return unique group labels across all registered subjects."""
+    return sorted(set(cfg.group for cfg in SUBJECTS.values() if cfg.group))

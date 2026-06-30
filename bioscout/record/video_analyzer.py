@@ -42,8 +42,8 @@ def main():
                         help="Start time in seconds (trim video before this)")
     parser.add_argument("--end-time", type=float, default=None,
                         help="End time in seconds (trim video after this)")
-    parser.add_argument("--player-rect", type=str, default=None,
-                        help="Bounding box for player: x1,y1,x2,y2 (video pixels)")
+    parser.add_argument("--subject-rect", type=str, default=None,
+                        help="Bounding box for subject: x1,y1,x2,y2 (video pixels)")
     parser.add_argument("--frame-anchors", type=str, default=None,
                         help="Path to JSON file mapping frame_idx -> [x1,y1,x2,y2] "
                              "hard-reset anchors for adaptive tracking")
@@ -105,7 +105,7 @@ def main():
 
         print(f"Video info: {total_frames} frames @ {fps:.1f} fps (~{duration:.1f}s)")
 
-        # Parse time trim / player-point args
+        # Parse time trim / subject-point args
         start_frame = int(args.start_time * fps) if args.start_time is not None else 0
         end_frame   = int(args.end_time   * fps) if args.end_time   is not None else total_frames
         if args.start_time is not None or args.end_time is not None:
@@ -137,14 +137,14 @@ def main():
             except Exception as e:
                 print(f"WARNING: Could not load pose data: {e}")
 
-        player_rect = None
-        if args.player_rect:
+        subject_rect = None
+        if args.subject_rect:
             try:
-                x1, y1, x2, y2 = map(int, args.player_rect.split(','))
-                player_rect = (min(x1,x2), min(y1,y2), max(x1,x2), max(y1,y2))
-                print(f"Player region: {player_rect}")
+                x1, y1, x2, y2 = map(int, args.subject_rect.split(','))
+                subject_rect = (min(x1,x2), min(y1,y2), max(x1,x2), max(y1,y2))
+                print(f"Subject region: {subject_rect}")
             except ValueError:
-                print(f"WARNING: Invalid --player-rect value '{args.player_rect}', ignoring.")
+                print(f"WARNING: Invalid --subject-rect value '{args.subject_rect}', ignoring.")
 
         # Export trimmed video clip (only if a time trim was requested)
         trimmed_video_path = None
@@ -189,30 +189,30 @@ def main():
         pose_count = 0
         ball_count = 0
 
-        # Adaptive ROI tracking: starts from player_rect (or a sensible default),
-        # then follows the player by updating the search window each frame.
+        # Adaptive ROI tracking: starts from subject_rect (or a sensible default),
+        # then follows the subject by updating the search window each frame.
         _PAD_FRAC  = 0.6   # padding around detected bbox (fraction of bbox size)
         _PAD_MIN   = 60    # minimum padding in pixels
         _EXPAND_ON_MISS = 0.25  # grow search window by this fraction if no pose found
         _MAX_MISSES = 5    # after this many consecutive misses, reset to default crop
         consecutive_misses = 0
-        last_cx: float | None = None   # last detected player centroid (full-frame px)
+        last_cx: float | None = None   # last detected subject centroid (full-frame px)
         last_cy: float | None = None
 
-        # When no player rect is drawn, default to the top 80 % of the frame.
+        # When no subject rect is drawn, default to the top 80 % of the frame.
         # In broadcast basketball footage the court occupies the upper portion;
         # the bottom strip is typically close-camera crowd that would otherwise
-        # score higher confidence than the distant player on the court.
-        if player_rect:
-            search_rect = player_rect
-            _default_rect = player_rect
-            print(f"Player rect provided — adaptive tracking from {player_rect}")
+        # score higher confidence than the distant subject on the court.
+        if subject_rect:
+            search_rect = subject_rect
+            _default_rect = subject_rect
+            print(f"Subject rect provided — adaptive tracking from {subject_rect}")
         else:
             # Will be filled from actual frame dimensions on first frame
             search_rect = None
             _default_rect = None   # set once on first frame
-            print("No player rect drawn — defaulting to top 80% of frame. "
-                  "For best results, draw a rect around the player before running.")
+            print("No subject rect drawn — defaulting to top 80% of frame. "
+                  "For best results, draw a rect around the subject before running.")
 
         if use_png_fallback:
             # Read from PNG frames instead of video
@@ -267,14 +267,14 @@ def main():
                                        max(ax1,ax2), max(ay1,ay2))
                         consecutive_misses = 0
                         # Reset temporal centroid so first detection after anchor
-                        # uses crop centre (not stale centroid from wrong player)
+                        # uses crop centre (not stale centroid from wrong subject)
                         last_cx = (ax1 + ax2) / 2.0
                         last_cy = (ay1 + ay2) / 2.0
                         print(f"  [anchor] Frame {frame_idx}: ROI reset to {search_rect}")
 
                     # On the very first detection frame, build the default crop
-                    # (top 80 % of frame) if no player_rect was supplied.
-                    if not player_rect and search_rect is None:
+                    # (top 80 % of frame) if no subject_rect was supplied.
+                    if not subject_rect and search_rect is None:
                         _default_rect = (0, 0, w_full, int(h_full * 0.80))
                         search_rect = _default_rect
 
@@ -352,8 +352,8 @@ def main():
                             consecutive_misses += 1
                             if consecutive_misses >= _MAX_MISSES:
                                 # Reset to default crop after too many misses
-                                search_rect = player_rect if player_rect else _default_rect
-                                print(f"  [track] Lost player at frame {frame_idx}, "
+                                search_rect = subject_rect if subject_rect else _default_rect
+                                print(f"  [track] Lost subject at frame {frame_idx}, "
                                       f"resetting search window")
                             elif search_rect:
                                 rx1, ry1, rx2, ry2 = search_rect

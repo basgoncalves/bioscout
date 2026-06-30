@@ -1,49 +1,36 @@
 __version__ = "1.2.9"
 
-# The analysis object model (Project / Subject / Session / Trial) now lives in
-# bioscout.utils.analysis, next to Analyse. It's exposed here lazily so that a
-# bare `import bioscout` stays light — the heavy `utils` module (OpenSim/CEINMS)
-# is only imported the first time one of these names is actually used.
-
 from typing import TYPE_CHECKING
-
-# For Pylance/Pyright only: import the real classes so editors resolve
-# `bioscout.Project`, `bioscout.Subject`, … to their true types (full
-# autocomplete). At runtime TYPE_CHECKING is False, so this costs nothing and
-# the lazy __getattr__ below does the actual (deferred) loading.
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
     from .utils.analysis import (
         Project, Subject, Session, init_project,
         build_model_config, discover_subjects,
         check_settings_version, migrate_settings,
     )
 
-_LAZY = {
+# Public API. Everything except `test` lives in bioscout.utils and is loaded
+# lazily by __getattr__ below, so a bare `import bioscout` stays light — it does
+# NOT import OpenSim/CEINMS until you actually use one of these names.
+__all__ = (
+    "__version__", "test",
     "Project", "Subject", "Session", "init_project",
     "build_model_config", "discover_subjects",
     "check_settings_version", "migrate_settings",
-}
-
-__all__ = ["__version__", "test", *sorted(_LAZY)]
+    "summarize_results",
+)
 
 
 def test(verbosity=2):
-    """Run the bioscout self-test suite. Returns True if everything passed.
+    """Run the bioscout self-test suite.
 
-    Usage::
-
-        python -c "import bioscout; bioscout.test()"
+    ``python -c "import bioscout; bioscout.test()"``
     """
     from . import tests
     return tests.run(verbosity=verbosity)
 
 
-def __getattr__(name):                      # PEP 562 module-level lazy attrs
-    if name in _LAZY:
-        from . import utils                 # pulls in the analysis model
+def __getattr__(name):          # PEP 562: lazy, light `import bioscout`
+    if name in __all__:
+        from . import utils
         return getattr(utils, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__():
-    return sorted(set(list(globals()) + list(_LAZY)))

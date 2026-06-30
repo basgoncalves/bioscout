@@ -1,3 +1,11 @@
+"""
+bioscout.utils.ceinms — CEINMS (Calibrated EMG-Informed Neuromusculoskeletal
+Modelling) helpers: build the excitation generator, subject/calibration/execution
+XMLs and input data, run the CEINMS calibration + execution binaries, and plot
+the results. Driven by the project settings (EMG->muscle mapping, muscle groups,
+calibration parameters) and the per-trial Analyse objects in
+:mod:`bioscout.utils.analysis`.
+"""
 import os
 import sys
 import shutil
@@ -22,12 +30,30 @@ sys.path.insert(0, _utils_dir)
 
 import utils
 import openSim
-import settings
 
-__version__ = '0.1.0'
+# `settings` is resolved LIVE from sys.modules at attribute-access time rather
+# than bound once at import time. Project() loads the project's settings.py and
+# registers it as sys.modules["settings"]; but ceinms.py is imported (via
+# utils/__init__) BEFORE Project() runs, so a plain `import settings` here would
+# freeze onto whatever stale settings.py happened to be on sys.path first
+# (e.g. the repo-root template), and never see the project's mapping. The proxy
+# below always forwards to the currently-registered project settings module.
+class _LiveSettings:
+    def __getattr__(self, name):
+        mod = sys.modules.get("settings")
+        if mod is None:
+            import importlib
+            mod = importlib.import_module("settings")
+        return getattr(mod, name)
 
-MODEL_TYPE = 'Lernagopal' # 'Lernagopal', 'GPK', 'Catelli', 'Uhlrich'
-EMG_MAPPING = 'Powerlifting_s1' # 'session1', 'session2', 'running_fai'
+
+settings = _LiveSettings()
+
+# Version is single-sourced from the package so it always matches bioscout.
+try:
+    from bioscout import __version__
+except Exception:
+    __version__ = "1.2.20"
 
 
 def upWorkingDirectory():
@@ -219,7 +245,7 @@ def create_excitation_generator(osim_model_path=None, emg_path=None, save_path=N
 
     # Add mapping element
     mapping = ET.SubElement(root, 'mapping')
-    mapping_dict = settings.EMG_muscle_mapping
+    mapping_dict = settings.BatchSettings.emg_muscle_mapping
     
     for muscle in muscleList:
         used = False
@@ -306,7 +332,7 @@ def create_calibrationCfg(osimModelPath=None, inputPaths: list = [], outputPath:
     # ------- muscleGroups (BASED ON SETTINGS PLEASE EDIT THIS FOR DIFFERENT MUSCLE GROUPS) ------
     muscleGroups = ET.SubElement(parametersToCalibrate, "muscleGroups")
 
-    for group, muscles in settings.Muscle_Groups.items():
+    for group, muscles in settings.BatchSettings.MUSCLE_GROUPS.items():
         muscleGroup = ET.SubElement(muscleGroups, "muscles")
         muscleGroup.text = " ".join(muscles)
 
@@ -555,6 +581,7 @@ def ceinms_terminal(executable_path=None, setupXML_path=None):
             path_dirs.append(_candidate)
     path_str = ';'.join(path_dirs)
     print(f"[Debug] PATH for CEINMS.exe: {path_str}")
+    exit_code = None
     try:
         # Dump setup XML so we can see exactly what CEINMS.exe receives
         print(f"[Debug] Setup XML ({setupXML_path}):")
@@ -611,27 +638,20 @@ def ceinms_terminal(executable_path=None, setupXML_path=None):
                     log_file.flush()
 
             process.wait()
-        print(f"CEINMS process finished with exit code: {process.returncode}")
+        exit_code = process.returncode
+        print(f"CEINMS process finished with exit code: {exit_code}")
 
-        # Look for out.log in exe dir and trial dir after run
-        for _log_candidate in [
-            os.path.join(exe_dir, 'out.log'),
-            os.path.join(parentDir, 'out.log'),
-            os.path.join(exe_dir, 'err.log'),
-            os.path.join(parentDir, 'err.log'),
-        ]:
-            if os.path.exists(_log_candidate):
-                try:
-                    _mtime = os.path.getmtime(_log_candidate)
-                    _run_start = os.path.getmtime(log_file_path) if os.path.exists(log_file_path) else 0
-                    _age_tag = "(updated this run)" if _mtime >= _run_start - 5 else "(pre-existing)"
-                    print(f"[Debug] Found log: {_log_candidate} {_age_tag}")
-                    with open(_log_candidate, 'r', encoding='utf-8', errors='replace') as _lf:
-                        _content = _lf.read()
-                    print(f"--- {_log_candidate} (last 3000 chars) ---")
-                    print(_content[-3000:])
-                except Exception as _e:
-                    print(f"  (could not read {_log_candidate}: {_e})")
+        # Print the actual calibration log this run produced (out.txt). This is the
+        # streamed CEINMS output we captured above; do NOT read the exe-dir
+        # out.log/err.log, which are stale artifacts from unrelated past runs.
+        if os.path.exists(log_file_path):
+            try:
+                with open(log_file_path, 'r', encoding='utf-8', errors='replace') as _lf:
+                    _content = _lf.read()
+                print(f"--- CEINMS log: {log_file_path} (last 3000 chars) ---")
+                print(_content[-3000:])
+            except Exception as _e:
+                print(f"  (could not read {log_file_path}: {_e})")
 
         # List trial dir after run
         print(f"[Debug] Trial dir contents after run ({parentDir}):")
@@ -665,9 +685,11 @@ def ceinms_terminal(executable_path=None, setupXML_path=None):
             except Exception:
                 pass
             return False
-        time_updated = os.path.getmtime(calibratedModelPath)
-        if time_updated < os.path.getmtime(log_file_path):
-            print("Calibrated model exists but predates this run — calibration may have failed.")
+        # Success is determined by the process exit code, not by file mtimes:
+        # out.txt is written/flushed after subjectCalibrated.xml, so an mtime
+        # comparison gives a spurious "predates this run" failure on good runs.
+        if exit_code not in (0, None):
+            print(f"CEINMS exited with code {exit_code} — calibration may have failed.")
             return False
         return True
     except Exception as e:
@@ -1512,7 +1534,7 @@ def plot_optimisation_results(optimisationOutputDir=None):
     # find all files ending with _optimisationResults.sto
     result_files = os.listdir(optimisationOutputDir)
     result_files = [os.path.join(optimisationOutputDir, f) for f in result_files if f.endswith('.sto')]
-    muscleGroups = settings.Muscle_Groups
+    muscleGroups = settings.BatchSettings.MUSCLE_GROUPS
     for result_file in result_files:
         data = utils.load_any_data_file(result_file)
         

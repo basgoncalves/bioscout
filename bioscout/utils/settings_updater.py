@@ -1,7 +1,7 @@
 """Migrate a project's settings.py to the current schema version.
 
 Reads the project's existing settings.py, extracts user-customised values
-(PROJECT_ROOT, PLAYERS, EMG mappings, DOF lists, model paths, …) and injects
+(PROJECT_ROOT, SUBJECTS, EMG mappings, DOF lists, model paths, …) and injects
 them into a fresh copy of the source (bioscout/settings.py) template, so the
 project gets all new fields while keeping every value the user had set.
 
@@ -149,7 +149,7 @@ _PRESERVE: list[tuple[Optional[str], str, str]] = [
     # Top-level
     (None, "PROJECT_ROOT",     "Project root path"),
     (None, "PROJECT_NAME",     "Project name"),
-    (None, "PLAYERS",          "Player ID list"),
+    (None, "SUBJECTS",          "Subject ID list"),
     # Analysis / comparison config
     (None, "SESSION",             "Session name"),
     (None, "session_list",        "Session list"),

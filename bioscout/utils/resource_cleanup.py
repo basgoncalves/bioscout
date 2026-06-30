@@ -15,7 +15,7 @@ RESOURCE_HEAVY_APPS = {
 
     # Media
     'spotify.exe': 'Spotify',
-    'vlc.exe': 'VLC Media Player',
+    'vlc.exe': 'VLC Media Subject',
     'iTunes.exe': 'iTunes',
     'discord.exe': 'Discord',
 
@@ -32,7 +32,7 @@ RESOURCE_HEAVY_APPS = {
     'skype.exe': 'Skype',
     'docker.exe': 'Docker',
     'VirtualBox.exe': 'VirtualBox',
-    'vmplayer.exe': 'VMware Player',
+    'vmsubject.exe': 'VMware Subject',
 }
 
 

@@ -1,11 +1,11 @@
-"""Training Tracking tab — per-player load & fatigue dashboard.
+"""Training Tracking tab — per-subject load & fatigue dashboard.
 
-Player → session tree, import from files / Zepp / Strava (with a per-player
-credentials editor stored in players.json), an embedded dashboard, and PDF+CSV
-export. Built on the bioscout.load_tracking engine + utils.player_registry.
+Subject → session tree, import from files / Zepp / Strava (with a per-subject
+credentials editor stored in subjects.json), an embedded dashboard, and PDF+CSV
+export. Built on the bioscout.load_tracking engine + utils.subject_registry.
 
-players.json lives in the project's ``Models/`` folder (copied there by --init);
-raw per-session traces are cached under ``Models/<player_id>/tracking/``.
+subjects.json lives in the project's ``Models/`` folder (copied there by --init);
+raw per-session traces are cached under ``Models/<subject_id>/tracking/``.
 """
 
 import os
@@ -25,11 +25,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from config.config_manager import ConfigManager
 from utils.logger import logger
-from utils.player_registry import PlayerRegistry
+from utils.subject_registry import SubjectRegistry
 
 
 def _resolve_project_root() -> Path:
-    """Project root that holds the Models/ folder with players.json."""
+    """Project root that holds the Models/ folder with subjects.json."""
     try:
         import settings as _s
         pr = getattr(_s, "PROJECT_ROOT", None)
@@ -57,17 +57,17 @@ class TrainingTrackingTab(ctk.CTkFrame):
         self.project_root = _resolve_project_root()
         self.models_dir = _models_dir(self.project_root)
         try:
-            self.registry = PlayerRegistry(self.models_dir)
+            self.registry = SubjectRegistry(self.models_dir)
         except Exception as e:   # noqa: BLE001
-            logger.error(f"players.json load failed: {e}")
-            self.registry = PlayerRegistry(self.models_dir)  # fresh empty
+            logger.error(f"subjects.json load failed: {e}")
+            self.registry = SubjectRegistry(self.models_dir)  # fresh empty
 
         self._store = None          # lazily created TrackingStore
         self._tracker = None        # last computed LoadTracker
         self._canvases = {}         # panel_name -> (fig, canvas)
 
         self._create_widgets()
-        self._refresh_players()
+        self._refresh_subjects()
 
     # ------------------------------------------------------------------ store
     def _get_store(self):
@@ -77,8 +77,8 @@ class TrainingTrackingTab(ctk.CTkFrame):
         return self._store
 
     @property
-    def player(self):
-        return self.player_var.get() or None
+    def subject(self):
+        return self.subject_var.get() or None
 
     # ------------------------------------------------------------------ UI
     def _create_widgets(self):
@@ -92,13 +92,13 @@ class TrainingTrackingTab(ctk.CTkFrame):
         ctrl = ctk.CTkScrollableFrame(self, width=300)
         ctrl.grid(row=1, column=0, padx=(20, 10), pady=10, sticky="nsw")
 
-        ctk.CTkLabel(ctrl, text="Player", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        self.player_var = ctk.StringVar(value="")
-        self.player_menu = ctk.CTkOptionMenu(ctrl, variable=self.player_var, values=[""],
-                                             command=lambda _v: self._on_player_change())
-        self.player_menu.pack(fill="x", pady=2)
+        ctk.CTkLabel(ctrl, text="Subject", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        self.subject_var = ctk.StringVar(value="")
+        self.subject_menu = ctk.CTkOptionMenu(ctrl, variable=self.subject_var, values=[""],
+                                             command=lambda _v: self._on_subject_change())
+        self.subject_menu.pack(fill="x", pady=2)
         prow = ctk.CTkFrame(ctrl, fg_color="transparent"); prow.pack(fill="x", pady=2)
-        ctk.CTkButton(prow, text="Add player…", width=130, command=self._add_player_dialog
+        ctk.CTkButton(prow, text="Add subject…", width=130, command=self._add_subject_dialog
                       ).pack(side="left", padx=(0, 4))
         ctk.CTkButton(prow, text="Credentials…", width=130, fg_color="#1971c2",
                       hover_color="#155fa0", command=self._credentials_dialog
@@ -144,7 +144,7 @@ class TrainingTrackingTab(ctk.CTkFrame):
         right.grid_rowconfigure(1, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        self.kpi_lbl = ctk.CTkLabel(right, text="Select or add a player to begin.",
+        self.kpi_lbl = ctk.CTkLabel(right, text="Select or add a subject to begin.",
                                     font=("Segoe UI", 11), justify="left", anchor="w")
         self.kpi_lbl.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
 
@@ -161,21 +161,21 @@ class TrainingTrackingTab(ctk.CTkFrame):
             canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
             self._canvases[name] = (fig, canvas)
 
-    # ------------------------------------------------------------------ players
-    def _refresh_players(self):
+    # ------------------------------------------------------------------ subjects
+    def _refresh_subjects(self):
         ids = self.registry.all_ids()
-        self.player_menu.configure(values=ids or [""])
-        if ids and not self.player_var.get():
-            self.player_var.set(ids[0])
-        self._on_player_change()
+        self.subject_menu.configure(values=ids or [""])
+        if ids and not self.subject_var.get():
+            self.subject_var.set(ids[0])
+        self._on_subject_change()
 
-    def _on_player_change(self):
+    def _on_subject_change(self):
         self._refresh_session_table()
         self._recompute_and_draw()
 
-    def _add_player_dialog(self):
+    def _add_subject_dialog(self):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Add player"); dlg.geometry("400x540")
+        dlg.title("Add subject"); dlg.geometry("400x540")
         dlg.transient(self); dlg.grab_set()
         dlg.grid_rowconfigure(0, weight=1); dlg.grid_columnconfigure(0, weight=1)
 
@@ -195,7 +195,7 @@ class TrainingTrackingTab(ctk.CTkFrame):
             fields[key] = var; entries[key] = ent
             return var, ent
 
-        id_var, id_ent = add_field("Player ID (unique)", "id")
+        id_var, id_ent = add_field("Subject ID (unique)", "id")
         add_field("Name", "name")
         age_var, _ = add_field("Age", "age")
         add_field("Sex (M/F)", "sex", "M")
@@ -259,14 +259,14 @@ class TrainingTrackingTab(ctk.CTkFrame):
             except Exception as e:   # noqa: BLE001
                 messagebox.showerror("Error", str(e)); return
             dlg.destroy()
-            self.player_var.set(pid); self._refresh_players()
+            self.subject_var.set(pid); self._refresh_subjects()
 
         add_btn.configure(command=save)
 
     def _credentials_dialog(self):
-        pid = self.player
+        pid = self.subject
         if not pid:
-            messagebox.showinfo("No player", "Select or add a player first."); return
+            messagebox.showinfo("No subject", "Select or add a subject first."); return
         creds = self.registry.get_credentials(pid)
         z = creds.get("zepp", {}); s = creds.get("strava", {})
         dlg = ctk.CTkToplevel(self)
@@ -305,19 +305,19 @@ class TrainingTrackingTab(ctk.CTkFrame):
 
     # ------------------------------------------------------------------ import
     def _import_files(self):
-        if not self._require_player():
+        if not self._require_subject():
             return
         files = filedialog.askopenfilenames(
             title="Select workout exports",
             filetypes=[("Workout files", "*.fit *.tcx *.gpx *.csv"), ("All", "*.*")])
         if not files:
             return
-        self._run_bg(lambda: self._get_store().import_files(self.player, list(files)),
+        self._run_bg(lambda: self._get_store().import_files(self.subject, list(files)),
                      "Importing files…")
 
     def _import_cloud(self, source):
-        pid = self.player
-        if not self._require_player():
+        pid = self.subject
+        if not self._require_subject():
             return
         creds = self.registry.get_credentials(pid)
         if source == "zepp":
@@ -355,7 +355,7 @@ class TrainingTrackingTab(ctk.CTkFrame):
     # ------------------------------------------------------------------ sessions
     def _refresh_session_table(self):
         self.tree.delete(*self.tree.get_children())
-        pid = self.player
+        pid = self.subject
         if not pid:
             return
         for s in self.registry.get_sessions(pid):
@@ -368,10 +368,10 @@ class TrainingTrackingTab(ctk.CTkFrame):
 
     # ------------------------------------------------------------------ compute + draw
     def _recompute_and_draw(self):
-        pid = self.player
+        pid = self.subject
         self._tracker = None
         if not pid:
-            self.kpi_lbl.configure(text="Select or add a player to begin.")
+            self.kpi_lbl.configure(text="Select or add a subject to begin.")
             self._clear_all_panels(); return
         try:
             from load_tracking import LoadTracker
@@ -469,7 +469,7 @@ class TrainingTrackingTab(ctk.CTkFrame):
     def _draw_session_hr(self):
         fig, canvas = self._canvases["Session HR"]
         fig.clear(); ax = fig.add_subplot(111); self._style_ax(ax)
-        pid = self.player
+        pid = self.subject
         sel = self.tree.selection()
         if pid and sel:
             s = self._get_store().load_raw(pid, sel[0])
@@ -493,9 +493,9 @@ class TrainingTrackingTab(ctk.CTkFrame):
 
     # ------------------------------------------------------------------ export
     def _export(self):
-        pid = self.player
-        if not self._require_player() or self._tracker is None:
-            messagebox.showinfo("Nothing to export", "Import sessions for a player first.")
+        pid = self.subject
+        if not self._require_subject() or self._tracker is None:
+            messagebox.showinfo("Nothing to export", "Import sessions for a subject first.")
             return
         out_dir = self.models_dir / pid
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -512,9 +512,9 @@ class TrainingTrackingTab(ctk.CTkFrame):
             self.status_callback(f"Tracking report saved for {pid}")
 
     # ------------------------------------------------------------------ misc
-    def _require_player(self) -> bool:
-        if not self.player:
-            messagebox.showinfo("No player", "Select or add a player first."); return False
+    def _require_subject(self) -> bool:
+        if not self.subject:
+            messagebox.showinfo("No subject", "Select or add a subject first."); return False
         return True
 
     def _set_status(self, text):

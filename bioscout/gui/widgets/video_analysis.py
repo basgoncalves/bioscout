@@ -103,17 +103,17 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.config_manager = config_manager
         self.update_status = update_status_callback or (lambda x: None)
 
-        # Player profiles (anthropometry, models, calibration, detection settings).
-        # Backed by the project's players.json — the SAME file the
-        # `python -m bioscout --add_player` CLI writes — so the GUI dropdown and
+        # Subject profiles (anthropometry, models, calibration, detection settings).
+        # Backed by the project's subjects.json — the SAME file the
+        # `python -m bioscout --add_subject` CLI writes — so the GUI dropdown and
         # the CLI stay in sync. Re-rooted to the active project via
         # set_project_dir() when a project is loaded.
         try:
-            from utils.player_profile import ProjectPlayerStore
-            self._player_store = ProjectPlayerStore(Path.cwd())
+            from utils.subject_profile import ProjectSubjectStore
+            self._subject_store = ProjectSubjectStore(Path.cwd())
         except Exception as _e:
-            logger.warning(f"VideoAnalysisTab: player profiles unavailable: {_e}")
-            self._player_store = None
+            logger.warning(f"VideoAnalysisTab: subject profiles unavailable: {_e}")
+            self._subject_store = None
         self._active_profile = None
         # Active project root (set by set_project_dir); exports default here.
         self._project_dir: Optional[Path] = Path.cwd()
@@ -147,8 +147,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self._tl_drag_in0: float = 0.0
         self._tl_drag_out0: float = 0.0
 
-        # Player bounding rect in VIDEO pixel coords: (x1, y1, x2, y2)
-        self._player_rect: Optional[Tuple[int, int, int, int]] = None
+        # Subject bounding rect in VIDEO pixel coords: (x1, y1, x2, y2)
+        self._subject_rect: Optional[Tuple[int, int, int, int]] = None
 
         # Per-frame rect anchors: {frame_idx: (x1,y1,x2,y2)} in VIDEO pixels.
         self._frame_rects: Dict[int, Tuple[int, int, int, int]] = {}
@@ -172,7 +172,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self._custom_connections: list = []
         self._active_landmark: Optional[str] = None
 
-        # Interaction mode: None | 'player' | 'move_rect' | 'resize_rect' | 'drag_point' | 'calibrate'
+        # Interaction mode: None | 'subject' | 'move_rect' | 'resize_rect' | 'drag_point' | 'calibrate'
         self._interact_mode: Optional[str] = None
         self._drag_start: Optional[Tuple[int, int]] = None
         self._move_rect_canvas: Optional[Tuple[int, int, int, int]] = None
@@ -257,40 +257,40 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.end_entry   = ctk.CTkEntry(scroll)   # not packed
         self.trim_status = ctk.CTkLabel(scroll, text="")  # not packed
 
-        # --- Player Selection + Options ---
-        self._section(scroll, "\U0001f3af Player & Detection")
+        # --- Subject Selection + Options ---
+        self._section(scroll, "\U0001f3af Subject & Detection")
 
         sel_frame = ctk.CTkFrame(scroll, fg_color="#2d2d2d", corner_radius=8)
         sel_frame.pack(fill="x", padx=10, pady=(0, 4))
 
         ctk.CTkLabel(sel_frame,
-                     text="Draw a box around the player, then click Auto-Track.",
+                     text="Draw a box around the subject, then click Auto-Track.",
                      font=("Segoe UI", 10), text_color="#ffaa44",
                      wraplength=410, justify="left").pack(
             anchor="w", padx=10, pady=(4, 4))
 
-        # --- Player profile selector ---------------------------------------
-        ctk.CTkLabel(sel_frame, text="Player profile:",
+        # --- Subject profile selector ---------------------------------------
+        ctk.CTkLabel(sel_frame, text="Subject profile:",
                      font=("Segoe UI", 10)).pack(anchor="w", padx=10, pady=(0, 1))
         prof_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
         prof_row.pack(fill="x", padx=10, pady=(0, 4))
-        self._NO_PLAYER = "— none —"
-        self.player_var = ctk.StringVar(value=self._NO_PLAYER)
-        self.player_menu = ctk.CTkOptionMenu(
-            prof_row, variable=self.player_var, values=[self._NO_PLAYER],
-            width=170, command=self._on_player_selected)
-        self.player_menu.pack(side="left", fill="x", expand=True)
+        self._NO_SUBJECT = "— none —"
+        self.subject_var = ctk.StringVar(value=self._NO_SUBJECT)
+        self.subject_menu = ctk.CTkOptionMenu(
+            prof_row, variable=self.subject_var, values=[self._NO_SUBJECT],
+            width=170, command=self._on_subject_selected)
+        self.subject_menu.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(prof_row, text="New…", width=48, height=26,
                       fg_color="#335533", hover_color="#446644",
-                      command=self._new_player_profile).pack(side="left", padx=(4, 0))
+                      command=self._new_subject_profile).pack(side="left", padx=(4, 0))
         ctk.CTkButton(prof_row, text="Edit…", width=48, height=26,
                       fg_color="#334455", hover_color="#445566",
-                      command=self._edit_player_profile).pack(side="left", padx=(4, 0))
-        self.player_info_label = ctk.CTkLabel(
+                      command=self._edit_subject_profile).pack(side="left", padx=(4, 0))
+        self.subject_info_label = ctk.CTkLabel(
             sel_frame, text="", font=("Segoe UI", 9),
             text_color="#88aacc", wraplength=410, justify="left")
-        self.player_info_label.pack(anchor="w", padx=10, pady=(0, 4))
-        self._refresh_player_menu()
+        self.subject_info_label.pack(anchor="w", padx=10, pady=(0, 4))
+        self._refresh_subject_menu()
 
         # --- Detection settings (shown BEFORE the action buttons so the user
         #     reviews them before running anything) ---
@@ -326,12 +326,12 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 text="off" if int(v) == 0 else str(int(v)))
         ).pack(side="left", fill="x", expand=True)
 
-        self.player_btn = ctk.CTkButton(
-            sel_frame, text="➕ Draw Player Box",
+        self.subject_btn = ctk.CTkButton(
+            sel_frame, text="➕ Draw Subject Box",
             fg_color="#555555", hover_color="#666666",
-            height=26, command=self._toggle_player_mode
+            height=26, command=self._toggle_subject_mode
         )
-        self.player_btn.pack(fill="x", padx=10, pady=(0, 3))
+        self.subject_btn.pack(fill="x", padx=10, pady=(0, 3))
 
         self.track_btn = ctk.CTkButton(
             sel_frame, text="\U0001f504 Auto-Track",
@@ -355,8 +355,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.clear_sel_btn.pack(fill="x", padx=10, pady=(0, 4))
 
         # Hover tooltips
-        _Tooltip(self.player_btn,
-                 "Click then drag on the video to draw a box around the player.")
+        _Tooltip(self.subject_btn,
+                 "Click then drag on the video to draw a box around the subject.")
         _Tooltip(self.track_btn,
                  "Auto-Track: propagates the ROI from the current frame to the end "
                  "using the CSRT tracker. Locked frames are not changed.")
@@ -364,7 +364,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                  "Estimate Poses: runs MediaPipe pose estimation on the current frame "
                  "only, seeding from the previous frame's pose if available.")
         _Tooltip(self.clear_sel_btn,
-                 "Clear Selection: removes the player box and pose for the current frame only. Other frames are unchanged.")
+                 "Clear Selection: removes the subject box and pose for the current frame only. Other frames are unchanged.")
 
         self.manual_edit_btn = ctk.CTkButton(
             sel_frame, text="\u270f Manual Edit",
@@ -375,7 +375,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         _Tooltip(self.manual_edit_btn,
                  "Manual Edit: select a landmark from the right panel, then click on the video to place it.")
 
-        # ROI resize buttons (visible once a player is selected)
+        # ROI resize buttons (visible once a subject is selected)
         roi_resize_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
         roi_resize_row.pack(fill="x", padx=10, pady=(0, 4))
         for col in range(4):
@@ -403,7 +403,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.track_progress_label.pack(anchor="w", padx=10, pady=(0, 2))
 
         self.sel_status_label = ctk.CTkLabel(
-            sel_frame, text="⚠ No player selected — draw a box for best results",
+            sel_frame, text="⚠ No subject selected — draw a box for best results",
             font=("Segoe UI", 9), text_color="#ffaa44",
             wraplength=410, justify="left"
         )
@@ -742,10 +742,10 @@ class VideoAnalysisTab(ctk.CTkFrame):
             )
 
     # ------------------------------------------------------------------
-    # Single-player colour
+    # Single-subject colour
     # ------------------------------------------------------------------
 
-    _PLAYER_COLOUR = "#00cccc"
+    _SUBJECT_COLOUR = "#00cccc"
 
     _EDIT_LANDMARKS = [
         "head",
@@ -1080,16 +1080,16 @@ class VideoAnalysisTab(ctk.CTkFrame):
     # Canvas interaction
     # ------------------------------------------------------------------
 
-    def _toggle_player_mode(self):
-        if self._interact_mode == 'player':
+    def _toggle_subject_mode(self):
+        if self._interact_mode == 'subject':
             self._interact_mode = None
-            self.player_btn.configure(fg_color="#555555")
+            self.subject_btn.configure(fg_color="#555555")
             self.mode_hint.configure(text="")
         else:
-            self._interact_mode = 'player'
+            self._interact_mode = 'subject'
             self._drag_start = None
-            self.player_btn.configure(fg_color="#cc6600")
-            self.mode_hint.configure(text="Draw a box to add a new player")
+            self.subject_btn.configure(fg_color="#cc6600")
+            self.mode_hint.configure(text="Draw a box to add a new subject")
 
     # ------------------------------------------------------------------
     # Manual landmark editing
@@ -1157,7 +1157,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                               text_color="#888888" if in_edit else "#555555")
 
     def _clear_selection(self):
-        """Clear the player box and pose for the current frame only."""
+        """Clear the subject box and pose for the current frame only."""
         fi = self._current_frame_idx
         self._frame_rects.pop(fi, None)
         self._frame_poses.pop(fi, None)
@@ -1166,14 +1166,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
         # If no rects remain at all, also wipe the fallback rect and reset UI
         if not self._frame_rects:
-            self._player_rect = None
+            self._subject_rect = None
             self._drag_start = None
             self._move_rect_canvas = None
             self._interact_mode = None
             self._custom_connections.clear()
-            self.player_btn.configure(fg_color="#555555")
-            self.canvas.delete("player_rect")
-            self.canvas.delete("player_label")
+            self.subject_btn.configure(fg_color="#555555")
+            self.canvas.delete("subject_rect")
+            self.canvas.delete("subject_label")
 
         self.mode_hint.configure(text="")
         self.canvas.delete("pose_overlay")
@@ -1253,7 +1253,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         return int(dx0 + (vx - x0) * scale), int(dy0 + (vy - y0) * scale)
 
     def _rect_canvas_coords(self):
-        rect = self._frame_rects.get(self._current_frame_idx, self._player_rect)
+        rect = self._frame_rects.get(self._current_frame_idx, self._subject_rect)
         if rect is None:
             return None
         vx0, vy0, vx1, vy1 = rect
@@ -1301,16 +1301,16 @@ class VideoAnalysisTab(ctk.CTkFrame):
                             break
             return
 
-        if self._interact_mode == 'player':
+        if self._interact_mode == 'subject':
             self._drag_start = (ex, ey)
-            self.canvas.delete("player_rect")
-            self.canvas.delete("player_label")
+            self.canvas.delete("subject_rect")
+            self.canvas.delete("subject_label")
             return
 
         # ---- Check current selection FIRST (corners, landmarks, body) ----
-        # This must come before the detected-player box check so that clicking
+        # This must come before the detected-subject box check so that clicking
         # on a corner handle of the selected box is never hijacked by a
-        # detected-player box that happens to overlap the same screen position.
+        # detected-subject box that happens to overlap the same screen position.
         rc = self._rect_canvas_coords()
         if rc:
             cx0, cy0, cx1, cy1 = rc
@@ -1348,12 +1348,12 @@ class VideoAnalysisTab(ctk.CTkFrame):
 
 
     def _on_canvas_drag(self, event):
-        if self._interact_mode == 'player' and self._drag_start:
+        if self._interact_mode == 'subject' and self._drag_start:
             x0, y0 = self._drag_start
-            self.canvas.delete("player_rect")
+            self.canvas.delete("subject_rect")
             self.canvas.create_rectangle(
                 x0, y0, event.x, event.y,
-                outline="#ff6600", width=2, dash=(4, 2), tags="player_rect"
+                outline="#ff6600", width=2, dash=(4, 2), tags="subject_rect"
             )
         elif self._interact_mode == 'drag_point' and self._drag_point_name:
             fi = self._current_frame_idx
@@ -1369,25 +1369,25 @@ class VideoAnalysisTab(ctk.CTkFrame):
             elif corner == 'tr': nx0, ny0, nx1, ny1 = ox0, ey, ex, oy1
             elif corner == 'bl': nx0, ny0, nx1, ny1 = ex, oy0, ox1, ey
             else:                nx0, ny0, nx1, ny1 = ox0, oy0, ex, ey
-            self.canvas.delete("player_rect")
-            self.canvas.delete("player_label")
+            self.canvas.delete("subject_rect")
+            self.canvas.delete("subject_label")
             self.canvas.create_rectangle(
                 min(nx0, nx1), min(ny0, ny1), max(nx0, nx1), max(ny0, ny1),
-                outline="#00cccc", width=2, dash=(4, 2), tags="player_rect"
+                outline="#00cccc", width=2, dash=(4, 2), tags="subject_rect"
             )
         elif self._interact_mode == 'move_rect' and self._drag_start and self._move_rect_canvas:
             dx = event.x - self._drag_start[0]
             dy = event.y - self._drag_start[1]
             cx0, cy0, cx1, cy1 = self._move_rect_canvas
-            self.canvas.delete("player_rect")
-            self.canvas.delete("player_label")
+            self.canvas.delete("subject_rect")
+            self.canvas.delete("subject_label")
             self.canvas.create_rectangle(
                 cx0 + dx, cy0 + dy, cx1 + dx, cy1 + dy,
-                outline="#00cccc", width=2, dash=(4, 2), tags="player_rect"
+                outline="#00cccc", width=2, dash=(4, 2), tags="subject_rect"
             )
 
     def _on_canvas_release(self, event):
-        if self._interact_mode == 'player' and self._drag_start:
+        if self._interact_mode == 'subject' and self._drag_start:
             x0, y0 = self._drag_start
             x1, y1 = event.x, event.y
             cx0, cy0 = min(x0, x1), min(y0, y1)
@@ -1398,7 +1398,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
             vx0, vy0 = self._canvas_to_video(cx0, cy0)
             vx1, vy1 = self._canvas_to_video(cx1, cy1)
             new_rect = (vx0, vy0, vx1, vy1)
-            self._player_rect = new_rect
+            self._subject_rect = new_rect
             self._frame_rects[self._current_frame_idx] = new_rect
             self._user_anchors.add(self._current_frame_idx)
             self._finalize_rect_draw()
@@ -1426,8 +1426,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 new_rect = (vx0, vy0, vx1, vy1)
                 self._frame_rects[self._current_frame_idx] = new_rect
                 self._user_anchors.add(self._current_frame_idx)
-                if self._player_rect is None:
-                    self._player_rect = new_rect
+                if self._subject_rect is None:
+                    self._subject_rect = new_rect
             self.canvas.config(cursor="")
             self._interact_mode = None
             self._resize_corner = None
@@ -1444,8 +1444,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
             new_rect = (vx0, vy0, vx1, vy1)
             self._frame_rects[self._current_frame_idx] = new_rect
             self._user_anchors.add(self._current_frame_idx)
-            if self._player_rect is None:
-                self._player_rect = new_rect
+            if self._subject_rect is None:
+                self._subject_rect = new_rect
             self.canvas.config(cursor="")
             self._interact_mode = None
             self._drag_start = None
@@ -1454,14 +1454,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
             self._update_sel_status()
 
     def _on_canvas_escape(self, event=None):
-        """Cancel any active interaction without deselecting the player."""
-        if self._interact_mode in ('resize_rect', 'move_rect', 'drag_point', 'player'):
+        """Cancel any active interaction without deselecting the subject."""
+        if self._interact_mode in ('resize_rect', 'move_rect', 'drag_point', 'subject'):
             self._interact_mode = None
             self._drag_start = None
             self._move_rect_canvas = None
             self._resize_corner = None
             self._drag_point_name = None
-            self.player_btn.configure(fg_color="#555555")
+            self.subject_btn.configure(fg_color="#555555")
             self.mode_hint.configure(text="")
             self.canvas.config(cursor="crosshair")
             self._redraw_rect()
@@ -1650,7 +1650,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         if self._frame_poses or self._frame_rects:
             self._frame_poses.clear()
             self._frame_rects.clear()
-            self._player_rect = None
+            self._subject_rect = None
             self._user_anchors.clear()
             self._locked_frames.clear()
 
@@ -1665,14 +1665,14 @@ class VideoAnalysisTab(ctk.CTkFrame):
     def _finalize_rect_draw(self):
         self._drag_start = None
         self._interact_mode = None
-        self.player_btn.configure(fg_color="#555555")
+        self.subject_btn.configure(fg_color="#555555")
         self.mode_hint.configure(text="")
         self._redraw_rect()
         self._update_sel_status()
 
     def _resize_roi(self, dx0: int, dy0: int, dx1: int, dy1: int):
         """Expand/shrink the current ROI by adjusting each edge by the given delta."""
-        rect = self._frame_rects.get(self._current_frame_idx, self._player_rect)
+        rect = self._frame_rects.get(self._current_frame_idx, self._subject_rect)
         if rect is None:
             return
         vx0, vy0, vx1, vy1 = rect
@@ -1691,7 +1691,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         if new_vx1 - new_vx0 < 10 or new_vy1 - new_vy0 < 10:
             return
         new_rect = (new_vx0, new_vy0, new_vx1, new_vy1)
-        self._player_rect = new_rect
+        self._subject_rect = new_rect
         self._frame_rects[self._current_frame_idx] = new_rect
         self._user_anchors.add(self._current_frame_idx)
         self._redraw_rect()
@@ -1700,8 +1700,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
     _HANDLE_R = 7
 
     def _redraw_rect(self):
-        self.canvas.delete("player_rect")
-        self.canvas.delete("player_label")
+        self.canvas.delete("subject_rect")
+        self.canvas.delete("subject_label")
         self.canvas.delete("pose_overlay")
         self._draw_pose_overlay(self._current_frame_idx)
         rc = self._rect_canvas_coords()
@@ -1709,22 +1709,22 @@ class VideoAnalysisTab(ctk.CTkFrame):
             return
         cx0, cy0, cx1, cy1 = rc
         colour = "#00cccc" if self._current_frame_idx in self._frame_rects else "#ff6600"
-        label  = self._get_player_label()
+        label  = self._get_subject_label()
         self.canvas.create_rectangle(cx0, cy0, cx1, cy1,
-                                     outline=colour, width=2, tags="player_rect")
+                                     outline=colour, width=2, tags="subject_rect")
         self.canvas.create_text(cx0 + 4, cy0 + 2, text=label,
                                 fill=colour, font=("Segoe UI", 10, "bold"),
-                                anchor="nw", tags="player_rect")
+                                anchor="nw", tags="subject_rect")
         r = self._HANDLE_R
         for hx, hy in ((cx0, cy0), (cx1, cy0), (cx0, cy1), (cx1, cy1)):
             self.canvas.create_rectangle(hx - r, hy - r, hx + r, hy + r,
                                          fill=colour, outline="#ffffff",
-                                         width=1, tags="player_rect")
+                                         width=1, tags="subject_rect")
 
     def _update_sel_status(self):
         n_user = len(self._user_anchors)
         n_auto = len(self._frame_rects) - n_user
-        if self._player_rect:
+        if self._subject_rect:
             parts = []
             if n_user:
                 parts.append(f"{n_user} manual anchor{'s' if n_user!=1 else ''}")
@@ -1733,22 +1733,22 @@ class VideoAnalysisTab(ctk.CTkFrame):
             _parts_str = ", ".join(parts)
             note = f"  ({_parts_str})" if parts else ""
             self.sel_status_label.configure(
-                text=f"\u2705 Player selected{note} — drag to reposition",
+                text=f"\u2705 Subject selected{note} — drag to reposition",
                 text_color="#44cc44")
             self.track_btn.configure(state="normal")
             self.preview_btn.configure(state="normal")
             self.lock_btn.configure(state="normal")
         else:
             self.sel_status_label.configure(
-                text="\u26a0 No player selected — draw a box first",
+                text="\u26a0 No subject selected — draw a box first",
                 text_color="#ffaa44")
             self.track_btn.configure(state="disabled")
             self.preview_btn.configure(state="disabled")
             self.lock_btn.configure(state="disabled")
 
     def _auto_track(self, from_frame: Optional[int] = None):
-        if not self._player_rect and not self._frame_rects:
-            messagebox.showwarning("No ROI", "Draw a box around the player first.")
+        if not self._subject_rect and not self._frame_rects:
+            messagebox.showwarning("No ROI", "Draw a box around the subject first.")
             return
         if not self._video_path or not self._video_path.exists():
             return
@@ -1780,7 +1780,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                     (fi for fi in self._frame_rects if fi <= start_frame),
                     default=None
                 )
-                seed_rect = self._frame_rects.get(best_fi, self._player_rect)
+                seed_rect = self._frame_rects.get(best_fi, self._subject_rect)
                 if seed_rect:
                     self._frame_rects[start_frame] = seed_rect
                     self._user_anchors.add(start_frame)
@@ -1789,7 +1789,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 if start_frame <= fi <= end_frame
             )
             if not user_in_range:
-                self._frame_rects[start_frame] = self._player_rect
+                self._frame_rects[start_frame] = self._subject_rect
                 self._user_anchors.add(start_frame)
                 user_in_range = [start_frame]
 
@@ -1936,7 +1936,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
             text_color="#44cc44")
         self._update_sel_status()
         self._redraw_rect()
-        # Estimate poses for all frames in the trim range (using player_rect
+        # Estimate poses for all frames in the trim range (using subject_rect
         # as fallback for any frames before the tracking start point)
         self._preview_pose(from_frame=None)
 
@@ -2105,7 +2105,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                             Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
                         frame = cv2.cvtColor(_np.array(_pil), cv2.COLOR_RGB2BGR)
 
-                    rect = self._frame_rects.get(fi, self._player_rect)
+                    rect = self._frame_rects.get(fi, self._subject_rect)
                     h_f, w_f = frame.shape[:2]
                     if rect:
                         rx1 = max(0, rect[0]); ry1 = max(0, rect[1])
@@ -2173,7 +2173,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                         )
 
                         # Reject if centroid jumped > 40% of ROI size relative to
-                        # previous frame — prevents snapping to a nearby player.
+                        # previous frame — prevents snapping to a nearby subject.
                         _centroid_ok = True
                         if prev_landmarks and landmarks:
                             _ncx = sum(x for x, y in landmarks.values()) / len(landmarks)
@@ -2339,17 +2339,17 @@ class VideoAnalysisTab(ctk.CTkFrame):
             )
 
     # ------------------------------------------------------------------
-    # Player label helper
+    # Subject label helper
     # ------------------------------------------------------------------
 
-    def _get_player_label(self) -> str:
-        """Return a short label string for the player bounding box."""
+    def _get_subject_label(self) -> str:
+        """Return a short label string for the subject bounding box."""
         if self._current_frame_idx in self._locked_frames:
             return "\U0001f512 locked"
         n = len(self._frame_poses.get(self._current_frame_idx, {}))
         if n:
             return f"\U0001f9b4 {n} pts"
-        return "Player"
+        return "Subject"
 
     # ------------------------------------------------------------------
     # Calibration
@@ -2401,7 +2401,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
             text=f"✅ {self._scale_px_per_m:.1f} px/m",
             text_color="#44cc44")
         self.canvas.config(cursor="crosshair")
-        # Persist to the active player's profile so it's reused next time.
+        # Persist to the active subject's profile so it's reused next time.
         self._save_calibration_to_profile()
 
     def _clear_calibration(self):
@@ -2415,52 +2415,52 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self.canvas.delete("calib_line")
 
     # ------------------------------------------------------------------
-    # Player profiles
+    # Subject profiles
     # ------------------------------------------------------------------
 
     def set_project_dir(self, project_dir: str):
-        """Re-root the player store on the active project's players.json.
+        """Re-root the subject store on the active project's subjects.json.
 
         Called by MainWindow.broadcast_project_dir() whenever a project is
-        loaded, so the dropdown reflects that project's players (the same file
-        the --add_player CLI writes).
+        loaded, so the dropdown reflects that project's subjects (the same file
+        the --add_subject CLI writes).
         """
         try:
-            from utils.player_profile import ProjectPlayerStore
-            self._player_store = ProjectPlayerStore(Path(project_dir))
+            from utils.subject_profile import ProjectSubjectStore
+            self._subject_store = ProjectSubjectStore(Path(project_dir))
         except Exception as e:
             logger.warning(f"VideoAnalysisTab.set_project_dir failed: {e}")
             return
         self._project_dir = Path(project_dir)
         self._active_profile = None
-        self._refresh_player_menu()
+        self._refresh_subject_menu()
 
-    def _refresh_player_menu(self, select_id: Optional[str] = None):
-        """Rebuild the dropdown from the store; optionally select a player id."""
-        if not getattr(self, "_player_store", None):
+    def _refresh_subject_menu(self, select_id: Optional[str] = None):
+        """Rebuild the dropdown from the store; optionally select a subject id."""
+        if not getattr(self, "_subject_store", None):
             return
-        self._player_index = self._player_store.index()    # {label: id}
-        labels = [self._NO_PLAYER] + list(self._player_index.keys())
-        self.player_menu.configure(values=labels)
+        self._subject_index = self._subject_store.index()    # {label: id}
+        labels = [self._NO_SUBJECT] + list(self._subject_index.keys())
+        self.subject_menu.configure(values=labels)
         if select_id:
-            for lbl, pid in self._player_index.items():
+            for lbl, pid in self._subject_index.items():
                 if pid == select_id:
-                    self.player_var.set(lbl)
+                    self.subject_var.set(lbl)
                     return
-        if self.player_var.get() not in labels:
-            self.player_var.set(self._NO_PLAYER)
+        if self.subject_var.get() not in labels:
+            self.subject_var.set(self._NO_SUBJECT)
 
-    def _on_player_selected(self, label: str):
-        if not getattr(self, "_player_store", None):
+    def _on_subject_selected(self, label: str):
+        if not getattr(self, "_subject_store", None):
             return
-        if label == self._NO_PLAYER:
+        if label == self._NO_SUBJECT:
             self._active_profile = None
-            self.player_info_label.configure(text="")
+            self.subject_info_label.configure(text="")
             return
-        pid = getattr(self, "_player_index", {}).get(label)
-        prof = self._player_store.load(pid) if pid else None
+        pid = getattr(self, "_subject_index", {}).get(label)
+        prof = self._subject_store.load(pid) if pid else None
         if prof is None:
-            self.player_info_label.configure(
+            self.subject_info_label.configure(
                 text="(could not load profile)", text_color="#cc6666")
             return
         self._active_profile = prof
@@ -2502,37 +2502,37 @@ class VideoAnalysisTab(ctk.CTkFrame):
         if prof.template_model and prof.template_model in (AVAILABLE_MODELS or {}):
             self.model_var.set(prof.template_model)
 
-        self.player_info_label.configure(
+        self.subject_info_label.configure(
             text=("  ·  ".join(bits) if bits else "(no anthropometry set)"),
             text_color="#88aacc")
-        self._log(f"Player profile applied: {prof.name} ({prof.id})")
+        self._log(f"Subject profile applied: {prof.name} ({prof.id})")
 
-    def _new_player_profile(self):
-        if not getattr(self, "_player_store", None):
+    def _new_subject_profile(self):
+        if not getattr(self, "_subject_store", None):
             return
-        self._player_profile_dialog(None)
+        self._subject_profile_dialog(None)
 
-    def _edit_player_profile(self):
-        if not getattr(self, "_player_store", None):
+    def _edit_subject_profile(self):
+        if not getattr(self, "_subject_store", None):
             return
         if self._active_profile is None:
             from tkinter import messagebox
-            messagebox.showinfo("No Player",
-                                "Select a player first, or click New…", parent=self)
+            messagebox.showinfo("No Subject",
+                                "Select a subject first, or click New…", parent=self)
             return
-        self._player_profile_dialog(self._active_profile)
+        self._subject_profile_dialog(self._active_profile)
 
-    def _player_profile_dialog(self, prof):
-        """Modal create/edit dialog for a player profile."""
-        from utils.player_profile import PlayerProfile
+    def _subject_profile_dialog(self, prof):
+        """Modal create/edit dialog for a subject profile."""
+        from utils.subject_profile import SubjectProfile
         import tkinter as _tk
 
         is_new = prof is None
         if is_new:
-            prof = PlayerProfile()
+            prof = SubjectProfile()
 
         win = ctk.CTkToplevel(self)
-        win.title("New Player" if is_new else f"Edit {prof.name}")
+        win.title("New Subject" if is_new else f"Edit {prof.name}")
         win.geometry("380x640")
         win.transient(self.winfo_toplevel())
         win.grab_set()
@@ -2600,9 +2600,9 @@ class VideoAnalysisTab(ctk.CTkFrame):
         status.pack(fill="x", pady=(6, 0))
 
         def _save():
-            player_id = entries["id"].get().strip()
+            subject_id = entries["id"].get().strip()
             name = entries["name"].get().strip()
-            if not player_id:
+            if not subject_id:
                 status.configure(text="ID is required.")
                 return
             if not name:
@@ -2610,11 +2610,11 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 return
             # Reject duplicate IDs when creating a new profile
             if is_new and any(
-                p.id == player_id
-                for p in (self._player_store._profiles.values()
-                          if hasattr(self._player_store, "_profiles") else [])
+                p.id == subject_id
+                for p in (self._subject_store._profiles.values()
+                          if hasattr(self._subject_store, "_profiles") else [])
             ):
-                status.configure(text=f"ID '{player_id}' already exists.")
+                status.configure(text=f"ID '{subject_id}' already exists.")
                 return
 
             def _f(key):
@@ -2626,7 +2626,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
                 except ValueError:
                     return None
 
-            prof.id = player_id
+            prof.id = subject_id
             prof.name = name
             prof.group = entries["group"].get().strip()
             prof.sex = entries["sex"].get().strip().upper()[:1]
@@ -2644,10 +2644,10 @@ class VideoAnalysisTab(ctk.CTkFrame):
             prof.detect_settings["detect_interval"] = int(self.interval_var.get())
             prof.detect_settings["pose_max_delta_px"] = int(self.delta_var.get())
 
-            saved = self._player_store.save(prof)
-            self._log(f"Saved player profile → {saved}")
+            saved = self._subject_store.save(prof)
+            self._log(f"Saved subject profile → {saved}")
             self._active_profile = prof
-            self._refresh_player_menu(select_id=prof.id)
+            self._refresh_subject_menu(select_id=prof.id)
             self._apply_profile(prof)
             win.destroy()
 
@@ -2661,11 +2661,11 @@ class VideoAnalysisTab(ctk.CTkFrame):
             side="left", expand=True, fill="x", padx=(4, 0))
 
     def _save_calibration_to_profile(self):
-        """If a player is active, persist the current px/m to their profile."""
+        """If a subject is active, persist the current px/m to their profile."""
         if self._active_profile is not None and self._scale_px_per_m:
             self._active_profile.px_per_m = self._scale_px_per_m
             try:
-                self._player_store.save(self._active_profile)
+                self._subject_store.save(self._active_profile)
                 self._log(f"Calibration saved to profile {self._active_profile.id}")
             except Exception as e:
                 self._log(f"Could not save calibration to profile: {e}")
@@ -2699,7 +2699,7 @@ class VideoAnalysisTab(ctk.CTkFrame):
         self._user_anchors = set()
         self._frame_poses = {}
         self._locked_frames = set()
-        self._player_rect = None
+        self._subject_rect = None
         self._calib_points = []
         self._scale_px_per_m = None
         self._interact_mode = None
@@ -2925,20 +2925,20 @@ class VideoAnalysisTab(ctk.CTkFrame):
         except Exception as e:
             self._log(f"Motion segmentation skipped: {e}")
 
-        # 1c) Player-profile snapshot — records which athlete this analysis
+        # 1c) Subject-profile snapshot — records which athlete this analysis
         #     belongs to (anthropometry, model files, calibration) for traceability.
         if self._active_profile is not None:
             try:
                 import json as _json3
                 snap_dir = trial_dir
                 snap_dir.mkdir(parents=True, exist_ok=True)
-                snap = snap_dir / f"{self._video_path.stem}_player.json"
+                snap = snap_dir / f"{self._video_path.stem}_subject.json"
                 snap.write_text(_json3.dumps(self._active_profile.to_dict(), indent=2))
-                self._log(f"Player snapshot → {snap}  ({self._active_profile.name})")
+                self._log(f"Subject snapshot → {snap}  ({self._active_profile.name})")
                 # Persist any fresh calibration back to the profile.
                 self._save_calibration_to_profile()
             except Exception as e:
-                self._log(f"Player snapshot skipped: {e}")
+                self._log(f"Subject snapshot skipped: {e}")
 
         # 2) OpenSim MOT via record/video_analyzer.py
         # __file__ = .../msk_modelling_python/gui/widgets/video_analysis.py
@@ -2980,8 +2980,8 @@ class VideoAnalysisTab(ctk.CTkFrame):
         if t1:
             cmd += ["--end-time", t1]
 
-        if self._player_rect:
-            cmd += ["--player-rect", ",".join(str(int(v)) for v in self._player_rect)]
+        if self._subject_rect:
+            cmd += ["--subject-rect", ",".join(str(int(v)) for v in self._subject_rect)]
 
         tmpdir = Path(tempfile.mkdtemp(prefix="msk_video_"))
         if self._frame_rects:
