@@ -8,6 +8,14 @@ This module re-exports from the unified settings for any legacy code that import
 
 import importlib.util
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Editor-only (no runtime effect): expose the schema names — Inputs,
+    # BatchSettings, CEINMSSettings, model_config, SUBJECTS, … — so Pylance
+    # resolves `settings.X` / `utils.settings.X` (the names below are injected
+    # at runtime via globals().update, which a type checker cannot see).
+    from bioscout.settings import *  # noqa: F401,F403
 
 # Load the parent settings.py by file path to avoid circular self-import
 # (if we do 'from settings import *', Python finds THIS file first since

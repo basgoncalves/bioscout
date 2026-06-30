@@ -111,7 +111,7 @@
 					<!--Default appearance attributes for this GeometryPath-->
 					<Appearance>
 						<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-						<visible>true</visible>
+						<visible>false</visible>
 						<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 						<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 					</Appearance>
@@ -208,7 +208,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_pelvis.vtp</mesh_file>
@@ -225,7 +225,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>l_pelvis.vtp</mesh_file>
@@ -265,7 +265,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>sacrum.vtp</mesh_file>
@@ -303,7 +303,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>femur_r.vtp</mesh_file>
@@ -341,7 +341,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>femur_l.vtp</mesh_file>
@@ -381,7 +381,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lumbar5.vtp</mesh_file>
@@ -421,7 +421,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lumbar4.vtp</mesh_file>
@@ -461,7 +461,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lumbar3.vtp</mesh_file>
@@ -501,7 +501,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lumbar2.vtp</mesh_file>
@@ -541,7 +541,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lumbar1.vtp</mesh_file>
@@ -584,7 +584,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv1sm.vtp</mesh_file>
@@ -619,7 +619,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv2sm.vtp</mesh_file>
@@ -654,7 +654,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv3sm.vtp</mesh_file>
@@ -689,7 +689,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv4sm.vtp</mesh_file>
@@ -724,7 +724,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv5sm.vtp</mesh_file>
@@ -759,7 +759,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv6sm.vtp</mesh_file>
@@ -794,7 +794,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>cerv7.vtp</mesh_file>
@@ -829,7 +829,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic12_s.vtp</mesh_file>
@@ -864,7 +864,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic11_s.vtp</mesh_file>
@@ -899,7 +899,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic10_s.vtp</mesh_file>
@@ -934,7 +934,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic9_s.vtp</mesh_file>
@@ -969,7 +969,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic8_s.vtp</mesh_file>
@@ -1004,7 +1004,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic7_s.vtp</mesh_file>
@@ -1039,7 +1039,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic6_s.vtp</mesh_file>
@@ -1074,7 +1074,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic5_s.vtp</mesh_file>
@@ -1109,7 +1109,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic4_s.vtp</mesh_file>
@@ -1144,7 +1144,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic3_s.vtp</mesh_file>
@@ -1179,7 +1179,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic2_s.vtp</mesh_file>
@@ -1214,7 +1214,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>thoracic1_s.vtp</mesh_file>
@@ -1249,7 +1249,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>hat_ribs.vtp</mesh_file>
@@ -1284,7 +1284,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>hat_jaw.vtp</mesh_file>
@@ -1319,7 +1319,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>hat_skull.vtp</mesh_file>
@@ -1609,7 +1609,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>clavicle.vtp</mesh_file>
@@ -1674,7 +1674,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>scapula.vtp</mesh_file>
@@ -1742,7 +1742,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>humerus_rv.vtp</mesh_file>
@@ -1919,7 +1919,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ulna_rv.vtp</mesh_file>
@@ -2016,7 +2016,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>radius_rv.vtp</mesh_file>
@@ -2166,7 +2166,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>pisiform_rvs.vtp</mesh_file>
@@ -2181,7 +2181,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lunate_rvs.vtp</mesh_file>
@@ -2196,7 +2196,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>scaphoid_rvs.vtp</mesh_file>
@@ -2211,7 +2211,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>triquetrum_rvs.vtp</mesh_file>
@@ -2226,7 +2226,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>hamate_rvs.vtp</mesh_file>
@@ -2241,7 +2241,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>capitate_rvs.vtp</mesh_file>
@@ -2256,7 +2256,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>trapezoid_rvs.vtp</mesh_file>
@@ -2271,7 +2271,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>trapezium_rvs.vtp</mesh_file>
@@ -2286,7 +2286,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal2_rvs.vtp</mesh_file>
@@ -2301,7 +2301,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_proximal_rvs.vtp</mesh_file>
@@ -2316,7 +2316,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_medial_rvs.vtp</mesh_file>
@@ -2331,7 +2331,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_distal_rvs.vtp</mesh_file>
@@ -2346,7 +2346,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal3_rvs.vtp</mesh_file>
@@ -2361,7 +2361,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_proximal_rvs.vtp</mesh_file>
@@ -2376,7 +2376,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_medial_rvs.vtp</mesh_file>
@@ -2391,7 +2391,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_distal_rvs.vtp</mesh_file>
@@ -2406,7 +2406,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal4_rvs.vtp</mesh_file>
@@ -2421,7 +2421,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_proximal_rvs.vtp</mesh_file>
@@ -2436,7 +2436,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_medial_rvs.vtp</mesh_file>
@@ -2451,7 +2451,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_distal_rvs.vtp</mesh_file>
@@ -2466,7 +2466,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal5_rvs.vtp</mesh_file>
@@ -2481,7 +2481,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_proximal_rvs.vtp</mesh_file>
@@ -2496,7 +2496,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_medial_rvs.vtp</mesh_file>
@@ -2511,7 +2511,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_distal_rvs.vtp</mesh_file>
@@ -2526,7 +2526,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal1_rvs.vtp</mesh_file>
@@ -2541,7 +2541,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>thumb_proximal_rvs.vtp</mesh_file>
@@ -2556,7 +2556,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>thumb_distal_rvs.vtp</mesh_file>
@@ -2624,7 +2624,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>clavicle_l.vtp</mesh_file>
@@ -2687,7 +2687,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>scapula_l.vtp</mesh_file>
@@ -2753,7 +2753,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>humerus_lv.vtp</mesh_file>
@@ -2927,7 +2927,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ulna_lv.vtp</mesh_file>
@@ -3022,7 +3022,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>radius_lv.vtp</mesh_file>
@@ -3172,7 +3172,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>pisiform_lvs.vtp</mesh_file>
@@ -3187,7 +3187,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>lunate_lvs.vtp</mesh_file>
@@ -3202,7 +3202,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>scaphoid_lvs.vtp</mesh_file>
@@ -3217,7 +3217,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>triquetrum_lvs.vtp</mesh_file>
@@ -3232,7 +3232,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>hamate_lvs.vtp</mesh_file>
@@ -3247,7 +3247,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>capitate_lvs.vtp</mesh_file>
@@ -3262,7 +3262,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>trapezoid_lvs.vtp</mesh_file>
@@ -3277,7 +3277,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>trapezium_lvs.vtp</mesh_file>
@@ -3292,7 +3292,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal2_lvs.vtp</mesh_file>
@@ -3307,7 +3307,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_proximal_lvs.vtp</mesh_file>
@@ -3322,7 +3322,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_medial_lvs.vtp</mesh_file>
@@ -3337,7 +3337,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>index_distal_lvs.vtp</mesh_file>
@@ -3352,7 +3352,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal3_lvs.vtp</mesh_file>
@@ -3367,7 +3367,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_proximal_lvs.vtp</mesh_file>
@@ -3382,7 +3382,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_medial_lvs.vtp</mesh_file>
@@ -3397,7 +3397,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>middle_distal_lvs.vtp</mesh_file>
@@ -3412,7 +3412,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal4_lvs.vtp</mesh_file>
@@ -3427,7 +3427,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_proximal_lvs.vtp</mesh_file>
@@ -3442,7 +3442,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_medial_lvs.vtp</mesh_file>
@@ -3457,7 +3457,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>ring_distal_lvs.vtp</mesh_file>
@@ -3472,7 +3472,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal5_lvs.vtp</mesh_file>
@@ -3487,7 +3487,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_proximal_lvs.vtp</mesh_file>
@@ -3502,7 +3502,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_medial_lvs.vtp</mesh_file>
@@ -3517,7 +3517,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>little_distal_lvs.vtp</mesh_file>
@@ -3532,7 +3532,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>metacarpal1_lvs.vtp</mesh_file>
@@ -3547,7 +3547,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>thumb_proximal_lvs.vtp</mesh_file>
@@ -3562,7 +3562,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>1 1 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>thumb_distal_lvs.vtp</mesh_file>
@@ -3603,7 +3603,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>1 1 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>soccer_ball_seg_Holes.obj</mesh_file>
@@ -3636,7 +3636,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>0 0 0</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>soccer_ball.obj</mesh_file>
@@ -3696,7 +3696,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>0.80000001192092896 0 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>fem_cond.vtp</mesh_file>
@@ -3775,7 +3775,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>sphere.vtp</mesh_file>
@@ -3815,7 +3815,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>sphere.vtp</mesh_file>
@@ -3858,7 +3858,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>0.80000001192092896 0 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>tib_plat.vtp</mesh_file>
@@ -3915,7 +3915,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_patella.vtp</mesh_file>
@@ -3958,7 +3958,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>0.80000001192092896 0 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>fem_cond.vtp</mesh_file>
@@ -4037,7 +4037,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>sphere.vtp</mesh_file>
@@ -4077,7 +4077,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>sphere.vtp</mesh_file>
@@ -4120,7 +4120,7 @@
 										<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 										<opacity>1</opacity>
 										<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-										<color>0.80000000 0.80000000 0.80000000</color>
+										<color>0.80000001192092896 0 1</color>
 									</Appearance>
 									<!--Name of geometry file.-->
 									<mesh_file>tib_plat.vtp</mesh_file>
@@ -4177,7 +4177,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>l_patella.vtp</mesh_file>
@@ -4217,7 +4217,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>tibia_r.vtp</mesh_file>
@@ -4234,7 +4234,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_fibula.vtp</mesh_file>
@@ -4450,258 +4450,18 @@
 					<inertia>0.0504 0.0051000000000000004 0.0511 0 0 0</inertia>
 				</Body>
 				<Body name="tibia_l">
-					<!--The geometry used to display the axes of this Frame.-->
 					<FrameGeometry name="frame_geometry">
-						<!--Path to a Component that satisfies the Socket 'frame' of type Frame.-->
 						<socket_frame>..</socket_frame>
-						<!--Scale factors in X, Y, Z directions respectively.-->
 						<scale_factors>0.20000000000000001 0.20000000000000001 0.20000000000000001</scale_factors>
 					</FrameGeometry>
-					<!--List of geometry attached to this Frame. Note, the geometry are treated as fixed to the frame and they share the transform of the frame when visualized-->
-					<attached_geometry>
-						<Mesh name="tibia_l_geom_1">
-							<!--Path to a Component that satisfies the Socket 'frame' of type Frame.-->
-							<socket_frame>..</socket_frame>
-							<!--Scale factors in X, Y, Z directions respectively.-->
-							<scale_factors>1 1 1</scale_factors>
-							<!--Default appearance attributes for this Geometry-->
-							<Appearance>
-								<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-								<visible>true</visible>
-								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-								<opacity>1</opacity>
-								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
-							</Appearance>
-							<!--Name of geometry file.-->
-							<mesh_file>tibia_l.vtp</mesh_file>
-						</Mesh>
-						<Mesh name="tibia_l_geom_2">
-							<!--Path to a Component that satisfies the Socket 'frame' of type Frame.-->
-							<socket_frame>..</socket_frame>
-							<!--Scale factors in X, Y, Z directions respectively.-->
-							<scale_factors>1 1 1</scale_factors>
-							<!--Default appearance attributes for this Geometry-->
-							<Appearance>
-								<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-								<visible>true</visible>
-								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-								<opacity>1</opacity>
-								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
-							</Appearance>
-							<!--Name of geometry file.-->
-							<mesh_file>l_fibula.vtp</mesh_file>
-						</Mesh>
-					</attached_geometry>
-					<!--Set of wrap objects fixed to this body that GeometryPaths can wrap over.This property used to be a member of Body but was moved up with the introduction of Frames.-->
+					<attached_geometry />
 					<WrapObjectSet name="wrapobjectset">
-						<objects>
-							<WrapCylinder name="GasLat_at_shank_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>-2.9672299999999998 0.279725 -1.4781200000000001</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.0074000000000000003 -0.073999999999999996 0.0033</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>-y</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.055</radius>
-								<!--The length of the cylinder.-->
-								<length>0.10000000000000001</length>
-							</WrapCylinder>
-							<WrapCylinder name="GasMed_at_shank_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>-2.9672299999999998 -0.027972500000000001 -1.4781200000000001</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.0074000000000000003 -0.073999999999999996 0.0033</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>-y</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.055</radius>
-								<!--The length of the cylinder.-->
-								<length>0.10000000000000001</length>
-							</WrapCylinder>
-							<WrapCylinder name="GR_at_condyles_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>0 0.40000000000000002 0</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.0030000000000000001 -0.02 0</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>all</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.035999999999999997</radius>
-								<!--The length of the cylinder.-->
-								<length>0.10000000000000001</length>
-							</WrapCylinder>
-							<WrapCylinder name="SM_at_condyles_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>0 0.10000000000000001 0</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.001 -0.02 0</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>all</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.035200000000000002</radius>
-								<!--The length of the cylinder.-->
-								<length>0.10000000000000001</length>
-							</WrapCylinder>
-							<WrapCylinder name="ST_at_condyles_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>0 0.20000000000000001 0</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.002 -0.020500000000000001 0</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>all</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.042500000000000003</radius>
-								<!--The length of the cylinder.-->
-								<length>0.10000000000000001</length>
-							</WrapCylinder>
-							<WrapCylinder name="BF_at_gastroc_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>0 0 0</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.058000000000000003 -0.059999999999999998 0</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>all</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0.80000001192092896 0 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.029999999999999999</radius>
-								<!--The length of the cylinder.-->
-								<length>0.14999999999999999</length>
-							</WrapCylinder>
-							<WrapCylinder name="BF140_at_gastroc_l">
-								<!--Whether or not the WrapObject is considered active in computing paths-->
-								<active>true</active>
-								<!--Body-fixed Euler angle sequence for the orientation of the WrapObject-->
-								<xyz_body_rotation>0 0 0</xyz_body_rotation>
-								<!--Translation of the WrapObject.-->
-								<translation>-0.039 -0.059999999999999998 0</translation>
-								<!--The name of quadrant over which the wrap object is active. For example, '+x' or '-y' to set the sidedness of the wrapping.-->
-								<quadrant>all</quadrant>
-								<!--Default appearance for this Geometry-->
-								<Appearance>
-									<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-									<visible>false</visible>
-									<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
-									<opacity>0.5</opacity>
-									<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-									<color>0 1 1</color>
-									<!--Visuals applied to surfaces associated with this Appearance.-->
-									<SurfaceProperties>
-										<!--The representation (1:Points, 2:Wire, 3:Shaded) used to display the object.-->
-										<representation>3</representation>
-									</SurfaceProperties>
-								</Appearance>
-								<!--The radius of the cylinder.-->
-								<radius>0.029000000000000001</radius>
-								<!--The length of the cylinder.-->
-								<length>0.14999999999999999</length>
-							</WrapCylinder>
-						</objects>
+						<objects />
 						<groups />
 					</WrapObjectSet>
-					<!--The mass of the body (kg)-->
 					<mass>3.7075</mass>
-					<!--The location (Vec3) of the mass center in the body frame.-->
 					<mass_center>0 -0.1867 0</mass_center>
-					<!--The elements of the inertia tensor (Vec6) as [Ixx Iyy Izz Ixy Ixz Iyz] measured about the mass_center and not the body origin.-->
-					<inertia>0.0504 0.0051000000000000004 0.0511 0 0 0</inertia>
+					<inertia>0.0504 0.0051 0.0511 0 0 0</inertia>
 				</Body>
 				<Body name="talus_r">
 					<!--The geometry used to display the axes of this Frame.-->
@@ -4725,7 +4485,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_talus.vtp</mesh_file>
@@ -4765,7 +4525,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>l_talus.vtp</mesh_file>
@@ -4805,7 +4565,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_foot.vtp</mesh_file>
@@ -4845,7 +4605,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>l_foot.vtp</mesh_file>
@@ -4885,7 +4645,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>r_bofoot.vtp</mesh_file>
@@ -4925,7 +4685,7 @@
 								<!--The opacity used to display the geometry between 0:transparent, 1:opaque.-->
 								<opacity>1</opacity>
 								<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
-								<color>0.80000000 0.80000000 0.80000000</color>
+								<color>0.80000001192092896 0 1</color>
 							</Appearance>
 							<!--Name of geometry file.-->
 							<mesh_file>l_bofoot.vtp</mesh_file>
@@ -33347,7 +33107,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33443,7 +33203,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33539,7 +33299,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33635,7 +33395,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33731,7 +33491,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33827,7 +33587,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -33929,7 +33689,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34025,7 +33785,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34145,7 +33905,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34277,7 +34037,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34409,7 +34169,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34535,7 +34295,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34631,7 +34391,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34727,7 +34487,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34835,7 +34595,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -34943,7 +34703,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35051,7 +34811,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35147,7 +34907,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35243,7 +35003,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35339,7 +35099,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35435,7 +35195,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35531,7 +35291,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35627,7 +35387,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35729,7 +35489,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35837,7 +35597,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -35951,7 +35711,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36077,7 +35837,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36179,7 +35939,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36287,7 +36047,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36401,7 +36161,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36515,7 +36275,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36611,7 +36371,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36713,7 +36473,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36809,7 +36569,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -36917,7 +36677,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37025,7 +36785,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37133,7 +36893,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37247,7 +37007,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37361,7 +37121,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37475,7 +37235,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37571,7 +37331,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37667,7 +37427,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37763,7 +37523,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37859,7 +37619,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -37955,7 +37715,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38051,7 +37811,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38153,7 +37913,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38249,7 +38009,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38369,7 +38129,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38501,7 +38261,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38633,7 +38393,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38759,7 +38519,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38855,7 +38615,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -38951,7 +38711,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39059,7 +38819,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39167,7 +38927,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39275,7 +39035,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39371,7 +39131,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39467,7 +39227,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39563,7 +39323,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39659,7 +39419,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39755,7 +39515,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39851,7 +39611,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -39953,7 +39713,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40061,7 +39821,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40175,7 +39935,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40301,7 +40061,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40403,7 +40163,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40511,7 +40271,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40625,7 +40385,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40739,7 +40499,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40835,7 +40595,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -40937,7 +40697,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41033,7 +40793,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41141,7 +40901,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41249,7 +41009,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41357,7 +41117,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41471,7 +41231,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41585,7 +41345,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41699,7 +41459,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41797,7 +41557,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41880,7 +41640,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -41957,7 +41717,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42034,7 +41794,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42111,7 +41871,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42188,7 +41948,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42265,7 +42025,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42342,7 +42102,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42419,7 +42179,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42498,7 +42258,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42577,7 +42337,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42660,7 +42420,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42737,7 +42497,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42814,7 +42574,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42891,7 +42651,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -42968,7 +42728,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -43045,7 +42805,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -43122,7 +42882,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -43199,7 +42959,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>
@@ -43276,7 +43036,7 @@
 						<!--Default appearance attributes for this GeometryPath-->
 						<Appearance>
 							<!--Flag indicating whether the associated Geometry is visible or hidden.-->
-							<visible>true</visible>
+							<visible>false</visible>
 							<!--The color, (red, green, blue), [0, 1], used to display the geometry. -->
 							<color>0.80000000000000004 0.10000000000000001 0.10000000000000001</color>
 						</Appearance>

@@ -1,4 +1,4 @@
-__version__ = "1.7.0"
+__version__ = "1.2.9"
 
 # The analysis object model (Project / Subject / Session / Trial) now lives in
 # bioscout.utils.analysis, next to Analyse. It's exposed here lazily so that a
@@ -24,7 +24,18 @@ _LAZY = {
     "check_settings_version", "migrate_settings",
 }
 
-__all__ = ["__version__", *sorted(_LAZY)]
+__all__ = ["__version__", "test", *sorted(_LAZY)]
+
+
+def test(verbosity=2):
+    """Run the bioscout self-test suite. Returns True if everything passed.
+
+    Usage::
+
+        python -c "import bioscout; bioscout.test()"
+    """
+    from . import tests
+    return tests.run(verbosity=verbosity)
 
 
 def __getattr__(name):                      # PEP 562 module-level lazy attrs

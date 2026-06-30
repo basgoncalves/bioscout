@@ -1,6 +1,13 @@
+import re
+from pathlib import Path
 from setuptools import setup, find_packages
 
-__version__ = '1.3.0'
+# Single source of truth for the version: bioscout/__init__.py
+__version__ = re.search(
+    r'^__version__\s*=\s*["\']([^"\']+)["\']',
+    Path(__file__).parent.joinpath("bioscout", "__init__.py").read_text(encoding="utf-8"),
+    re.M,
+).group(1)
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()

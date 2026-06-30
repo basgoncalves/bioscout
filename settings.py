@@ -7,7 +7,7 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).parent
 # Shares major.minor with the package (bioscout.__version__); the patch differs
 # per component / branch. Keep the major.minor in step with bioscout/__init__.py.
-__version__ = "1.2.9"
+__version__ = "1.8.0"
 
 # ============================================================================
 # PROJECT ROOT — the only absolute path you need to change per project.
