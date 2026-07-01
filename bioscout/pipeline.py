@@ -40,6 +40,124 @@ def _calibration_trials(settings_module, default=("Walking_02", "Squat_BW_01")):
     return tuple(names) if names else tuple(default)
 
 
+# ---------------------------------------------------------------------------
+# Reset a project's simulations back to inputs-only (with timestamped backup).
+# ---------------------------------------------------------------------------
+
+# Per-trial files KEPT on reset: raw experimental inputs + the per-trial config
+# the pipeline reads. Everything else in a trial folder is a generated output.
+TRIAL_KEEP = {
+    "c3dfile.c3d", "events.csv", "marker_experimental.trc", "grf.mot",
+    "GRF.xml", "emg.mot", "analog.csv", "trial_settings.xml",
+}
+# Session-level files KEPT on reset: CEINMS calibration *inputs*. Calibration
+# *outputs* (subjectCalibrated*, calibrationOutput*/, *_parameters.png,
+# *_vs_uncalibrated.png) and any other non-trial sub-folders are removed.
+SESSION_KEEP = {
+    "subjectUncalibrated.xml", "calibrationCfg.xml", "calibrationSetup.xml",
+    "excitationGenerator.xml",
+}
+
+
+def _is_trial_dir(path):
+    """A trial folder holds raw motion inputs (a c3d or experimental markers)."""
+    return (os.path.exists(os.path.join(path, C3D))
+            or os.path.exists(os.path.join(path, TRC)))
+
+
+def reset_simulations(project_dir=None, backup=True, dry_run=False,
+                      trial_keep=None, session_keep=None,
+                      extra_backup=("results", os.path.join("manuscript", "figures")),
+                      verbose=True):
+    """Back up and reset a project's simulations tree to inputs-only.
+
+    For each ``simulations/<subject>/<session>``:
+      * every trial folder is reduced to ``trial_keep`` (raw inputs + trial
+        settings); all generated outputs — IK/ID/MA/SO/JRA results, ``setup_*.xml``,
+        ``MuscleAnalysis/``, ``Execution*/``, plots, filtered EMG, ... — are deleted;
+      * session-level CEINMS *inputs* (``session_keep``) are kept; calibration
+        *outputs* (``subjectCalibrated*``, ``*_parameters.png``, ``*_vs_uncalibrated.png``)
+        and any non-trial sub-folder (``calibrationOutput*``, old run backups) are deleted.
+
+    Before deleting anything, ``simulations/`` and every existing path in
+    ``extra_backup`` (project-relative, e.g. ``results/`` and ``manuscript/figures/``)
+    are copied to timestamped siblings ``<name>_backup_<YYYYmmdd_HHMMSS>`` that all
+    share one timestamp. Use ``dry_run=True`` to preview without touching disk.
+
+    Returns a dict: ``{"timestamp", "backups": [...], "trials_reset", "removed"}``.
+    """
+    import bioscout
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    proj = bioscout.Project(project_dir)
+    sim = proj.utils.SIMULATIONS_DIR or os.path.join(project_dir, "simulations")
+    tkeep = set(trial_keep) if trial_keep is not None else set(TRIAL_KEEP)
+    skeep = set(session_keep) if session_keep is not None else set(SESSION_KEEP)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log = print if verbose else (lambda *a, **k: None)
+
+    if not os.path.isdir(sim):
+        raise FileNotFoundError(f"no simulations folder at {sim}")
+    info = {"timestamp": ts, "backups": [], "trials_reset": 0, "removed": 0}
+
+    # ---- 1. backups (shared timestamp) ----
+    if backup and not dry_run:
+        dst = f"{sim}_backup_{ts}"
+        log(f"[reset] backup {sim} -> {dst}  (can take a while)")
+        shutil.copytree(sim, dst); info["backups"].append(dst)
+        for rel in extra_backup:
+            src = os.path.join(project_dir, rel)
+            if os.path.isdir(src):
+                d = os.path.join(os.path.dirname(src),
+                                 f"{os.path.basename(src)}_backup_{ts}")
+                log(f"[reset] backup {src} -> {d}")
+                shutil.copytree(src, d); info["backups"].append(d)
+        log("[reset] backups done")
+    elif backup:
+        log(f"[reset] (dry-run) would back up {sim} + {list(extra_backup)} with ts={ts}")
+
+    def _remove(path):
+        info["removed"] += 1
+        if dry_run:
+            log(f"    would remove {os.path.relpath(path, sim)}")
+            return
+        try:
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+        except Exception as e:
+            log(f"    [warn] could not remove {path}: {e}")
+
+    # ---- 2. walk subjects / sessions and strip to inputs ----
+    for subject in sorted(os.listdir(sim)):
+        sub_dir = os.path.join(sim, subject)
+        if not os.path.isdir(sub_dir):
+            continue
+        for session in sorted(os.listdir(sub_dir)):
+            sess_dir = os.path.join(sub_dir, session)
+            if not os.path.isdir(sess_dir):
+                continue
+            for entry in sorted(os.listdir(sess_dir)):
+                p = os.path.join(sess_dir, entry)
+                if os.path.isdir(p):
+                    if _is_trial_dir(p):
+                        kept = 0
+                        for item in sorted(os.listdir(p)):
+                            if item in tkeep:
+                                kept += 1
+                            else:
+                                _remove(os.path.join(p, item))
+                        info["trials_reset"] += 1
+                        log(f"[reset] trial {subject}/{session}/{entry}: kept {kept} input(s)")
+                    else:
+                        log(f"[reset] remove non-trial dir {subject}/{session}/{entry}")
+                        _remove(p)
+                elif entry not in skeep:
+                    _remove(p)
+
+    log(f"[reset] {'DRY-RUN ' if dry_run else ''}done (ts={ts}): "
+        f"{info['trials_reset']} trials reset, {info['removed']} item(s) "
+        f"{'to remove' if dry_run else 'removed'}; backups: {info['backups']}")
+    return info
+
+
 def run_pipeline(project_dir=None, scale=False, ceinms=True, replace=True,
                  calibration_trials=("Walking_02", "Squat_BW_01"),
                  backup=True, normalise_inputs=None):
@@ -98,139 +216,4 @@ def run_pipeline(project_dir=None, scale=False, ceinms=True, replace=True,
                 try:
                     shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
                 except Exception as e:
-                    print(f"  [warn] could not remove {p}: {e}")
-            t = subj.make_trial(trial_dir)
-            t.export_c3d()
-            _downsample_inputs(trial_dir)
-            return True
-        if has_trc:
-            print(f"  [no-c3d] {os.path.basename(trial_dir)}: downsampling markers/grf in place")
-            _downsample_inputs(trial_dir)
-            return True
-        return False
-
-    for subj in proj.subjects:
-        if not subj.sessions:
-            continue
-        session = subj.sessions[0].name
-        sdir = os.path.join(sim, subj.name, session)
-        if not os.path.isdir(sdir):
-            print(f"[skip] {subj.name}/{session} — no folder")
-            continue
-        trials = [d for d in sorted(os.listdir(sdir))
-                  if os.path.isdir(os.path.join(sdir, d))
-                  and (os.path.exists(os.path.join(sdir, d, C3D))
-                       or os.path.exists(os.path.join(sdir, d, TRC)))]
-        print(f"\n==================  {subj.name}/{session}: {len(trials)} trials  ==================")
-
-        for tr in trials:
-            print(f"  [inputs] {tr}: rebuild -> downsample to N={n}")
-            try:
-                _rebuild_trial(subj, os.path.join(sdir, tr))
-            except Exception as e:
-                print(f"  [ERROR] rebuild {subj.name}/{tr}: {e}")
-
-        for tr in trials:
-            print(f"\n=== SO  {subj.name}/{tr} ===")
-            try:
-                t = subj.make_trial(os.path.join(sdir, tr))
-                t.run_ik(replace=replace)
-                t.run_id(replace=replace)
-                t.run_ma(replace=replace)
-                t.run_so(replace=replace)
-                t.calculate_muscle_moments(forces_type="so")
-                t.run_jra(replace=replace)
-            except Exception as e:
-                print(f"  [ERROR] SO {subj.name}/{tr}: {e}")
-
-        if ceinms:
-            print(f"\n=== CEINMS  {subj.name}/{session} ===")
-            try:
-                run_ceinms(proj, subj.name, session, trials, calibration_trials, replace)
-            except Exception as e:
-                print(f"  [CEINMS ERROR] {subj.name}: {e}")
-
-    print("\n==================  PIPELINE DONE  ==================")
-    return True
-
-
-def run_ceinms_only(project_dir=None, replace=True,
-                    calibration_trials=("Walking_02", "Squat_BW_01")):
-    """Re-run ONLY the CEINMS stage on existing SO results (non-destructive)."""
-    import bioscout
-    from bioscout.tests.downsample import run_ceinms
-
-    project_dir = project_dir or os.getcwd()
-    proj = bioscout.Project(project_dir)
-    sim = proj.utils.SIMULATIONS_DIR
-    for subj in proj.subjects:
-        if not subj.sessions:
-            continue
-        session = subj.sessions[0].name
-        sdir = os.path.join(sim, subj.name, session)
-        if not os.path.isdir(sdir):
-            print(f"[skip] {subj.name}/{session} — no folder")
-            continue
-        trials = [d for d in sorted(os.listdir(sdir))
-                  if os.path.isdir(os.path.join(sdir, d))
-                  and not d.startswith("calibrationOutput")
-                  and os.path.exists(os.path.join(sdir, d, "emg_filtered.mot"))]
-        print(f"\n====  CEINMS  {subj.name}/{session}: {len(trials)} trials  ====")
-        try:
-            run_ceinms(proj, subj.name, session, trials, calibration_trials, replace)
-        except Exception as e:
-            print(f"  [CEINMS ERROR] {subj.name}: {e}")
-    print("\n====  CEINMS-ONLY DONE  ====")
-    return True
-
-
-def run_summary(project_dir=None):
-    """Build the project's results/manuscript summary.
-
-    The summary is intentionally project-specific (manuscript figures, metric &
-    curve CSVs), so it lives in the project as ``summarize_results.py`` and is
-    executed here. Falls back to the package summary (``utils.summary``) if the
-    project script is absent.
-    """
-    project_dir = project_dir or os.getcwd()
-    script = os.path.join(project_dir, "summarize_results.py")
-    if os.path.exists(script):
-        print(f"[summary] running {script}")
-        runpy.run_path(script, run_name="__main__")
-        return True
-    try:
-        from bioscout.utils.summary import run_summary as _pkg_summary
-        print("[summary] project summarize_results.py not found — using package summary")
-        return bool(_pkg_summary())
-    except Exception as e:
-        print(f"[summary] no summary available: {e}")
-        return False
-
-
-def run_project(project_dir, settings_module):
-    """Dispatcher for ``python -m bioscout -b settings.py``.
-
-    Reads RUN_PIPELINE / RUN_SUMMARY / RUN_SCALING from the settings module and
-    runs the requested stages. Returns True if everything requested succeeded.
-    """
-    run_pipe = bool(getattr(settings_module, "RUN_PIPELINE", False))
-    run_summ = bool(getattr(settings_module, "RUN_SUMMARY", False))
-    run_scale = bool(getattr(settings_module, "RUN_SCALING", False))
-    run_ceinms_flag = bool(getattr(settings_module, "RUN_CEINMS", True))
-    calib = _calibration_trials(settings_module)
-
-    print("=" * 70)
-    print(f"[bioscout] project run: pipeline={run_pipe} summary={run_summ} "
-          f"scaling={run_scale} ceinms={run_ceinms_flag}")
-    print("=" * 70)
-
-    ok = True
-    if run_pipe:
-        ok = run_pipeline(project_dir, scale=run_scale, ceinms=run_ceinms_flag,
-                          calibration_trials=calib) and ok
-    if run_summ:
-        ok = run_summary(project_dir) and ok
-    if not run_pipe and not run_summ:
-        print("[bioscout] nothing to do — set RUN_PIPELINE and/or RUN_SUMMARY "
-              "in settings.py.")
-    return ok
+                

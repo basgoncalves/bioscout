@@ -1059,8 +1059,22 @@ class Analyse(_u.settings.Inputs):
                 setattr(self, varInput[0], os.path.relpath(filepath, self.path))
             else:
                 setattr(self, varInput[0], varInput[1])
-                  
-        # Update body mass and time range from data available (.trc, .c3d, events.csv) 
+
+        # Create any subfolders referenced by the input paths (e.g. inputs/,
+        # external_biomechanics/, muscle_analysis/, static_optimisation/, ceinms/).
+        # No-op for the flat layout (paths without a directory part); enables the
+        # subfoldered layout automatically once Inputs uses subfolder-prefixed paths.
+        for _k, _v in inputs.__dict__.items():
+            if _k.startswith("_") or not isinstance(_v, str):
+                continue
+            _d = os.path.dirname(_v)
+            if _d and not _d.startswith(".."):
+                try:
+                    os.makedirs(os.path.join(self.path, _d), exist_ok=True)
+                except Exception:
+                    pass
+
+        # Update body mass and time range from data available (.trc, .c3d, events.csv)
         try:
             self.body_mass = self.get_body_mass()  
             self.time_range = self.get_time_range()
@@ -2918,26 +2932,37 @@ class Analyse(_u.settings.Inputs):
                 return emg_file
 
             n = len(df)
-            actual_dt = (df['time'].iloc[-1] - df['time'].iloc[0]) / (n - 1)
+            tvals = df['time'].to_numpy(dtype=float)
+            diffs = np.diff(tvals)
+            actual_dt = float(np.median(diffs)) if diffs.size else 0.0
             expected_dt = 1.0 / emg_sampling_freq
 
             self._log(f'EMG timestamps: n={n}, dt={actual_dt:.6f}s '
-                      f'(expected {expected_dt:.6f}s at {emg_sampling_freq} Hz), '
-                      f'time {df["time"].iloc[0]:.4f}..{df["time"].iloc[-1]:.4f}s', terminal=True)
+                      f'(configured {expected_dt:.6f}s at {emg_sampling_freq} Hz), '
+                      f'time {tvals[0]:.4f}..{tvals[-1]:.4f}s', terminal=True)
 
-            # If time increment is off by more than 20%, fix it
-            if abs(actual_dt - expected_dt) / expected_dt < 0.20:
-                return emg_file  # timestamps already correct
+            # Only reconstruct timestamps that are ACTUALLY broken — i.e. not a sane,
+            # strictly increasing series (dt<=0, non-finite, or duplicated times, the
+            # real C3D-export bug). A valid monotonic time column is trusted even if
+            # the true sampling rate differs from emg_sampling_freq (e.g. EMG exported
+            # at 200 Hz while the setting says 1000 Hz). Trusting the setting over
+            # correct data squashes the EMG into the wrong (too-short) time window and
+            # crops CEINMS (e.g. a 1.08 s trial collapsed to ~0.49 s).
+            monotonic = bool(diffs.size) and bool(np.all(np.isfinite(diffs))) and bool(np.all(diffs > 0))
+            if np.isfinite(actual_dt) and actual_dt > 0 and monotonic:
+                return emg_file  # timestamps are fine — leave them untouched
 
-            # Reconstruct: start at IK start time, step at 1/emg_sampling_freq
+            # Broken timestamps -> rebuild. Prefer the detected rate if usable, else
+            # fall back to the configured emg_sampling_freq.
+            fs = (1.0 / actual_dt) if (np.isfinite(actual_dt) and actual_dt > 0) else float(emg_sampling_freq)
             try:
                 start_t = float(self.time_range[0]) if self.time_range else 0.0
             except Exception:
                 start_t = 0.0
 
             df = df.copy()
-            df['time'] = start_t + np.arange(n) / emg_sampling_freq
-            self._log(f'[Info] Fixed EMG timestamps -> {df["time"].iloc[0]:.4f}..{df["time"].iloc[-1]:.4f}s', terminal=True)
+            df['time'] = start_t + np.arange(n) / fs
+            self._log(f'[Info] Rebuilt broken EMG timestamps -> {df["time"].iloc[0]:.4f}..{df["time"].iloc[-1]:.4f}s', terminal=True)
 
             # Overwrite the source file in-place — no extra emg_ceinms.mot created
             _u.emg_normalise.write_sto_file(df, emg_path)
@@ -3424,42 +3449,4 @@ class Analyse(_u.settings.Inputs):
 
         try:
             ceinmsTorquesFile = os.path.join(self.ceinms_calibration_dir, 'Moments_inputData.csv')
-            _u.ceinms.plot_moments_calibration_results(momentResultsCSV=ceinmsTorquesFile)
-            self._log(f'[Success] Plotted CEINMS calibration results for trial: {self.trial}')
-        except Exception as e:
-            self._log(f'[Error] during plotting CEINMS calibration results: {e}')
-
-    def plot_ceinms_vs_so_muscle_moments(self):
-        from plotly.subplots import make_subplots
-        import plotly.graph_objects as go
-
-        ik_columns = ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'knee_angle_r', 'ankle_angle_r']
-        id_columns = ['hip_flexion_r_moment', 'hip_adduction_r_moment', 'hip_rotation_r_moment', 'knee_angle_r_moment', 'ankle_angle_r_moment']
-
-        id = _u.load_any_data_file(os.path.join(self.path, self.id))
-        so_forces = _u.load_any_data_file(os.path.join(self.path, self.so_forces))
-        ceinms_forces = _u.load_any_data_file(os.path.join(self.path, self.jra_forces_ceinms))
-
-        fig, ax = plt.subplots(nrows=len(ik_columns), ncols=2, figsize=(28, 16))
-        fontsize = 25
-
-        fig_int = make_subplots(rows=len(ik_columns), cols=2, shared_xaxes=True,
-                                subplot_titles=[f"{dof} - SO" if i % 2 == 0 else f"{dof} - CEINMS"
-                                                for dof in ik_columns for i in range(2)])
-
-        for count, dof in enumerate(ik_columns):
-            ma = _u.load_any_data_file(os.path.join(self.path, self.ma, f'_MuscleAnalysis_MomentArm_{dof}.sto'))
-
-            muscle_list = [col for col in so_forces.columns if col != 'time']
-            muscles = _u.openSim.find_non_zero_mom_arm_muscles(ma, muscle_list)
-            print(f"Non-zero moment arm muscles for {dof}: {muscles}")
-
-
-# --- subject video/anthropometry profile (defined in subject_profile.py) ------
-# Co-located with Subject so every subject-side model is reachable straight from
-# the analysis module, e.g. `from bioscout.utils.analysis import SubjectProfile`.
-# (Distinct data model from Subject: anthropometry, segment fractions, pose
-# calibration and per-task detection settings for the video pipeline.)
-from .subject_profile import (  # noqa: E402,F401
-    SubjectProfile, SubjectStore, ProjectSubjectStore, DEFAULT_SEGMENT_FRACTIONS,
-)
+            _u.ceinms.plot_mom
