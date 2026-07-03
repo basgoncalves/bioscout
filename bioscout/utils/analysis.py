@@ -1205,6 +1205,69 @@ class Analyse(_u.settings.Inputs):
 
 
     '''
+
+    # ---- semantic aliases -------------------------------------------------
+    # Readable names for the terse layout fields inherited from settings.Inputs,
+    # so call sites can say ``trial.joint_angles`` instead of ``trial.ik``. Each
+    # is a read/write proxy onto the underlying field; the short names remain the
+    # canonical serialised keys (trial_settings.xml / _LAYOUT_FIELDS unchanged).
+    @property
+    def model_path(self): return self.model_dir
+    @model_path.setter
+    def model_path(self, v): self.model_dir = v
+
+    @property
+    def joint_angles(self): return self.ik
+    @joint_angles.setter
+    def joint_angles(self, v): self.ik = v
+
+    @property
+    def inverse_dynamics(self): return self.id
+    @inverse_dynamics.setter
+    def inverse_dynamics(self, v): self.id = v
+
+    @property
+    def static_optimisation_forces(self): return self.so_forces
+    @static_optimisation_forces.setter
+    def static_optimisation_forces(self, v): self.so_forces = v
+
+    @property
+    def static_optimisation_activations(self): return self.so_activations
+    @static_optimisation_activations.setter
+    def static_optimisation_activations(self, v): self.so_activations = v
+
+    @property
+    def grf(self): return self.grf_mot
+    @grf.setter
+    def grf(self, v): self.grf_mot = v
+
+    @property
+    def joint_reaction_so(self): return self.jra
+    @joint_reaction_so.setter
+    def joint_reaction_so(self, v): self.jra = v
+
+    @property
+    def joint_reaction_ceinms(self): return self.jra_ceinms
+    @joint_reaction_ceinms.setter
+    def joint_reaction_ceinms(self, v): self.jra_ceinms = v
+
+    # ---- structural layout fields ----------------------------------------
+    # File/dir layout fields — always taken from the CURRENT settings.Inputs,
+    # never from a (possibly stale) trial_settings.xml (see _apply_inputs_layout).
+    # Only non-structural *values* (setup_dir, model_dir, start/end_time, alpha,
+    # beta, gamma, body_mass, time_range, ...) are allowed to persist per-trial.
+    _LAYOUT_FIELDS = (
+        'c3d', 'markers', 'markerset', 'grf_mot', 'setup_grf', 'emg', 'analog',
+        'setup_ik', 'ik', 'model_markers', 'setup_id', 'id', 'setup_ma', 'ma',
+        'actuators_so', 'setup_so', 'so_forces', 'so_activations', 'jra_forces',
+        'setup_jra', 'jra', 'emg_filtered_normalised',
+        'ceinms_input_data', 'ceinms_exe_cfg', 'ceinms_exe_setup', 'ceinms_optimise_setup',
+        'ceinms_optimise_cfg', 'ceinms_exe_dir', 'ceinms_optimisation_dir',
+        'setup_jra_ceinms', 'jra_ceinms',
+        'ceinms_uncalibrated_model', 'ceinms_calibrated_model', 'ceinms_calibration_cfg',
+        'ceinms_calibration_setup', 'ceinms_excitation_generator', 'ceinms_calibration_dir',
+    )
+
     def __init__(self, trialPath=None):
 
         if trialPath is None:
@@ -1580,22 +1643,6 @@ class Analyse(_u.settings.Inputs):
         self._resolve_model_dir()
 
         print(f"Settings loaded from: {os.path.abspath(self.settingsXML)}")
-
-    # Structural file/dir layout fields — always taken from the CURRENT
-    # settings.Inputs, never from a (possibly stale) trial_settings.xml. Only
-    # non-structural *values* (setup_dir, model_dir, start/end_time, alpha, beta,
-    # gamma, body_mass, time_range, ...) are allowed to persist per-trial.
-    _LAYOUT_FIELDS = (
-        'c3d', 'markers', 'markerset', 'grf_mot', 'setup_grf', 'emg', 'analog',
-        'setup_ik', 'ik', 'model_markers', 'setup_id', 'id', 'setup_ma', 'ma',
-        'actuators_so', 'setup_so', 'so_forces', 'so_activations', 'jra_forces',
-        'setup_jra', 'jra', 'emg_filtered_normalised',
-        'ceinms_input_data', 'ceinms_exe_cfg', 'ceinms_exe_setup', 'ceinms_optimise_setup',
-        'ceinms_optimise_cfg', 'ceinms_exe_dir', 'ceinms_optimisation_dir',
-        'setup_jra_ceinms', 'jra_ceinms',
-        'ceinms_uncalibrated_model', 'ceinms_calibrated_model', 'ceinms_calibration_cfg',
-        'ceinms_calibration_setup', 'ceinms_excitation_generator', 'ceinms_calibration_dir',
-    )
 
     def _apply_inputs_layout(self):
         """Force the structural file/dir paths to match the current settings.Inputs
@@ -3563,9 +3610,9 @@ class Analyse(_u.settings.Inputs):
 
     def plot_ik(self, columns_to_plot='all'):
         os.chdir(self.path)
-        self.joint_angles = _u.load_any_data_file(self.ik)
+        ik_df = _u.load_any_data_file(self.ik)
 
-        cols = list(self.joint_angles.columns)
+        cols = list(ik_df.columns)
         if 'time' in cols:
             cols.remove('time')
         if columns_to_plot != 'all':
@@ -3589,12 +3636,12 @@ class Analyse(_u.settings.Inputs):
         fig, axes = self.plot_create_subplot(len(order))
         fig.suptitle("Inverse Kinematics Joint Angles", fontsize=16)
         side_style = {'r': ('tab:blue', 'right'), 'l': ('tab:red', 'left'), 'none': ('black', None)}
-        t = self.joint_angles['time']
+        t = ik_df['time']
         for i, base in enumerate(order):
             ax = axes[i]
             for side, colname in groups[base].items():
                 color, lab = side_style.get(side, ('black', None))
-                ax.plot(t, self.joint_angles[colname], color=color, label=lab)
+                ax.plot(t, ik_df[colname], color=color, label=lab)
             ax.set_title(base)
             ax.set_xlabel("Time")
             ax.set_ylabel("Angle (degrees)")
@@ -3624,9 +3671,9 @@ class Analyse(_u.settings.Inputs):
         return name, None
 
     def plot_id(self, columns_to_plot='all'):
-        self.inverse_dynamics = _u.load_any_data_file(self.id)
+        id_df = _u.load_any_data_file(self.id)
 
-        cols = list(self.inverse_dynamics.columns)
+        cols = list(id_df.columns)
         if 'time' in cols:
             cols.remove('time')
         if columns_to_plot != 'all':
@@ -3688,14 +3735,14 @@ class Analyse(_u.settings.Inputs):
                 axgrid[r][c].axis('off')      # hide unused cells
 
         side_style = {'r': ('tab:blue', 'right'), 'l': ('tab:red', 'left'), 'none': ('black', None)}
-        t = self.inverse_dynamics['time']
+        t = id_df['time']
         for r, jname in enumerate(row_joints):
             for c, base in enumerate(joint_bases[jname]):
                 ax = axgrid[r][c]
                 ax.axis('on')
                 for side, colname in groups[base].items():
                     color, lab = side_style.get(side, ('black', None))
-                    ax.plot(t, self.inverse_dynamics[colname], color=color, label=lab)
+                    ax.plot(t, id_df[colname], color=color, label=lab)
                 ax.set_title(base)
                 ax.set_xlabel("Time")
                 ax.set_ylabel("Moment (Nm)" if not base.endswith('_force') else "Force (N)")
@@ -3704,7 +3751,7 @@ class Analyse(_u.settings.Inputs):
                 # Pelvis residual forces: second axis = % of instantaneous |GRF|.
                 if _stem(base).startswith('pelvis_t') and base.endswith('_force') and _grf_mag is not None:
                     _col = next(iter(groups[base].values()))
-                    _f = pd.to_numeric(self.inverse_dynamics[_col], errors='coerce').values
+                    _f = pd.to_numeric(id_df[_col], errors='coerce').values
                     _gm = np.interp(t.values, _grf_t, _grf_mag)
                     with np.errstate(divide='ignore', invalid='ignore'):
                         _pct = np.where(np.abs(_gm) > 1e-6, 100.0 * _f / _gm, np.nan)
