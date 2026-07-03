@@ -101,6 +101,21 @@ my_project/
 
 Session-level CEINMS calibration lives in `simulations/<Subject>/<Session>/ceinms_calibration/`.
 
+**Trial layout & attribute names.** The canonical folder layout is owned by the
+package (`bioscout.layout.Inputs`); a project only needs its own `Inputs` in
+`settings.py` if it wants to *override* the default paths (`Analyse` falls back
+to the package layout otherwise). On an `Analyse`/trial object the terse layout
+fields have readable aliases (read/write proxies onto the same value):
+
+| alias | field | | alias | field |
+|---|---|---|---|---|
+| `model_path` | `model_dir` | | `grf` | `grf_mot` |
+| `joint_angles` | `ik` | | `joint_reaction_so` | `jra` |
+| `inverse_dynamics` | `id` | | `joint_reaction_ceinms` | `jra_ceinms` |
+| `static_optimisation_forces` | `so_forces` | | `static_optimisation_activations` | `so_activations` |
+
+The short names remain the canonical keys serialised into `trial_settings.xml`.
+
 ---
 
 ## Configuring a project — `settings.py`

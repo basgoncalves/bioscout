@@ -12,10 +12,20 @@ the settings-schema version (separate from the bioscout package version).
 import os
 from pathlib import Path
 
+
+# The canonical trial layout now lives in bioscout.layout (a standalone module
+# with no heavy deps), so it is the single source of truth and importing it is
+# cycle-free. Re-exported here for back-compat: existing code and projects that
+# reference ``settings.Inputs`` keep working unchanged. A project only needs to
+# define its own ``Inputs`` if it wants to OVERRIDE the default folder layout.
+from bioscout.layout import Inputs, Layout   # noqa: F401
+
+
 # Guarded: this BUNDLED template is exec'd by bioscout.utils.settings DURING
 # bioscout's own import, so a bare top-level import of bioscout.utils.* would be
-# circular. The try/except lets it load; a real project's own settings.py
-# (loaded after bioscout is ready) imports these directly without guarding.
+# circular (utils.settings is not assigned yet). The try/except lets it load; a
+# real project's own settings.py (loaded after bioscout is ready) imports these
+# directly without needing the guard.
 try:
     from bioscout.utils.analysis import Subject, build_model_config, select_subjects, sessions_from_subjects
     from bioscout.utils.shared import trial_type as _trial_type
@@ -26,20 +36,12 @@ except Exception:
     def sessions_from_subjects(*a, **k): return {}
     def _trial_type(name, *a, **k): return name
 
-__version__ = "1.2.9"
+__version__ = "1.2.10"
 
-# ---------------------------------------------------------------------------
-# Run flags — read by `python -m bioscout -b settings.py` (bioscout.pipeline).
-#   RUN_PIPELINE : rebuild inputs from c3d + IK/ID/MA/SO/JRA + CEINMS per session
-#   RUN_SUMMARY  : build the results/manuscript summary (summarize_results.py)
-#   RUN_SCALING  : (optional) re-scale models before the pipeline
-#   RUN_CEINMS   : include the CEINMS stage in the pipeline (default True)
-# ---------------------------------------------------------------------------
-RUN_PIPELINE = True
-RUN_SUMMARY  = True
-RUN_SCALING  = False
-RUN_CEINMS   = True
-
+RUN_PIPELINE = True    # run the full pipeline (IK + ID + SO + MA + CEINMS) for each trial
+RUN_SUMMARY  = True    # generate summary figures + metrics CSVs
+RUN_SCALING  = False   # reuse existing scaled models (no re-scaling)
+RUN_CEINMS   = True    # run CEINMS (calibration + execution) for each trial
 
 class BatchSettings:
     """All project + batch-analysis configuration."""
@@ -53,25 +55,28 @@ class BatchSettings:
     LOG_DIR         = PROJECT_ROOT / "logs"
 
     # ---- session & trials ------------------------------------------------
+    # SESSION is just the default session-folder name applied to each Subject
+    # below (so you don't repeat the date on every one). The dict the pipeline
+    # actually runs is `sessions` (built from SUBJECTS further down).
     SESSION      = "25_03_31"
-    session_list = [SESSION]
     trial_list   = ["Walking_02", "Squat_BW_01", "Squat_35kg_01"]
     TRIAL_TYPE_PATTERN = r"(.+?)_(\d+)$"
 
     # ---- subjects --------------------------------------------------------
     # Curated metadata; choose which to process with RUN_/SKIP_ (names or indices).
+    # `[] if Subject is None` keeps the guarded template exec (above) from failing.
     ALL_SUBJECTS = [] if Subject is None else [
         Subject("Athlete_03_Cateli",     label="Scaled (Cateli)",     session=SESSION,
-                model_so="scaled_opt_N10_increased_3.00.osim", model_ceinms="scaled_opt_N10.osim",
+                model_so="scaled_opt_N10_muscles_copied.00.osim", model_ceinms="scaled_opt_N10.osim",
                 setup_folder="Purzel",     color="green",  group="generic"),
         Subject("Athlete_03_Lernagopal", label="Scaled (Lernagopal)", session=SESSION,
-                model_so="scaled_89_opt_N10_increased_3.00.osim", model_ceinms="scaled_89_opt_N10.osim",
+                model_so="scaled_89_opt_N10_mvicx3.00.osim", model_ceinms="scaled_89_opt_N10.osim",
                 setup_folder="Lernagopal", color="blue",   group="generic"),
         Subject("Athlete_03_GPK",        label="Scaled (GPK)",        session=SESSION,
-                model_so="scaled_increased_3.00.osim", model_ceinms="scaled.osim",
+                model_so="scaled_mvicx3.00.osim", model_ceinms="scaled.osim",
                 setup_folder="GPK",        color="red",    group="generic"),
         Subject("Athlete_03_GPK_MRI",    label="MRI (GPK)",           session=SESSION,
-                model_so="GPK_MRI_scaled_increased_3.00.osim", model_ceinms="GPK_MRI_scaled.osim",
+                model_so="GPK_MRI_scaled_mvicx3.00.osim", model_ceinms="GPK_MRI_scaled.osim",
                 setup_folder="GPK",        color="purple", group="MRI"),
     ]
     RUN_SUBJECTS  = None      # None/[] = all; e.g. ["Athlete_03_GPK"] or [2, 3]
@@ -108,6 +113,14 @@ class BatchSettings:
         "R Triceps Surae":    ["soleus_r", "gaslat_r", "gasmed_r"],
     }
 
+    # ---- literature JCF overlay styling (plot_jra_comparison resultant) ---
+    # Literature contact-force curves drawn on the |resultant| panels. Sources
+    # with a variance band render as a shaded band; sources with only a mean
+    # curve render as a dashed reference line. Tune readability here.
+    literature_band_alpha = 0.18   # opacity of the shaded uncertainty band (0-1)
+    literature_line_alpha = 0.60   # opacity of the dashed reference lines (0-1)
+    literature_line_width = 1.8    # width of the dashed reference lines
+
     # Time-normalise (downsample) exported inputs/results to this many frames.
     # 0 = native sampling. ~100 is near-lossless for kinematics/moments.
     normalise_inputs = 100
@@ -118,8 +131,7 @@ class BatchSettings:
     markerset = os.path.join(SETUP_DIR, "markers_FAIS.xml")
     trials_to_skip: list = []
     trials_to_run:  list = []
-    auto_create_dirs = True
-    replace_existing = True
+
     dof_list = [
         "hip_flexion_l", "hip_flexion_r", "hip_adduction_l", "hip_adduction_r",
         "hip_rotation_l", "hip_rotation_r", "knee_angle_l", "knee_angle_r",
@@ -130,17 +142,22 @@ class BatchSettings:
         "femur_r": 1.0, "tibia_r": 1.0, "talus_r": 1.0, "calcn_r": 2.0, "toes_r": 2.0,
         "femur_l": 1.0, "tibia_l": 1.0, "talus_l": 1.0, "calcn_l": 2.0, "toes_l": 2.0,
     }
+    # Keys MUST match the EMG column names exported to emg.mot from the C3D
+    # (channels EMG01-12 were labelled at capture; EMG13-16 came through unnamed
+    # and are unused). Muscle groupings preserved from the original design.
     emg_muscle_mapping = {
-        "EMG_Channels_EMG02_L_gastro_med": ["fdl_l", "fhl_l", "gasmed_l", "gaslat_l", "perbrev_l", "perlong_l", "soleus_l", "tibpost_l"],
-        "EMG_Channels_EMG05_L_rect_fem":   ["recfem_l", "sart_l", "tfl_l"],
-        "EMG_Channels_EMG06_L_vast_med":   ["vaslat_l", "vasmed_l", "vasint_l"],
-        "EMG_Channels_EMG07_L_semitend":   ["bflh_l", "bfsh_l", "semimem_l", "semiten_l"],
-        "EMG_Channels_EMG08_L_glut_med":   ["glmed1_l", "glmed2_l", "glmed3_l"],
-        "EMG_Channels_EMG10_R_gastro_med": ["fdl_r", "fhl_r", "gasmed_r", "gaslat_r", "perbrev_r", "perlong_r", "soleus_r", "tibpost_r"],
-        "EMG_Channels_EMG13_R_rect_fem":   ["recfem_r", "sart_r", "tfl_r"],
-        "EMG_Channels_EMG14_R_vast_med":   ["vaslat_r", "vasmed_r", "vasint_r"],
-        "EMG_Channels_EMG15_R_semitend":   ["bflh_r", "bfsh_r", "semimem_r", "semiten_r"],
-        "EMG_Channels_EMG16_R_glut_med":   ["glmed1_r", "glmed2_r", "glmed3_r"],
+        # left
+        "EMG_Channels_EMG01_vast_lat_l":  ["vaslat_l", "vasmed_l", "vasint_l"],
+        "EMG_Channels_EMG03_rect_fem_l":  ["recfem_l", "sart_l", "tfl_l"],
+        "EMG_Channels_EMG05_bic_fem_l":   ["bflh_l", "bfsh_l", "semimem_l", "semiten_l"],
+        "EMG_Channels_EMG07_glut_l":      ["glmed1_l", "glmed2_l", "glmed3_l"],
+        "EMG_Channels_EMG09_gast_med_l":  ["fdl_l", "fhl_l", "gasmed_l", "gaslat_l", "perbrev_l", "perlong_l", "soleus_l", "tibpost_l"],
+        # right
+        "EMG_Channels_EMG02_vast_lat_r":  ["vaslat_r", "vasmed_r", "vasint_r"],
+        "EMG_Channels_EMG04_rect_fem_r":  ["recfem_r", "sart_r", "tfl_r"],
+        "EMG_Channels_EMG06_bic_fem_r":   ["bflh_r", "bfsh_r", "semimem_r", "semiten_r"],
+        "EMG_Channels_EMG08_glut_r":      ["glmed1_r", "glmed2_r", "glmed3_r"],
+        "EMG_Channels_EMG10_gast_med_r":  ["fdl_r", "fhl_r", "gasmed_r", "gaslat_r", "perbrev_r", "perlong_r", "soleus_r", "tibpost_r"],
     }
     emg_label_default = "Voltage"
     emg_lowpass_default = "500"
@@ -161,10 +178,13 @@ class BatchSettings:
     c3d_settings_col_weight = 7
     c3d_emg_channels_height = 40
     c3d_markers_height = 40
+
+    auto_create_dirs = True
+    replace_existing = True
     enable_c3d_export = True
     enable_scale_model = True
     enable_muscle_scaling = False
-    muscle_force_factor = 3
+    muscle_force_factor = 20
     enable_inverse_kinematics = True
     enable_inverse_dynamics = True
     enable_static_optimization = True
@@ -204,7 +224,7 @@ class BatchSettings:
 class CEINMSSettings:
     enable_calibration = True
     enable_execution   = True
-    calibration_trial_names = ["Walking_02", "Squat_BW_01"]
+    calibration_trial_names = ["Walking_02"]
     calibration_type = "hybrid"
     tendon_type = "elastic"
     learning_rate = 0.02
@@ -241,6 +261,40 @@ class CEINMSSettings:
 
 
 class SummarySettings:
+    """Configuration for the results summary (bioscout.summarize_results())."""
+
+    # ---- what to summarise -----------------------------------------------
+    # Reference model (name or label) that others are compared against (RMSE/R2).
+    reference_model = "Athlete_03_Cateli"
+    algorithms      = ["SO", "CEINMS"]
+    # Extra trials to include on top of BatchSettings.trial_list (if present on disk).
+    extra_trials    = ["Squat_35kg_02", "Squat_BW_02", "Walking_03"]
+    npts            = 101            # time-normalisation points for every curve
+    joints          = ["hip", "knee", "ankle"]
+
+    # ---- output ----------------------------------------------------------
+    output_subdir   = "manuscript"   # under PROJECT_ROOT; figures go in <subdir>/figures
+    style           = "minimal"      # "minimal" | "poster" | "journal"
+    dpi             = 200
+    export_csv      = True           # write metrics_long.csv + metrics_wide.csv for JASP
+
+    # ---- which figures to build ------------------------------------------
+    figures = {
+        "marker_errors":   True,
+        "kin_mom":         True,   # 02 — kinematics + moments (+ R2/RMSE text boxes)
+        "moment_arms":     True,   # 02b
+        "muscle_dynamics": True,   # 04 — activations(+EMG bg)/lengths/forces + EMG R2/RMSE
+        "jrf":             True,   # 05b — joint reaction force components
+        "poster":          True,   # 05 — catchy summary + hypothesis verdict
+    }
+    emg_background   = True         # draw EMG as a grey filled background on activations
+    annotate_stats   = True         # R2/RMSE text boxes on kin/mom + muscle figures
+
+    # ---- hypothesis (stated, and answered from the data in the poster) ---
+    hypothesis = ("Bone geometry (MRI) DECREASES muscle & joint forces; "
+                  "measured coordination (CEINMS) INCREASES muscle & joint forces.")
+
+    # ---- styling ---------------------------------------------------------
     combine_legs = True
     left_color = "tab:red"
     right_color = "tab:blue"
@@ -279,60 +333,6 @@ class RecordingSettings:
     DEFAULT_OSIM_MODEL = "GPK_generic"
     DEFAULT_VIDEO_ANALYSIS_MODEL = "GPK_generic"
     DEFAULT_POSE_MAX_DELTA_PX = 50
-
-
-class Inputs:
-    def __init__(self, parentdir=None):
-        self._parentdir = parentdir
-        self.setup_dir = ""
-        self.model_dir = ""
-        self.start_time = "0.0000"
-        self.end_time = "1.0000"
-        self.c3d = "c3dfile.c3d"
-        self.emg = "emg.mot"
-        self.emg_filtered_normalised = "emg_filtered_normalised.mot"
-        self.grf_mot = "grf.mot"
-        self.markerset = "markers_FAIS.xml"
-        self.markers = "marker_experimental.trc"
-        self.events = "events.csv"
-        self.setup_ik = "setup_IK.xml"
-        self.setup_grf = "GRF.xml"
-        self.setup_id = "setup_ID.xml"
-        self.setup_ma = "setup_MA.xml"
-        self.actuators_so = "actuators_so.xml"
-        self.setup_so = "setup_SO.xml"
-        self.jra_forces = "SO_StaticOptimization_force.sto"
-        self.setup_jra = "setup_JRA.xml"
-        self.ceinms_excitations = self.emg_filtered_normalised
-        self.ceinms_uncalibrated_model = os.path.join("..", "subjectUncalibrated.xml")
-        self.ceinms_calibrated_model = os.path.join("..", "subjectCalibrated.xml")
-        self.ceinms_calibration_cfg = os.path.join("..", "calibrationCfg.xml")
-        self.ceinms_calibration_setup = os.path.join("..", "calibrationSetup.xml")
-        self.ceinms_input_data = "inputData.xml"
-        self.ceinms_excitation_generator = os.path.join("..", "excitationGenerator.xml")
-        self.ceinms_optimise_setup = "ceinms_setup_optimise.xml"
-        self.ceinms_optimise_cfg = "ceinms_cfg_optimise.xml"
-        self.alpha = "10"
-        self.beta = "1"
-        self.gamma = "1000"
-        self.ceinms_exe_cfg = "ceinms_cfg.xml"
-        self.ceinms_exe_setup = "ceinms_setup.xml"
-        self.ik = "joint_angles.mot"
-        self.model_markers = "_ik_model_marker_locations.sto"
-        self.id = "inverse_dynamics.sto"
-        self.ma = "muscleAnalysis"
-        self.so_forces = "SO_StaticOptimization_force.sto"
-        self.so_activations = "SO_StaticOptimization_activation.sto"
-        self.jra = "Analyse_JRA_ReactionLoads_SO.sto"
-        self.ceinms_calibration_dir = os.path.join("..", "calibrationOutput")
-        self.ceinms_optimisation_dir = "Optimised"
-        self.ceinms_exe_dir = "Execution"
-        self.ceinms_muscle_forces = os.path.join(f"{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}", "MuscleForces.sto")
-        self.ceinms_activations = os.path.join(f"{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}", "Activations.sto")
-        self.jra_ceinms = "Analyse_JRA_ReactionLoads_CEINMS.sto"
-
-    def to_dict(self):
-        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
 Config = BatchSettings

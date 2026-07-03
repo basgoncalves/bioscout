@@ -70,6 +70,15 @@ except Exception:
     osim = None
 
 from bioscout import utils as _u
+from bioscout.layout import Inputs as _CanonicalInputs
+
+
+def _inputs_cls():
+    """The trial-layout class to use: a project's ``settings.Inputs`` when it
+    defines one (to OVERRIDE the folder layout), else the canonical package
+    layout (``bioscout.layout.Inputs``). This is why a project no longer needs
+    to carry its own ``Inputs`` in settings.py unless it wants to change paths."""
+    return getattr(getattr(_u, 'settings', None), 'Inputs', None) or _CanonicalInputs
 
 
 # ===========================================================================
@@ -1194,7 +1203,7 @@ def _canonical_trial_type(s):
 # ===========================================================================
 # Analyse - per-trial OpenSim/CEINMS pipeline (moved here from utils/analyse.py).
 # ===========================================================================
-class Analyse(_u.settings.Inputs):
+class Analyse(_inputs_cls()):
     '''
     Contains paths from the user settings and functions to implement in the OpenSim/Ceinms analysis
     
@@ -1334,7 +1343,7 @@ class Analyse(_u.settings.Inputs):
         self.trial_type = self.get_trial_type()
         
         # add each Input to the trial settings
-        inputs = _u.settings.Inputs(parentdir=self.path)
+        inputs = _inputs_cls()(parentdir=self.path)
         for varInput in inputs.__dict__.items():
             filepath = os.path.join(self.path, varInput[1])
             if varInput[0] in ['model_dir', 'model_name']:
@@ -1507,7 +1516,7 @@ class Analyse(_u.settings.Inputs):
         elif os.path.exists(os.path.join(self.path, 'EMG_filtered_normalised.sto')):
             emg_name = 'EMG_filtered_normalised.sto'
         else:
-            emg_name = _u.settings.Inputs().emg
+            emg_name = _inputs_cls()().emg
 
         self.update_trial_attribute('emg', emg_name)
         self.update_trial_attribute('ceinms_excitations', emg_name)
@@ -1651,7 +1660,7 @@ class Analyse(_u.settings.Inputs):
         the inputs/ external_biomechanics/ muscle_analysis/ static_optimisation/
         ceinms/ structure. Non-layout values are left untouched."""
         try:
-            layout = _u.settings.Inputs(parentdir=self.path)
+            layout = _inputs_cls()(parentdir=self.path)
         except Exception as e:
             self._log(f"[Warning] could not apply Inputs layout: {e}")
             return
@@ -4317,8 +4326,8 @@ class Analyse(_u.settings.Inputs):
         os.chdir(self.path)
         from ..muscle_inspect import muscle_checker as _mc
 
-        model = os.path.abspath(self.model_dir)
-        motion = os.path.abspath(motion or self.ik)      # default: joint_angles.mot
+        model = os.path.abspath(self.model_path)          # alias of model_dir
+        motion = os.path.abspath(motion or self.joint_angles)   # alias of ik (joint_angles.mot)
         for _p in (model, motion):
             if not os.path.isfile(_p):
                 self._log(f'[muscle_inspect] not found: {_p}', terminal=True)
@@ -4834,7 +4843,7 @@ class Analyse(_u.settings.Inputs):
         _cfg_dir = os.path.dirname(os.path.abspath(os.path.join(self.path, self.ceinms_calibration_cfg)))
         inputPaths = []
         for trial_name in calibration_trial_names:
-            filepath = os.path.join(self.parentdir, trial_name, _u.settings.Inputs().ceinms_input_data)
+            filepath = os.path.join(self.parentdir, trial_name, _inputs_cls()().ceinms_input_data)
             inputPaths.append(os.path.relpath(filepath, _cfg_dir))
 
         _u.ceinms.create_calibrationCfg(osimModelPath=self.model_dir,
@@ -5078,7 +5087,7 @@ class Analyse(_u.settings.Inputs):
         # Collect all sibling trial directories that have input data
         allowed = getattr(_u.settings.CEINMSSettings, 'calibration_trial_names', None)
         calib_trials = []
-        input_data_name = _u.settings.Inputs().ceinms_input_data
+        input_data_name = _inputs_cls()().ceinms_input_data
         for entry in sorted(os.listdir(self.parentdir)):
             if allowed and entry not in allowed:
                 continue
