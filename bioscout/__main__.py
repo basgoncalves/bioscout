@@ -59,6 +59,36 @@ parser.add_argument('--add_subject', type=str, nargs='?', const='.', metavar='PR
                     help="Interactively add a subject to subjects.json in PROJECT_PATH (default: cwd)")
 parser.add_argument('--install', action='store_true',
                     help="Check dependencies and install missing ones (opensim via conda, others via pip)")
+parser.add_argument('--run_subject', nargs='?', const='__ALL__', default=None,
+                    metavar='SUBJECT_NAME',
+                    help="Run the full pipeline (IK->ID->MA->SO->JRA + CEINMS) for a subject, "
+                         "all sessions. Give SUBJECT_NAME, or omit the name to run every subject "
+                         "in settings. Combine with --session/--trial to restrict (comma-separated "
+                         "allowed) and --REPLACE to recompute existing outputs (default: skip done).")
+parser.add_argument('--REPLACE', '--replace', dest='replace', action='store_true',
+                    help="With --run_subject: recompute and overwrite existing outputs "
+                         "(default: skip trials/stages whose outputs already exist).")
+parser.add_argument('--session', type=str, default=None, metavar='SESSION_NAME',
+                    help="With --run_subject: restrict to this session folder name "
+                         "(comma-separated for several).")
+parser.add_argument('--export', '--c3d', dest='export', action='store_true',
+                    help="With --run_subject: (re)export inputs from c3d "
+                         "(markers/GRF/EMG + trial settings) and filter EMG before "
+                         "running IK/ID/MA/SO + CEINMS.")
+parser.add_argument('--reset', action='store_true',
+                    help="Strip trials back to inputs-only (keeps inputs/ + "
+                         "trial_settings.xml; timestamped backup made first). "
+                         "Scope with --run_subject/--session/--trial; with no scope "
+                         "resets the WHOLE simulations folder. Combine with "
+                         "--run_subject to reset-then-run (add --export to also "
+                         "regenerate inputs from the c3d).")
+parser.add_argument('--reset-dry-run', dest='reset_dry_run', action='store_true',
+                    help="With --reset (standalone): preview what would be removed/kept "
+                         "and backed up, without touching disk.")
+parser.add_argument('--reset-raw', dest='reset_raw', action='store_true',
+                    help="With --reset: also prune inside inputs/ down to just the raw "
+                         "C3D (c3dfile.c3d) + trial_settings.xml. Derived markers/GRF/EMG "
+                         "are regenerated on the next --export run.")
 parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SETTINGS_OR_PROJECT',
                     help="Build kinematics/kinetics summaries. Optionally pass a settings.py "
                          "or project path; defaults to ./settings.py then the package settings.")
@@ -66,8 +96,9 @@ parser.add_argument('-overall', '--overall', dest='overall', action='store_true'
                     help="With --summary: only (re)build the overall plots/metrics in <project>/summary")
 parser.add_argument('-s', '--subject', type=str, default=None, metavar='SUBJECT_ID',
                     help="With --summary: restrict to one subject (e.g. -s 012)")
-parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL_PATH',
-                    help="With --summary: build only this one trial folder (fast iteration)")
+parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL',
+                    help="With --summary: build only this one trial folder (fast iteration). "
+                         "With --run_subject: restrict to this trial name (comma-separated for several).")
 parser.add_argument('--shots', type=str, default=None, metavar='VIDEO',
                     help="Basketball shot analysis: count shots, per-shot kinematics (0-100%%), "
                          "assisted made/missed tagging, kinematics-only muscle forces")
@@ -131,19 +162,152 @@ from utils.logger import logger
 # so analysis logs don't accumulate inside the app install directory.
 if args.batch:
     try:
-        from settings import LOG_DIR as _PROJECT_LOG_DIR
-        logger.set_project_log_dir(_PROJECT_LOG_DIR)
+        from settings import BatchSettings as _BS_log
+        logger.set_project_log_dir(_BS_log.LOG_DIR)
     except Exception as _log_err:
         logger.warning(f"Could not redirect to project log dir: {_log_err}")
 
 
 # ---------------------------------------------------------------------------
+# --run_subject : full per-subject pipeline (IK->ID->MA->SO->JRA + CEINMS).
+# Dispatched HERE at module level, right after arg parsing, so it runs no matter
+# how main() is invoked at the bottom of the file. Output is teed to
+# <project>/logs/run_<subject>_<ts>.log.
+# ---------------------------------------------------------------------------
+if getattr(args, 'run_subject', None) is not None:
+    import bioscout as _bioscout
+    import datetime as _dt
+    _rs_project  = args.project or os.getcwd()
+    _rs_subject  = None if args.run_subject == '__ALL__' else args.run_subject
+    _rs_sessions = [s.strip() for s in args.session.split(',')] if args.session else None
+    _rs_trials   = [t.strip() for t in args.trial.split(',')] if args.trial else None
+    _rs_now      = _dt.datetime.now()
+    _rs_ts       = _rs_now.strftime('%Y-%m-%d %H:%M:%S')          # readable, for the heading
+    _rs_ldir     = os.path.join(_rs_project, 'logs')
+    os.makedirs(_rs_ldir, exist_ok=True)
+    # One naming scheme with the timestamp in the filename; heading says what ran.
+    _rs_logpath  = os.path.join(_rs_ldir, f"bioscout_{_rs_now:%Y%m%d_%H%M%S}.log")
+    print(f"[run_subject] project={_rs_project}  subject={_rs_subject or 'ALL'}  "
+          f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
+          f"replace={args.replace}", flush=True)
+    print(f"[run_subject] log -> {_rs_logpath}", flush=True)
+
+    class _RSTee:
+        def __init__(self, *streams): self.streams = streams
+        def write(self, d):
+            for s in self.streams:
+                try: s.write(d); s.flush()
+                except Exception: pass
+        def flush(self):
+            for s in self.streams:
+                try: s.flush()
+                except Exception: pass
+
+    _rs_out, _rs_err = sys.stdout, sys.stderr
+    _rs_fh = open(_rs_logpath, 'a', encoding='utf-8')   # append to the single log
+    try:
+        from bioscout.utils.shared import LOG_DISCLAIMER as _RS_DISCLAIMER
+    except Exception:
+        _RS_DISCLAIMER = ("DISCLAIMER: BioScout is research software provided \"as is\", "
+                          "without warranty. The user is responsible for correct usage "
+                          "and validating all results. See LICENSE.")
+    _rs_fh.write(
+        f"\n{'=' * 72}\n"
+        f"=== run_subject  subject={_rs_subject or 'ALL'}  "
+        f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
+        f"replace={args.replace}  export={args.export}   {_rs_ts}\n"
+        f"{_RS_DISCLAIMER}\n"
+        f"{'=' * 72}\n")
+    _rs_fh.flush()
+    sys.stdout = _RSTee(_rs_out, _rs_fh); sys.stderr = _RSTee(_rs_err, _rs_fh)
+    # Tell the auto-logger it's already on, so Project() (called by run_subject)
+    # writes into THIS file instead of opening a second log.
+    try:
+        import bioscout.utils.shared as _rs_sh
+        _rs_sh._LOG_STARTED, _rs_sh._LOG_HANDLE = True, _rs_fh
+    except Exception:
+        pass
+    print(f"[run_subject] {_rs_ts}  start", flush=True)
+    _rs_rc = 0
+    try:
+        _bioscout.pipeline.run_subject(
+            project_dir=_rs_project, subject=_rs_subject,
+            sessions=_rs_sessions, trials=_rs_trials, replace=args.replace,
+            export=args.export, reset=args.reset)
+    except Exception as _rs_e:
+        import traceback as _rs_tb
+        print(f"[run_subject] FAILED: {type(_rs_e).__name__}: {_rs_e}", flush=True)
+        _rs_tb.print_exc()
+        _rs_rc = 1
+    finally:
+        sys.stdout, sys.stderr = _rs_out, _rs_err
+        _rs_fh.close()
+        print(f"[run_subject] log written: {_rs_logpath}", flush=True)
+    sys.exit(_rs_rc)
+
+
+# ---------------------------------------------------------------------------
+# --reset (standalone) : strip trials back to inputs-only (timestamped backup).
+# Dispatched HERE at module level — same pattern as --run_subject above — so it
+# runs regardless of how the entry point is wired. When --reset is combined with
+# --run_subject, the block above handles it (reset-then-run) and exits before we
+# reach here, so this only fires for a reset with no pipeline run.
+# ---------------------------------------------------------------------------
+if getattr(args, 'reset', False) and getattr(args, 'run_subject', None) is None:
+    import bioscout as _bioscout_reset
+    _rst_project  = args.project or os.getcwd()
+    _rst_sessions = [s.strip() for s in args.session.split(',')] if args.session else None
+    _rst_trials   = [t.strip() for t in args.trial.split(',')]   if args.trial   else None
+    print(f"[reset] project={_rst_project}  sessions={_rst_sessions or 'ALL'}  "
+          f"trials={_rst_trials or 'ALL'}  dry_run={args.reset_dry_run}", flush=True)
+    _rst_rc = 0
+    try:
+        _bioscout_reset.pipeline.reset_simulations(
+            project_dir=_rst_project,
+            session=_rst_sessions, trials=_rst_trials,
+            raw_inputs=getattr(args, 'reset_raw', False),
+            dry_run=args.reset_dry_run)
+    except Exception as _rst_e:
+        import traceback as _rst_tb
+        print(f"[reset] FAILED: {type(_rst_e).__name__}: {_rst_e}", flush=True)
+        _rst_tb.print_exc()
+        _rst_rc = 1
+    sys.exit(_rst_rc)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Raw C3D files live in <session>/c3d/ (one file per trial, named <trial>.c3d).
+# Legacy sessions kept them loose at the session root; discovery falls back to
+# that so old projects keep working.
+C3D_DIRNAME = "c3d"
+
+
+def _session_c3d_dir(session_dir: Path) -> Path:
+    """Folder holding a session's raw C3D files: <session>/c3d/ when it exists
+    and holds .c3d files, otherwise the session root (legacy flat layout)."""
+    sub = session_dir / C3D_DIRNAME
+    if sub.is_dir() and any(sub.glob("*.c3d")):
+        return sub
+    return session_dir
+
+
+def _session_c3d_files(session_dir: Path) -> list:
+    """Sorted list of a session's raw C3D files (from <session>/c3d/ or root)."""
+    return sorted(_session_c3d_dir(session_dir).glob("*.c3d"))
+
+
 def _trial_subdir(c3d_path: Path) -> str:
-    """Return the trial subdirectory (a folder named after the trial stem)."""
+    """Return the trial subdirectory (a folder named after the trial stem).
+
+    Raw C3D may sit in <session>/c3d/; the trial's working folder belongs at the
+    session root (<session>/<trial>/), never inside the c3d/ folder.
+    """
     name = c3d_path.stem
     parent = c3d_path.parent
+    if parent.name == C3D_DIRNAME:
+        parent = parent.parent
     subdir = parent if parent.name == name else parent / name
     return str(subdir)
 
@@ -268,7 +432,7 @@ def _resolve_static_name(session_dir: Path, requested: Optional[str]) -> Optiona
     Return the actual static trial stem found in a session, or the requested
     name if no C3D match is found (so downstream errors are still clear).
     """
-    c3d = sorted(session_dir.glob('*.c3d'))
+    c3d = _session_c3d_files(session_dir)
     for f in c3d:
         if _is_static(f.stem, requested):
             return f.stem
@@ -462,11 +626,13 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
         # ------------------------------------------------------------------ #
         # DISCOVERY
         # ------------------------------------------------------------------ #
-        # Only look at C3D files directly in the session folder (not in trial subdirs,
-        # which may contain copies created by the export step).
-        c3d_files = sorted(session_dir.glob("*.c3d"))
+        # Raw C3D files come from <session>/c3d/ (one per trial, named <trial>.c3d),
+        # falling back to loose files at the session root for legacy layouts. Trial
+        # subdirs (which may hold export-time copies) are never scanned here.
+        c3d_files = _session_c3d_files(session_dir)
         if not c3d_files:
-            logger.warning(f"No C3D files found in {session_dir} — skipping")
+            logger.warning(f"No C3D files found in {session_dir} (looked in "
+                           f"{C3D_DIRNAME}/ and the session root) — skipping")
             return False
         logger.info(f"Found {len(c3d_files)} C3D file(s)")
 
@@ -510,10 +676,20 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
         # ------------------------------------------------------------------ #
         # PHASE 2: MODEL SCALING  (once per session, uses static TRC)
         # ------------------------------------------------------------------ #
+        # Generic/template model now lives on the Subject (per-subject scaling
+        # source), with a legacy fallback to BatchSettings.generic_model.
+        _subj = getattr(config, 'SUBJECTS_BY_NAME', {}).get(subject_name)
+        generic_model = (_subj.generic_model_path() if _subj else None) \
+            or getattr(config, 'generic_model', None)
+        if not generic_model:
+            raise RuntimeError(
+                f"No generic_model set for subject '{subject_name}'. Add "
+                f"generic_model=\"<template>.osim\" to this Subject in settings.py.")
+
         active_model = os.path.join(
-            os.path.dirname(config.generic_model), f"{subject_name}.osim")
+            os.path.dirname(generic_model), f"{subject_name}.osim")
         if not os.path.exists(active_model):
-            active_model = config.generic_model
+            active_model = generic_model
 
         if config.enable_scale_model:
             logger.info("-" * 70)
@@ -532,10 +708,10 @@ def _run_one_session(session_dir: Path, config, subject_name: str,
                     raise RuntimeError(f"Static TRC not found: {trc_file}")
 
                 scaler = ModelScaler(
-                    template_model_path=config.generic_model,
+                    template_model_path=generic_model,
                     trc_file=trc_file,
                     destination_dir=static_subdir,
-                    output_model_dir=os.path.dirname(config.generic_model),
+                    output_model_dir=os.path.dirname(generic_model),
                 )
                 scaler.output_model_filename = f"{subject_name}.osim"
                 active_model, _ = scaler.run_scale(
@@ -1043,10 +1219,82 @@ def run_load_report_mode(inputs=None) -> int:
     return 0
 
 
+def run_subject_mode() -> int:
+    """CLI wrapper for bioscout.pipeline.run_subject.
+
+    Driven by --run_subject [name] / --session / --trial / --REPLACE. Runs the
+    full per-subject pipeline (IK->ID->MA->SO->JRA + CEINMS) for all sessions,
+    teeing output to <project>/logs/run_<subject>_<ts>.log.
+    """
+    import datetime as _dt
+    import bioscout
+
+    project = args.project or os.getcwd()
+    subject = None if args.run_subject == '__ALL__' else args.run_subject
+    sessions = [s.strip() for s in args.session.split(',')] if args.session else None
+    trials = [t.strip() for t in args.trial.split(',')] if args.trial else None
+
+    ts = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+    ldir = os.path.join(project, 'logs')
+    os.makedirs(ldir, exist_ok=True)
+    logpath = os.path.join(ldir, f"run_{subject or 'all'}_{ts}.log")
+    print(f"[run_subject] project={project}  subject={subject or 'ALL'}  "
+          f"sessions={sessions or 'ALL'}  trials={trials or 'ALL'}  replace={args.replace}",
+          flush=True)
+    print(f"[run_subject] log -> {logpath}", flush=True)
+
+    class _Tee:
+        def __init__(self, *streams): self.streams = streams
+        def write(self, d):
+            for s in self.streams:
+                try: s.write(d); s.flush()
+                except Exception: pass
+        def flush(self):
+            for s in self.streams:
+                try: s.flush()
+                except Exception: pass
+
+    _out, _err = sys.stdout, sys.stderr
+    _fh = open(logpath, 'w', encoding='utf-8')
+    sys.stdout = _Tee(_out, _fh); sys.stderr = _Tee(_err, _fh)
+    print(f"[run_subject] {_dt.datetime.now():%Y-%m-%d %H:%M:%S}  project={project}  "
+          f"subject={subject or 'ALL'}  sessions={sessions or 'ALL'}  "
+          f"trials={trials or 'ALL'}  replace={args.replace}", flush=True)
+    try:
+        bioscout.pipeline.run_subject(
+            project_dir=project, subject=subject,
+            sessions=sessions, trials=trials, replace=args.replace,
+            export=args.export, reset=args.reset)
+        return 0
+    except Exception as e:
+        print(f"[run_subject] FAILED: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return 1
+    finally:
+        sys.stdout, sys.stderr = _out, _err
+        _fh.close()
+        print(f"[run_subject] log written: {logpath}", flush=True)
+
+
 def main() -> int:
     if args.install:
         from utils.dependency_installer import install_missing
         return 0 if install_missing(interactive=True) else 1
+    if args.reset and args.run_subject is None:
+        # Standalone reset (no pipeline run). Scope with --session/--trial;
+        # with neither, the whole simulations folder is reset. --run_subject
+        # combined with --reset is handled inside run_subject (reset-then-run).
+        import bioscout
+        _sessions = [s.strip() for s in args.session.split(',')] if args.session else None
+        _trials   = [t.strip() for t in args.trial.split(',')]   if args.trial   else None
+        bioscout.pipeline.reset_simulations(
+            project_dir=args.project or os.getcwd(),
+            session=_sessions, trials=_trials,
+            raw_inputs=getattr(args, 'reset_raw', False),
+            dry_run=args.reset_dry_run)
+        return 0
+    if args.run_subject is not None:
+        return run_subject_mode()
     if args.add_subject is not None:
         return run_add_subject_mode(args.add_subject)
     if args.shots:
@@ -1066,4 +1314,36 @@ def main() -> int:
                       min_gap_s=args.min_gap, n_points=args.n_points,
                       hoop_side=args.hoop_side, yolo_model=args.yolo_model, hoop=_hoop,
                       model_path=_model if os.path.exists(_model) else None)
+        return 0
+    if args.load_report is not None:
+        return run_load_report_mode(args.load_report)
+    if args.init is not None:
+        return run_init_mode(args.init)
+    if args.summary is not None:
+        import bioscout
+        _sum_project = args.summary or args.project or os.getcwd()
+        return 0 if bioscout.pipeline.run_summary(_sum_project) else 1
+    if args.batch:
+        # Video batch (JSON with a "videos" key) vs OpenSim pipeline batch (.py).
+        if _is_video_batch_settings(args.batch):
+            return 0 if run_video_batch_mode(args.batch) else 1
+        # Load the -b settings file, propagate it into the `settings` module so
+        # every downstream reader sees the chosen config, then dispatch via the
+        # project runner which honours RUN_PIPELINE / RUN_SUMMARY / RUN_SCALING /
+        # RUN_CEINMS flags declared at module scope in that file.
+        _load_settings_from_path(args.batch)
+        _flags_mod = _load_settings_module(args.batch)
+        if _flags_mod is None:
+            logger.error(f"Could not load batch settings file: {args.batch}")
+            return 1
+        import bioscout
+        _project = args.project or os.getcwd()
+        ok = bioscout.pipeline.run_project(_project, _flags_mod)
+        return 0 if ok else 1
+    # Default: launch the GUI.
+    return run_gui_mode()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
   
