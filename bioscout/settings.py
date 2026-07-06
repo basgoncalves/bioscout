@@ -1,10 +1,11 @@
 """
 Project settings — powerlifting squat study.
 
-Everything lives inside classes (no loose module-level variables or functions):
+Configuration lives inside classes:
   * BatchSettings  — paths, subjects, trials, analysis config + batch/IK/GRF/EMG.
-  * CEINMSSettings / SummarySettings / UISettings / RecordingSettings / Inputs.
-bioscout reads it all via ``settings.BatchSettings.X`` etc.
+  * CEINMSSettings / SummarySettings / PlottingSettings / UISettings / RecordingSettings.
+bioscout reads it all via ``settings.BatchSettings.X`` etc. (paths/session may also
+be declared as module-level globals; bioscout falls back to those).
 
 KEEP THIS FILE — bioscout.Project()/init_project() loads it. ``__version__`` is
 the settings-schema version (separate from the bioscout package version).
@@ -13,12 +14,12 @@ import os
 from pathlib import Path
 
 
-# The canonical trial layout now lives in bioscout.layout (a standalone module
-# with no heavy deps), so it is the single source of truth and importing it is
-# cycle-free. Re-exported here for back-compat: existing code and projects that
-# reference ``settings.Inputs`` keep working unchanged. A project only needs to
-# define its own ``Inputs`` if it wants to OVERRIDE the default folder layout.
-from bioscout.layout import Inputs, Layout   # noqa: F401
+# NOTE (bioscout 2.0): there is no longer an ``Inputs`` class. The canonical
+# trial file/folder layout is owned by ``Analyse`` itself (see
+# ``bioscout.utils.analysis._default_layout_paths``). A project only needs to
+# define its own ``Inputs`` class HERE if it wants to OVERRIDE the default
+# layout — Analyse will honour it automatically (back-compat). Otherwise nothing
+# layout-related is required in settings.py.
 
 
 # Guarded: this BUNDLED template is exec'd by bioscout.utils.settings DURING
@@ -36,50 +37,80 @@ except Exception:
     def sessions_from_subjects(*a, **k): return {}
     def _trial_type(name, *a, **k): return name
 
-__version__ = "1.2.10"
+__version__ = "2.0.0"
 
 RUN_PIPELINE = True    # run the full pipeline (IK + ID + SO + MA + CEINMS) for each trial
 RUN_SUMMARY  = True    # generate summary figures + metrics CSVs
 RUN_SCALING  = False   # reuse existing scaled models (no re-scaling)
 RUN_CEINMS   = True    # run CEINMS (calibration + execution) for each trial
 
+# Console/log verbosity: "detailed" (all), "minimal" (headers + success/skip/errors),
+# or "quiet" (errors + final summary only).
+LOG_TYPE = "detailed"
+
+# ---- project paths & session (GLOBAL — single source of truth) -------------
+# bioscout reads these as module-level settings.<NAME> (with a BatchSettings
+# fallback), so they live here rather than inside BatchSettings.
+PROJECT_NAME    = "powerlifting_squat"
+PROJECT_ROOT    = Path(__file__).resolve().parent
+MODELS_DIR      = PROJECT_ROOT / "models"
+SETUP_DIR       = PROJECT_ROOT / "setupFiles"
+SIMULATIONS_DIR = PROJECT_ROOT / "simulations"
+RESULTS_DIR     = PROJECT_ROOT / "results"
+LOG_DIR         = PROJECT_ROOT / "logs"
+SESSION         = "25_03_31"
+
+
+class Subjects:
+    """Registry of subjects (model variants). Edit ``ALL``; BatchSettings points
+    here via ``ALL_SUBJECTS``. ``[] if Subject is None`` keeps the guarded template
+    exec (above) from failing during bioscout's own import."""
+    ALL = [] if Subject is None else [
+        Subject("Athlete_03_Cateli",     label="Scaled (Cateli)",     session=SESSION,
+                model_so="scaled_opt_N10_muscles_copied.00.osim", model_ceinms="scaled_opt_N10.osim",
+                generic_model="Rajagopal2015_FAI_os4.osim",
+                setup_folder="Purzel",     color="green",  group="generic"),
+        Subject("Athlete_03_Lernagopal", label="Scaled (Lernagopal)", session=SESSION,
+                model_so="scaled_89_opt_N10_mvicx3.00.osim", model_ceinms="scaled_89_opt_N10.osim",
+                generic_model="Rajagopal2015_FAI_os4.osim",
+                setup_folder="Lernagopal", color="blue",   group="generic"),
+        Subject("Athlete_03_GPK",        label="Scaled (GPK)",        session=SESSION,
+                model_so="scaled_mvicx3.00.osim", model_ceinms="scaled.osim",
+                generic_model="GPK_generic_modWO.osim",
+                setup_folder="GPK",        color="red",    group="generic"),
+        Subject("Athlete_03_GPK_MRI",    label="MRI (GPK)",           session=SESSION,
+                model_so="GPK_MRI_scaled_mvicx3.00.osim", model_ceinms="GPK_MRI_scaled.osim",
+                generic_model="GPK_generic_modWO_tps.osim",
+                setup_folder="GPK",        color="purple", group="MRI"),
+    ]
+
+    @classmethod
+    def by_name(cls, name):
+        return next((s for s in cls.ALL if getattr(s, "name", None) == name), None)
+
+    @classmethod
+    def names(cls):
+        return [s.name for s in cls.ALL]
+
+    @classmethod
+    def add(cls, subject):
+        cls.ALL.append(subject)
+
+
 class BatchSettings:
     """All project + batch-analysis configuration."""
 
-    # ---- paths -----------------------------------------------------------
-    PROJECT_ROOT    = Path(__file__).resolve().parent
-    PROJECT_NAME    = "powerlifting_squat"
-    MODELS_DIR      = PROJECT_ROOT / "models"
-    SETUP_DIR       = PROJECT_ROOT / "setupFiles"
-    SIMULATIONS_DIR = PROJECT_ROOT / "simulations"
-    LOG_DIR         = PROJECT_ROOT / "logs"
-
     # ---- session & trials ------------------------------------------------
-    # SESSION is just the default session-folder name applied to each Subject
-    # below (so you don't repeat the date on every one). The dict the pipeline
-    # actually runs is `sessions` (built from SUBJECTS further down).
-    SESSION      = "25_03_31"
+    # Paths + SESSION are module-level globals above (single source of truth);
+    # bioscout resolves them via settings.<NAME>. Referenced unqualified below.
+    SESSION      = SESSION
     trial_list   = ["Walking_02", "Squat_BW_01", "Squat_35kg_01"]
     TRIAL_TYPE_PATTERN = r"(.+?)_(\d+)$"
 
     # ---- subjects --------------------------------------------------------
-    # Curated metadata; choose which to process with RUN_/SKIP_ (names or indices).
-    # `[] if Subject is None` keeps the guarded template exec (above) from failing.
-    ALL_SUBJECTS = [] if Subject is None else [
-        Subject("Athlete_03_Cateli",     label="Scaled (Cateli)",     session=SESSION,
-                model_so="scaled_opt_N10_muscles_copied.00.osim", model_ceinms="scaled_opt_N10.osim",
-                setup_folder="Purzel",     color="green",  group="generic"),
-        Subject("Athlete_03_Lernagopal", label="Scaled (Lernagopal)", session=SESSION,
-                model_so="scaled_89_opt_N10_mvicx3.00.osim", model_ceinms="scaled_89_opt_N10.osim",
-                setup_folder="Lernagopal", color="blue",   group="generic"),
-        Subject("Athlete_03_GPK",        label="Scaled (GPK)",        session=SESSION,
-                model_so="scaled_mvicx3.00.osim", model_ceinms="scaled.osim",
-                setup_folder="GPK",        color="red",    group="generic"),
-        Subject("Athlete_03_GPK_MRI",    label="MRI (GPK)",           session=SESSION,
-                model_so="GPK_MRI_scaled_mvicx3.00.osim", model_ceinms="GPK_MRI_scaled.osim",
-                setup_folder="GPK",        color="purple", group="MRI"),
-    ]
-    RUN_SUBJECTS  = None      # None/[] = all; e.g. ["Athlete_03_GPK"] or [2, 3]
+    # Subject metadata lives in the `Subjects` registry above; edit it there.
+    ALL_SUBJECTS = Subjects.ALL
+    RUN_SUBJECTS  = None      # 'all' or None/[] = all; e.g. ["Athlete_03_GPK"] or [2, 3]
     SKIP_SUBJECTS = []        # e.g. ["Athlete_03_Cateli"] or [0]
 
     SUBJECTS         = select_subjects(ALL_SUBJECTS, RUN_SUBJECTS, SKIP_SUBJECTS)
@@ -190,6 +221,11 @@ class BatchSettings:
     enable_static_optimization = True
     enable_muscle_analysis = True
     enable_emg_normalise = True
+
+    # Model constraint-assembly tolerance when loading models (IK/ID/MA/SO/JRA).
+    # Coupled-knee models miss OpenSim's ultra-tight default and warn "Unable to
+    # achieve required assembly error tolerance"; 1e-8 is negligible and silences it.
+    assembly_accuracy = 1e-8
 
     # ---- helpers (as static methods, not loose functions) ----------------
     @staticmethod
@@ -307,6 +343,28 @@ class SummarySettings:
     joint_muscles = {}
 
 
+class PlottingSettings:
+    """Central plot styling read by bioscout.utils.plot_style / side_color /
+    fig_size. Anything omitted here falls back to utils.DEFAULT_PLOT_STYLE.
+
+    Colours may be (R, G, B) 0-255 tuples, 0-1 tuples, hex '#2E86AB', or named
+    'tab:blue' — bioscout auto-detects. Colour picker: https://share.google/Va9O7umqecaS1dthG
+    """
+    dpi        = 200
+    font_size  = 10
+    fig_scale  = 1.0                 # global figure-size multiplier
+    scale_per_subplot = (2, 3)       # (row_mult, col_mult) inches-per-subplot
+
+    sources = {                      # source -> {color, ls, lw}   (R, G, B) 0-255
+        "inverse_dynamics":    {"color": (0,   0,   0),   "ls": "-", "lw": 2.0},   # black
+        "ceinms":              {"color": (31,  119, 180), "ls": "-", "lw": 1.8},   # blue
+        "static_optimisation": {"color": (214, 39,  40),  "ls": "-", "lw": 1.8},   # red
+        "emg":                 {"color": (128, 128, 128), "ls": "-", "lw": 1.5},   # grey
+        "activation":          {"color": (89,  89,  89),  "ls": "-", "lw": 1.2},   # dark grey
+        "muscle_force":        {"color": (214, 39,  40),  "ls": "-", "lw": 1.2},   # red
+    }
+
+
 class UISettings:
     FONT_SIZE_SMALL = 20; FONT_SIZE_NORMAL = 24; FONT_SIZE_LARGE = 28; FONT_SIZE_TITLE = 32
     FONT_FAMILY = "Segoe UI"
@@ -326,7 +384,7 @@ class RecordingSettings:
     bitrate = "5000k"
     auto_name = True
     output_format = "mp4"
-    OUTPUT_DIR_TEMPLATE = str(BatchSettings.PROJECT_ROOT / "recordings")
+    OUTPUT_DIR_TEMPLATE = str(PROJECT_ROOT / "recordings")
     DEFAULT_DURATION_SECONDS = 5
     DEFAULT_VIDEO_SOURCE = "webcam"
     IP_CAMERA_ADDRESS = "http://192.168.1.100:8080/video"

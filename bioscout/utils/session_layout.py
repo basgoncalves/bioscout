@@ -20,14 +20,31 @@ results — no duplication.
 from __future__ import annotations
 
 import os
+import shutil
+import time
 
 from .session_yaml import read_session
+
+
+def _rm_empty_inputs(trial_path):
+    """Remove an empty ``inputs/`` folder left in an iteration trial dir (raw
+    inputs live in shared experimental/ now, so it should never hold anything)."""
+    p = os.path.join(trial_path, "inputs")
+    try:
+        if os.path.isdir(p) and not os.listdir(p):
+            os.rmdir(p)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # path resolver
 # ---------------------------------------------------------------------------
+# Which experimental subfolder the runners read raw inputs from. Normally
+# "experimental"; a downsample run points this at e.g. "experimental_ds10".
+_EXP_SUBDIR = "experimental"
+
 def experimental_dir(session_dir, trial):
-    return os.path.join(session_dir, "experimental", trial)
+    return os.path.join(session_dir, _EXP_SUBDIR, trial)
 
 def c3d_path(session_dir, trial):
     return os.path.join(session_dir, "c3dfiles", f"{trial}.c3d")
@@ -115,6 +132,123 @@ def first_frames_range(exp_dir, frames):
     return None
 
 
+def full_time_range(exp_dir):
+    """Return ``[t0, t_last]`` — the FULL trial window from its time column.
+    Used to override any stale (e.g. ghost-run) window persisted in
+    trial_settings.xml when running full length."""
+    import pandas as _pd
+    from bioscout import utils as _u
+    for fn in ("grf.mot", "marker_experimental.trc", "emg_filtered_normalised.mot"):
+        fp = os.path.join(exp_dir, fn)
+        if not os.path.exists(fp):
+            continue
+        try:
+            df = _u.load_any_data_file(fp)
+            tcol = next((c for c in df.columns if c.lower() == "time"), None)
+            if tcol is None:
+                continue
+            tv = _pd.to_numeric(df[tcol], errors="coerce").dropna().to_numpy()
+            if len(tv) >= 2:
+                return [float(tv[0]), float(tv[-1])]
+        except Exception:
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# downsample experimental inputs (quick-look speedup)
+# ---------------------------------------------------------------------------
+def _decimate_storage(src, dst, factor):
+    """Decimate an OpenSim .mot/.sto: keep header, every ``factor``-th data row,
+    update nRows. Time column is a data column so it is preserved intact."""
+    with open(src, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    # find endheader
+    hi = next((i for i, l in enumerate(lines) if l.strip().lower() == "endheader"), None)
+    if hi is None:
+        shutil.copyfile(src, dst); return
+    header = lines[:hi + 1]
+    col_line = lines[hi + 1]
+    data = lines[hi + 2:]
+    data = [l for l in data if l.strip() != ""]
+    kept = data[::factor]
+    # update nRows in header if present
+    for i, l in enumerate(header):
+        if l.lower().strip().startswith("nrows"):
+            header[i] = f"nRows={len(kept)}\n"
+    with open(dst, "w", encoding="utf-8") as f:
+        f.writelines(header); f.write(col_line); f.writelines(kept)
+
+
+def _decimate_trc(src, dst, factor):
+    """Decimate a .trc marker file: keep every ``factor``-th frame, renumber
+    Frame#, keep the real Time values, update NumFrames / DataRate headers."""
+    with open(src, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+    if len(lines) < 6:
+        shutil.copyfile(src, dst); return
+    l0, l1, l2 = lines[0], lines[1], lines[2]          # PathFileType / hdr names / hdr values
+    col1, col2 = lines[3], lines[4]                    # Frame# Time markers / X Y Z sub-cols
+    # data starts at line 5 (some files have a blank line 5) — collect non-empty rows
+    body = [l for l in lines[5:] if l.strip() != ""]
+    kept = body[::factor]
+    # renumber Frame# (col 0), keep Time (col 1) and marker columns
+    out = []
+    for n, row in enumerate(kept, start=1):
+        parts = row.rstrip("\n").split("\t")
+        if parts:
+            parts[0] = str(n)
+        out.append("\t".join(parts) + "\n")
+    # update header value row: DataRate CameraRate NumFrames NumMarkers Units OrigDataRate ...
+    hv = l2.rstrip("\n").split("\t")
+    try:
+        for idx in (0, 1):                              # DataRate, CameraRate -> /factor
+            hv[idx] = f"{float(hv[idx]) / factor:g}"
+        hv[2] = str(len(out))                           # NumFrames
+    except Exception:
+        pass
+    l2 = "\t".join(hv) + "\n"
+    with open(dst, "w", encoding="utf-8") as f:
+        f.writelines([l0, l1, l2, col1, col2, "\n"]); f.writelines(out)
+
+
+def downsample_experimental(session_path, factor=10, trials=None):
+    """Write decimated copies of the model-independent inputs into
+    ``<session>/experimental_ds{factor}/<trial>/`` (every ``factor``-th sample,
+    real time column kept). Returns the subdir name to feed run_session(exp_subdir=..).
+    Non-tabular files (GRF.xml, analog.csv) are copied; GRF.xml's datafile is
+    repointed at the decimated grf.mot."""
+    import re, glob
+    session_path = os.path.abspath(session_path)
+    src_root = os.path.join(session_path, "experimental")
+    sub = f"experimental_ds{factor}"
+    dst_root = os.path.join(session_path, sub)
+    tlist = trials or [d for d in os.listdir(src_root)
+                       if os.path.isdir(os.path.join(src_root, d))]
+    for tn in tlist:
+        sdir = os.path.join(src_root, tn); ddir = os.path.join(dst_root, tn)
+        if not os.path.isdir(sdir):
+            continue
+        os.makedirs(ddir, exist_ok=True)
+        for fn in os.listdir(sdir):
+            sp, dp = os.path.join(sdir, fn), os.path.join(ddir, fn)
+            low = fn.lower()
+            if low.endswith((".mot", ".sto")):
+                _decimate_storage(sp, dp, factor)
+            elif low.endswith(".trc"):
+                _decimate_trc(sp, dp, factor)
+            elif low == "grf.xml":
+                txt = open(sp, "r", encoding="utf-8", errors="replace").read()
+                txt = re.sub(r"(<datafile>).*?(</datafile>)",
+                             lambda m: m.group(1) + os.path.join(ddir, "grf.mot") + m.group(2),
+                             txt, flags=re.I | re.S)
+                open(dp, "w", encoding="utf-8").write(txt)
+            elif os.path.isfile(sp):
+                shutil.copyfile(sp, dp)
+        print(f"  [downsample x{factor}] {tn} -> {sub}/{tn}", flush=True)
+    return sub
+
+
 # ---------------------------------------------------------------------------
 # scaling: build one iteration's model.osim / model_so.osim from its recipe
 # ---------------------------------------------------------------------------
@@ -196,34 +330,50 @@ def run_iteration_so(project, spec, spec_model, session_dir, trials, replace=Tru
     for tn in trials:
         dd = derived_trial_dir(session_dir, spec_model.name, tn)
         os.makedirs(dd, exist_ok=True)
+        print(f"\n[{spec_model.name}/{tn}] starting SO pipeline (IK ID MA SO moments JRA) ...", flush=True)
         try:
             t = Analyse(dd)
             t.subject = "Athlete"; t.session = os.path.basename(session_dir)
+            t.side = (spec.trials.get(tn) or {}).get("side", "r")   # per-trial leg for JCF/plots
             t.update_model(so_model)                  # SO uses the strength model
             # Durable hooks: raw inputs from shared experimental/<trial>/ and the
             # shared setup templates dir; re-applied on every load_settings.
             t.experimental_dir = experimental_dir(session_dir, tn)
             t._session_setup_dir = setup_dir
             t._apply_inputs_layout()                  # apply now (before first run step)
-            # time window for the SIMULATION (inputs stay full length). GHOST run:
-            # cap to the first `frames` samples; else use the session spec window.
+            # SIMULATION window (inputs stay full length):
+            #   frames -> first N samples (ghost); yaml time_range -> use it;
+            #   else -> FULL trial length. Persist start/end so load_settings
+            #   inside run_* uses THIS window (not a stale persisted one).
+            _exp = experimental_dir(session_dir, tn)
             tr = (spec.trials.get(tn) or {}).get("time_range")
             if frames:
-                tr = first_frames_range(experimental_dir(session_dir, tn), frames) or tr
+                tr = first_frames_range(_exp, frames) or tr
+            elif not tr:
+                tr = full_time_range(_exp)
             if tr:
-                t.time_range = tr
-                t.update_trial_attribute("time_range", tr)
+                t.time_range = list(tr)
+                t.update_trial_attribute("start_time", f"{float(tr[0]):.4f}")
+                t.update_trial_attribute("end_time", f"{float(tr[1]):.4f}")
             t.update_trial_attribute("replace", replace)
             os.chdir(t.path)   # ensure cwd = trial dir (skipped steps don't chdir)
             _tag = f"{spec_model.name}/{tn}"
-            t.run_ik(replace=replace);   print(f"  [{_tag}] IK done", flush=True)
-            t.run_id(replace=replace);   print(f"  [{_tag}] ID done", flush=True)
-            t.run_ma(replace=replace);   print(f"  [{_tag}] MA done", flush=True)
-            t.run_so(replace=replace);   print(f"  [{_tag}] SO done", flush=True)
-            t.calculate_muscle_moments(forces_type="so")
-            t.run_jra(replace=replace);  print(f"  [{_tag}] JRA done", flush=True)
+            # normal bioscout logging (default [trial] prefix; no custom tag).
+            # Each stage prints its own wall-clock duration + a per-trial total.
+            _t0 = time.perf_counter(); _s = _t0
+            def _lap(msg):
+                nonlocal _s
+                dt = time.perf_counter() - _s; _s = time.perf_counter()
+                print(f"  [ok] {_tag} {msg} ({dt:.1f}s)", flush=True)
+            t.run_ik(replace=replace);   _lap("IK done")
+            t.run_id(replace=replace);   _lap("ID done")
+            t.run_ma(replace=replace);   _lap("MA done")
+            t.run_so(replace=replace);   _lap("SO done")
+            t.calculate_muscle_moments(forces_type="so"); _lap("muscle moments done")
+            t.run_jra(replace=replace);  _lap("JRA done")
+            _rm_empty_inputs(t.path)
             done.append(tn)
-            print(f"  [SO ok] {_tag}", flush=True)
+            print(f"  [SO ok] {_tag} — trial total {time.perf_counter() - _t0:.1f}s", flush=True)
         except Exception as e:
             print(f"  [SO ERROR] {spec_model.name}/{tn}: {e}")
     return done
@@ -310,16 +460,21 @@ def run_iteration_ceinms(project, spec, spec_model, session_dir, trials, replace
     def _mk(tn):
         t = Analyse(derived_trial_dir(session_dir, it, tn))
         t.subject = "Athlete"; t.session = os.path.basename(session_dir)
+        t.side = (spec.trials.get(tn) or {}).get("side", "r")   # per-trial leg for JCF/plots
         t.update_model(ceinms_model)
         t.experimental_dir = experimental_dir(session_dir, tn)
         t._session_setup_dir = setup_dir
         t._apply_inputs_layout()
         t.update_trial_attribute("replace", replace)
-        if frames:   # GHOST run: cap CEINMS window (inputs stay full length)
-            _tr = first_frames_range(experimental_dir(session_dir, tn), frames)
-            if _tr:
-                t.time_range = _tr
-                t.update_trial_attribute("time_range", _tr)
+        # CEINMS window: frames -> first N (ghost); yaml -> use it; else FULL.
+        _exp = experimental_dir(session_dir, tn)
+        _yr = (spec.trials.get(tn) or {}).get("time_range")
+        _tr = (first_frames_range(_exp, frames) if frames
+               else (_yr if _yr else full_time_range(_exp)))
+        if _tr:
+            t.time_range = list(_tr)
+            t.update_trial_attribute("start_time", f"{float(_tr[0]):.4f}")
+            t.update_trial_attribute("end_time", f"{float(_tr[1]):.4f}")
         os.chdir(t.path)   # ensure cwd = trial dir for setup/output writes
         return t
 
@@ -344,10 +499,11 @@ def run_iteration_ceinms(project, spec, spec_model, session_dir, trials, replace
                 except Exception as e:
                     print(f"  [{it}/{tn}] CEINMS input build ERROR: {e}", flush=True)
             host = _mk(calib[0])
+            _c0 = time.perf_counter()
             host.run_ceinms_calibration()
-            print(f"  [{it}] CEINMS calibrated (trials={calib})", flush=True)
+            print(f"  [ok] {it} CEINMS calibration done (trials={calib}) ({time.perf_counter() - _c0:.1f}s)", flush=True)
         else:
-            print(f"  [{it}] CEINMS calibration already done -> skip (replace=False)", flush=True)
+            print(f"  [skip] {it} CEINMS calibration already done (replace=False)", flush=True)
         # ---- per-trial execution: only when replace, or not yet done ----
         for tn in here:
             exe_done = _glob.glob(os.path.join(derived_trial_dir(session_dir, it, tn),
@@ -355,13 +511,20 @@ def run_iteration_ceinms(project, spec, spec_model, session_dir, trials, replace
             if exe_done and not replace:
                 print(f"  [CEINMS-exe {it}/{tn}] already done -> skip", flush=True)
                 continue
+            print(f"\n[{it}/{tn}] starting CEINMS (execution + moments + JRA) ...", flush=True)
             try:
                 t = _mk(tn)
-                t._log_tag = f"CEINMS-exe {os.path.basename(session_dir)}"  # distinct tag
-                t.run_ceinms_exe()
-                t.calculate_muscle_moments(forces_type="ceinms")
-                t.run_jra_ceinms(replace=replace)
-                print(f"  [CEINMS-exe {it}/{tn}] exe + JRA done", flush=True)
+                # normal bioscout logging (default [trial] prefix; no custom tag)
+                _e0 = time.perf_counter(); _es = _e0
+                def _elap(msg):
+                    nonlocal _es
+                    dt = time.perf_counter() - _es; _es = time.perf_counter()
+                    print(f"  [ok] {it}/{tn} {msg} ({dt:.1f}s)", flush=True)
+                t.run_ceinms_exe();                          _elap("CEINMS execution done")
+                t.calculate_muscle_moments(forces_type="ceinms"); _elap("CEINMS muscle moments done")
+                t.run_jra_ceinms(replace=replace);           _elap("CEINMS JRA done")
+                _rm_empty_inputs(t.path)
+                print(f"  [ok] {it}/{tn} CEINMS trial total {time.perf_counter() - _e0:.1f}s", flush=True)
             except Exception as e:
                 print(f"  [CEINMS-exe {it}/{tn}] ERROR: {e}", flush=True)
     finally:
@@ -374,7 +537,7 @@ def run_iteration_ceinms(project, spec, spec_model, session_dir, trials, replace
 # ---------------------------------------------------------------------------
 def run_session(project_dir=".", session_path=None, iterations=None, trials=None,
                 do_scale=True, do_so=True, do_ceinms=False, replace=True, frames=None,
-                smoke=False):
+                smoke=False, exp_subdir=None):
     """Run the new session-centric layout from ``session.yaml``.
 
     ``session_path`` is the session folder (contains session.yaml, c3dfiles/,
@@ -387,8 +550,14 @@ def run_session(project_dir=".", session_path=None, iterations=None, trials=None
     ``frames`` (auto 5 if unset) and ``do_ceinms=False`` for a <2 min sweep.
     """
     import bioscout
-    project = bioscout.Project(project_dir)
+    global _EXP_SUBDIR
+    _cwd0 = os.getcwd()                       # restored in finally (run_* chdir into trials)
+    _exp0 = _EXP_SUBDIR
+    if exp_subdir:
+        _EXP_SUBDIR = exp_subdir              # read raw inputs from e.g. experimental_ds10/
+        print(f"[bioscout] reading experimental inputs from '{exp_subdir}/'")
     session_path = os.path.abspath(session_path)
+    project = bioscout.Project(project_dir)
     spec = read_session(session_path)
     proj_dir = str(project.dir)
 
@@ -424,6 +593,14 @@ def run_session(project_dir=".", session_path=None, iterations=None, trials=None
     try:
         for m in models:
             print(f"\n=== iteration {m.name} ({m.label or ''}) ===")
+            # Pipeline plan: show EVERY stage, marked RUN or SKIP, so a re-run makes
+            # explicit which steps are part of the pipeline but not executed this pass.
+            _R = lambda f: ("RUN " if f else "SKIP")
+            print(f"  [plan {m.name}] export C3D              : SKIP (session step; run exportC3D.export_session separately)")
+            print(f"  [plan {m.name}] EMG normalisation       : SKIP (session step; done during export)")
+            print(f"  [plan {m.name}] model scaling           : {_R(do_scale)}")
+            print(f"  [plan {m.name}] IK ID MA SO moments JRA  : {_R(do_so)}")
+            print(f"  [plan {m.name}] CEINMS calibrate+execute : {_R(do_ceinms)}")
             if do_scale:
                 try:
                     scale_iteration(m, session_path, proj_dir, project.utils, static_trc,
@@ -439,6 +616,11 @@ def run_session(project_dir=".", session_path=None, iterations=None, trials=None
                                      run_trials or list(spec.trials),
                                      replace=replace, frames=frames)
     finally:
+        _EXP_SUBDIR = _exp0             # restore experimental subdir
+        try:
+            os.chdir(_cwd0)              # restore cwd (run_* chdir into trial folders)
+        except Exception:
+            pass
         if _restore:                     # restore patched methods after smoke run
             from bioscout.utils.analysis import _trial_class
             _A = _trial_class()
@@ -459,8 +641,9 @@ def summarise_session(project_dir=".", session_path=None, iterations=None, trial
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    session_path = os.path.abspath(session_path)     # resolve before any chdir
+    project_dir = os.path.abspath(project_dir)
     project = bioscout.Project(project_dir)
-    session_path = os.path.abspath(session_path)
     spec = read_session(session_path)
     BS = getattr(project.settings, "BatchSettings", None)
     _u = project.utils
@@ -482,6 +665,7 @@ def summarise_session(project_dir=".", session_path=None, iterations=None, trial
 
     made = []
     for tn in run_trials:
+        _side = (spec.trials.get(tn) or {}).get("side", "r")   # per-trial leg
         for ft in forces:
             fname = f"Analyse_JRA_ReactionLoads_{ft}.sto"
             fig, axes = plt.subplots(1, len(joints), figsize=(5 * len(joints), 4), squeeze=False)
@@ -494,7 +678,7 @@ def summarise_session(project_dir=".", session_path=None, iterations=None, trial
                     df = _u.load_any_data_file(fp)
                 except Exception:
                     continue
-                cols = (BS.JRA_COLUMNS(m.label or m.name)
+                cols = (BS.JRA_COLUMNS(m.label or m.name, _side)
                         if BS and hasattr(BS, "JRA_COLUMNS") else {})
                 for ji, j in enumerate(joints):
                     r = _resultant(df, cols.get(j, [])) if cols else None

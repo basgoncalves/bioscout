@@ -479,7 +479,7 @@ class AnalysisControlTabV2(ctk.CTkFrame):
         # Info label
         info_label = ctk.CTkLabel(
             dialog,
-            text="Files to copy: trial_settings.xml, EMG files, markers, GRF, model, events, C3D",
+            text="Files to copy: trial_settings.xml, EMG files, markers, GRF, model, C3D",
             font=("Segoe UI", 9),
             text_color="#888888"
         )

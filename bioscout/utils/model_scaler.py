@@ -37,6 +37,11 @@ class ModelScaler:
         # Optional: custom output filename (if not set, will use default)
         self.output_model_filename = None
 
+        # Optional: subject name / mass to stamp on the ScaleTool (otherwise the
+        # template setup XML's baked-in subject name & mass are inherited).
+        self.subject_name = None
+        self.subject_mass = None
+
         # Optional: path to a real ScaleTool setup XML (with a MeasurementSet).
         # If None, one is auto-discovered next to the markerset, else the bundled
         # example template is used.
@@ -423,6 +428,28 @@ class ModelScaler:
         out_model.parent.mkdir(parents=True, exist_ok=True)
 
         scale_tool = osim.ScaleTool(str(setup_xml))
+
+        # ScaleTool prepends getPathToSubject() (defaults to the setup XML's own
+        # directory) to every file name it's given -- which turns our absolute
+        # marker/model paths into 'setupFiles\C:\Users\...' and makes them
+        # unopenable. Clear it so the absolute paths below are used verbatim.
+        try:
+            scale_tool.setPathToSubject("")
+        except Exception:
+            pass
+
+        # The setup XML was authored for another subject (name/mass baked in).
+        # Set this subject's name and, if provided, mass -- otherwise the model
+        # inherits the template subject's mass (ScaleTool scales mass to it).
+        try:
+            scale_tool.setName(self.subject_name or self.template_model.stem)
+        except Exception:
+            pass
+        if getattr(self, "subject_mass", None):
+            try:
+                scale_tool.setSubjectMass(float(self.subject_mass))
+            except Exception:
+                pass
 
         # Generic (unscaled) model + the model marker set used for scaling.
         gmm = scale_tool.getGenericModelMaker()

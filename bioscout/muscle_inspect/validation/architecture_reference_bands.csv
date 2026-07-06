@@ -1,0 +1,25 @@
+# Per-muscle architecture reference bands: model optimal-fibre-length/pennation (Catelli V4.0)
+#   vs verified in-vivo literature ranges. CAVEAT: model optimal_fiber_length is a SINGLE value at
+#   optimal sarcomere length; the lit_fascicle_length range brackets fascicle length ACROSS joint
+#   angles/populations. The model value should fall within a physiologically sensible part of the band,
+#   not necessarily its centre. Fascicle length in cm; pennation in deg. Sources are PubMed PMIDs.
+#   Blank lit_* = no verified absolute range compiled yet (see review/muscle_morphology_studies.csv).
+literature_muscle,model_muscles,model_opt_fibre_len_cm,model_pennation_deg,lit_fascicle_len_min_cm,lit_fascicle_len_max_cm,lit_pennation_min_deg,lit_pennation_max_deg,lit_source,lit_pmids
+gastrocnemius_medialis,gasmed,5.9,9.5,3.2,5.9,20,45,Kawakami1998 (passive FL 32-59mm; PA rises to ~45 deg at rest w/ plantarflexion),9688711
+gastrocnemius_lateralis,gaslat,6.9,12.0,4.1,6.5,8,25,Kawakami1998 (passive FL 41-65mm),9688711
+soleus,soleus,4.4,21.9,3.0,4.3,20,45,Kawakami1998 (FL 30-43mm); 3D architecture Bolsterlee2018,9688711;29682414
+biceps_femoris_lh,bflh,9.76,10.1,7.4,10.5,10,22,"Pimenta2018 (FL 74-78mm EFOV, ~85mm static); Kellis2010 varies along length",30067589;20727788
+biceps_femoris_sh,bfsh,11.03,15.1,,,,,no verified range compiled - see morphology catalog,
+semitendinosus,semiten,19.3,13.8,,,,,no verified range compiled - see morphology catalog,
+semimembranosus,semimem,8.6,14.6,,,,,no verified range compiled - see morphology catalog,
+vastus_lateralis,vaslat,11.7,14.5,,,,,Kumagai2000/Blazevich2003 (longer FL & lower PA in sprinters/after training) - digitise for absolute range,10710372;14652496
+vastus_medialis,vasmed,11.0,24.2,,,,,no verified range compiled - see morphology catalog,
+vastus_intermedius,vasint,11.7,3.6,,,,,no verified range compiled - see morphology catalog,
+rectus_femoris,recfem,7.59,12.4,,,,,no verified range compiled - see morphology catalog,
+tibialis_anterior,tibant,6.83,11.2,,,,,Maganaris/Fukunaga in vivo; Raiteri2016 3D - digitise for range,9029238;27547566
+gluteus_maximus,glmax1;glmax2;glmax3,15.7,21.1,,,,,no verified range compiled - see morphology catalog,
+gluteus_medius,glmed1;glmed2;glmed3,7.3,18.1,,,,,no verified range compiled - see morphology catalog,
+psoas,psoas,11.69,12.3,,,,,no verified range compiled - see morphology catalog,
+iliacus,iliacus,10.66,16.0,,,,,no verified range compiled - see morphology catalog,
+sartorius,sart,40.3,1.5,,,,,no verified range compiled - see morphology catalog,
+gracilis,grac,22.78,9.9,,,,,no verified range compiled - see morphology catalog,

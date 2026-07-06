@@ -603,31 +603,9 @@ class AnalysisControlSessionTab(ctk.CTkFrame):
                             model_dir_elem = ET.SubElement(root, 'model_dir')
                         model_dir_elem.text = rel_model
 
-                    # Update time range from events.csv if present
-                    events_file = trial_path / "events.csv"
-                    if events_file.exists():
-                        try:
-                            import pandas as pd
-                            events_df = pd.read_csv(str(events_file), header=None)
-                            start_time = end_time = None
-                            for _, row in events_df.iterrows():
-                                event_name = str(row[0]).lower().strip()
-                                try:
-                                    event_time = float(row[1])
-                                except (ValueError, TypeError):
-                                    continue
-                                if 'start' in event_name:
-                                    start_time = event_time
-                                elif 'end' in event_name:
-                                    end_time = event_time
-                            if start_time is not None and end_time is not None:
-                                for tag, val in [('start_time', start_time), ('end_time', end_time)]:
-                                    elem = root.find(tag)
-                                    if elem is None:
-                                        elem = ET.SubElement(root, tag)
-                                    elem.text = f"{val:.4f}"
-                        except Exception as e:
-                            logger.warning(f"Could not update time range for {trial_name}: {e}")
+                    # The analysis window (start_time/end_time) and gait/task
+                    # landmarks already live in the <events> subtree of this
+                    # trial_settings.xml — no separate events file to merge in.
 
                     tree = ET.ElementTree(root)
                     save_pretty_xml(tree, str(settings_file), encoding='utf-8', xml_declaration=True)

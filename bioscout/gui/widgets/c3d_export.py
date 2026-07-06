@@ -515,9 +515,11 @@ class C3DExportTab(ctk.CTkFrame):
                     print(f"[WARN] File move error: {str(e)[:50]}")
                     logger.warning(f"File move error: {e}")
 
-            # Create trial_settings.xml with processing parameters and time range from events.csv
+            # Create trial_settings.xml with processing parameters. The analysis
+            # window and gait/task landmarks are written into the <events> subtree
+            # by the Analyse export step — there is no separate events file.
             self._log_status("Creating trial_settings.xml...")
-            print("[INFO] Creating trial_settings.xml with EMG parameters and time range...")
+            print("[INFO] Creating trial_settings.xml with EMG parameters...")
             try:
                 settings_dir = export_dir if export_dir else output_dir
                 settings_file = settings_dir / "trial_settings.xml"
@@ -530,44 +532,12 @@ class C3DExportTab(ctk.CTkFrame):
                 ET.SubElement(root, "markers").text = "marker_experimental.trc"
                 ET.SubElement(root, "grf_mot").text = "grf.mot"
                 ET.SubElement(root, "emg").text = "emg.mot"
-                ET.SubElement(root, "events").text = "events.csv"
 
                 # Add EMG processing parameters
                 ET.SubElement(root, "emg_lowpass_hz").text = emg_params.get('bp_low', '10')
                 ET.SubElement(root, "emg_highpass_hz").text = emg_params.get('bp_high', '500')
                 ET.SubElement(root, "emg_notch_hz").text = emg_params.get('lp_cutoff', '10')
                 ET.SubElement(root, "emg_amplitude_scale").text = emg_params.get('amplitude_scale', '1.0')
-
-                # Try to read time range from events.csv
-                events_file = settings_dir / "events.csv"
-                if events_file.exists():
-                    try:
-                        import pandas as pd
-                        events_df = pd.read_csv(str(events_file), header=None)
-
-                        start_time = None
-                        end_time = None
-
-                        for _, row in events_df.iterrows():
-                            event_name = str(row[0]).lower().strip()
-                            try:
-                                event_time = float(row[1])
-                            except (ValueError, TypeError):
-                                continue
-
-                            if 'start' in event_name:
-                                start_time = event_time
-                            elif 'end' in event_name:
-                                end_time = event_time
-
-                        # Add start_time and end_time if found
-                        if start_time is not None and end_time is not None:
-                            ET.SubElement(root, 'start_time').text = f"{start_time:.4f}"
-                            ET.SubElement(root, 'end_time').text = f"{end_time:.4f}"
-                            print(f"[OK] Added time range from events.csv: {start_time:.4f} - {end_time:.4f}")
-                            logger.info(f"Added time range from events.csv: {start_time:.4f} - {end_time:.4f}")
-                    except Exception as e:
-                        logger.warning(f"Could not read time range from events.csv: {e}")
 
                 # Create tree and write
                 tree = ET.ElementTree(root)

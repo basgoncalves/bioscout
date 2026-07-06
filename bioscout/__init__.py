@@ -1,4 +1,4 @@
-__version__ = "1.2.9"
+__version__ = "2.0.0"
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
@@ -33,4 +33,9 @@ def __getattr__(name):          # PEP 562: lazy, light `import bioscout`
     if name in __all__:
         from . import utils
         return getattr(utils, name)
+    if name == "pipeline":      # bioscout.pipeline.run_subject / reset_simulations / run_project
+        import importlib
+        # NB: import via importlib, NOT `from . import pipeline` — the latter does a
+        # hasattr() check that re-enters this __getattr__('pipeline') and recurses.
+        return importlib.import_module(f"{__name__}.pipeline")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

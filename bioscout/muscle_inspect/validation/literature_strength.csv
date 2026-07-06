@@ -1,0 +1,226 @@
+# Consolidated literature joint-strength for validation (pooled, Chen&Franklin 2024 "Total" datasets).
+# test  : isometric (max voluntary moment vs joint ANGLE) | isokinetic (concentric peak moment vs angular VELOCITY)
+# x_value : angle in DEGREES when test=isometric ; angular velocity in DEG/S when test=isokinetic (see x_unit).
+# moment mean_nm/sd_nm in NEWTON-METRES. n_datasets = number of pooled source datasets.
+# Columns: test,joint_action,coordinate,x_value,x_unit,mean_nm,sd_nm,n_datasets
+test,joint_action,coordinate,x_value,x_unit,mean_nm,sd_nm,n_datasets
+isometric,Ankle dorsiflexion,ankle_angle,-29.7,deg,39.5,8.5,24
+isometric,Ankle dorsiflexion,ankle_angle,-26.4,deg,39.9,8.6,24
+isometric,Ankle dorsiflexion,ankle_angle,-23.0,deg,40.2,8.6,24
+isometric,Ankle dorsiflexion,ankle_angle,-19.6,deg,39.9,8.4,24
+isometric,Ankle dorsiflexion,ankle_angle,-16.3,deg,39.4,8.3,24
+isometric,Ankle dorsiflexion,ankle_angle,-12.9,deg,38.8,8.5,24
+isometric,Ankle dorsiflexion,ankle_angle,-9.5,deg,38.1,8.5,24
+isometric,Ankle dorsiflexion,ankle_angle,-6.1,deg,37.5,8.6,24
+isometric,Ankle dorsiflexion,ankle_angle,-2.8,deg,36.6,8.6,24
+isometric,Ankle dorsiflexion,ankle_angle,0.6,deg,35.2,8.4,24
+isometric,Ankle dorsiflexion,ankle_angle,4.0,deg,32.8,8.1,24
+isometric,Ankle dorsiflexion,ankle_angle,7.3,deg,30.1,7.7,24
+isometric,Ankle plantarflexion,ankle_angle,-19.8,deg,53.4,21.9,53
+isometric,Ankle plantarflexion,ankle_angle,-16.7,deg,57.0,24.0,53
+isometric,Ankle plantarflexion,ankle_angle,-13.5,deg,61.7,26.9,53
+isometric,Ankle plantarflexion,ankle_angle,-10.4,deg,68.6,31.1,53
+isometric,Ankle plantarflexion,ankle_angle,-7.2,deg,77.7,36.2,53
+isometric,Ankle plantarflexion,ankle_angle,-4.1,deg,85.0,40.2,53
+isometric,Ankle plantarflexion,ankle_angle,-0.9,deg,91.0,43.2,53
+isometric,Ankle plantarflexion,ankle_angle,2.2,deg,97.8,46.2,53
+isometric,Ankle plantarflexion,ankle_angle,5.4,deg,104.8,49.1,53
+isometric,Ankle plantarflexion,ankle_angle,8.5,deg,114.0,50.8,53
+isometric,Ankle plantarflexion,ankle_angle,11.7,deg,124.8,51.1,53
+isometric,Ankle plantarflexion,ankle_angle,14.8,deg,130.7,51.5,53
+isometric,Hip abduction,hip_adduction,-9.9,deg,78.6,29.0,11
+isometric,Hip abduction,hip_adduction,-8.1,deg,79.0,28.7,11
+isometric,Hip abduction,hip_adduction,-6.3,deg,79.4,28.3,11
+isometric,Hip abduction,hip_adduction,-4.5,deg,79.8,27.9,11
+isometric,Hip abduction,hip_adduction,-2.7,deg,80.2,27.7,11
+isometric,Hip abduction,hip_adduction,-1.0,deg,80.6,27.4,11
+isometric,Hip abduction,hip_adduction,0.8,deg,81.1,27.3,11
+isometric,Hip abduction,hip_adduction,2.6,deg,81.6,27.3,11
+isometric,Hip abduction,hip_adduction,4.4,deg,82.2,27.4,11
+isometric,Hip abduction,hip_adduction,6.2,deg,82.7,27.5,11
+isometric,Hip abduction,hip_adduction,8.0,deg,83.3,27.8,11
+isometric,Hip abduction,hip_adduction,9.7,deg,83.7,28.0,11
+isometric,Hip adduction,hip_adduction,-19.8,deg,107.0,34.4,6
+isometric,Hip adduction,hip_adduction,-18.0,deg,107.0,34.4,6
+isometric,Hip adduction,hip_adduction,-16.2,deg,106.7,33.7,6
+isometric,Hip adduction,hip_adduction,-14.5,deg,106.2,32.2,6
+isometric,Hip adduction,hip_adduction,-12.7,deg,106.1,31.5,6
+isometric,Hip adduction,hip_adduction,-10.9,deg,106.5,31.4,6
+isometric,Hip adduction,hip_adduction,-9.1,deg,106.8,31.4,6
+isometric,Hip adduction,hip_adduction,-7.3,deg,107.2,31.4,6
+isometric,Hip adduction,hip_adduction,-5.5,deg,107.5,31.4,6
+isometric,Hip adduction,hip_adduction,-3.7,deg,107.8,31.5,6
+isometric,Hip adduction,hip_adduction,-1.9,deg,108.2,31.5,6
+isometric,Hip adduction,hip_adduction,-0.2,deg,108.4,31.6,6
+isometric,Hip extension,hip_flexion,0.5,deg,83.7,15.9,13
+isometric,Hip extension,hip_flexion,8.6,deg,94.0,17.1,13
+isometric,Hip extension,hip_flexion,16.7,deg,107.1,21.2,13
+isometric,Hip extension,hip_flexion,24.9,deg,119.1,26.5,13
+isometric,Hip extension,hip_flexion,33.0,deg,129.7,31.2,13
+isometric,Hip extension,hip_flexion,41.1,deg,136.6,37.3,13
+isometric,Hip extension,hip_flexion,49.3,deg,140.0,45.0,13
+isometric,Hip extension,hip_flexion,57.4,deg,145.0,50.7,13
+isometric,Hip extension,hip_flexion,65.5,deg,151.8,54.3,13
+isometric,Hip extension,hip_flexion,73.7,deg,160.5,57.1,13
+isometric,Hip extension,hip_flexion,81.8,deg,171.1,59.0,13
+isometric,Hip extension,hip_flexion,89.9,deg,177.9,60.3,13
+isometric,Hip external rotation,hip_rotation,0.1,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,1.0,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,1.9,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,2.8,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,3.7,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,4.6,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,5.5,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,6.4,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,7.3,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,8.2,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,9.1,deg,40.3,16.3,10
+isometric,Hip external rotation,hip_rotation,9.9,deg,40.3,16.3,10
+isometric,Hip flexion,hip_flexion,10.1,deg,134.0,37.6,7
+isometric,Hip flexion,hip_flexion,13.3,deg,130.6,36.6,7
+isometric,Hip flexion,hip_flexion,16.4,deg,126.0,35.4,7
+isometric,Hip flexion,hip_flexion,19.6,deg,121.5,34.4,7
+isometric,Hip flexion,hip_flexion,22.7,deg,117.2,33.6,7
+isometric,Hip flexion,hip_flexion,25.9,deg,113.0,33.1,7
+isometric,Hip flexion,hip_flexion,29.0,deg,108.7,32.4,7
+isometric,Hip flexion,hip_flexion,32.2,deg,104.3,31.3,7
+isometric,Hip flexion,hip_flexion,35.3,deg,99.7,29.9,7
+isometric,Hip flexion,hip_flexion,38.5,deg,95.2,28.5,7
+isometric,Hip flexion,hip_flexion,41.6,deg,91.1,27.6,7
+isometric,Hip flexion,hip_flexion,44.8,deg,88.2,27.3,7
+isometric,Hip internal rotation,hip_rotation,-9.9,deg,59.3,18.9,9
+isometric,Hip internal rotation,hip_rotation,-9.0,deg,59.2,19.0,9
+isometric,Hip internal rotation,hip_rotation,-8.1,deg,59.1,19.1,9
+isometric,Hip internal rotation,hip_rotation,-7.2,deg,59.1,19.2,9
+isometric,Hip internal rotation,hip_rotation,-6.4,deg,59.0,19.2,9
+isometric,Hip internal rotation,hip_rotation,-5.5,deg,59.0,19.3,9
+isometric,Hip internal rotation,hip_rotation,-4.6,deg,58.9,19.4,9
+isometric,Hip internal rotation,hip_rotation,-3.7,deg,58.8,19.5,9
+isometric,Hip internal rotation,hip_rotation,-2.8,deg,58.8,19.6,9
+isometric,Hip internal rotation,hip_rotation,-1.9,deg,58.7,19.7,9
+isometric,Hip internal rotation,hip_rotation,-1.1,deg,58.7,19.8,9
+isometric,Hip internal rotation,hip_rotation,-0.2,deg,58.6,19.8,9
+isometric,Knee extension,knee_angle,-89.5,deg,157.3,58.9,56
+isometric,Knee extension,knee_angle,-84.1,deg,159.2,59.4,56
+isometric,Knee extension,knee_angle,-78.7,deg,163.0,61.1,56
+isometric,Knee extension,knee_angle,-73.3,deg,167.2,63.2,56
+isometric,Knee extension,knee_angle,-67.9,deg,169.5,64.2,56
+isometric,Knee extension,knee_angle,-62.5,deg,170.5,63.5,56
+isometric,Knee extension,knee_angle,-57.1,deg,171.3,62.2,56
+isometric,Knee extension,knee_angle,-51.7,deg,170.9,61.9,56
+isometric,Knee extension,knee_angle,-46.3,deg,168.3,61.6,56
+isometric,Knee extension,knee_angle,-40.9,deg,165.4,60.5,56
+isometric,Knee extension,knee_angle,-35.5,deg,163.6,59.4,56
+isometric,Knee extension,knee_angle,-30.1,deg,162.1,58.5,56
+isometric,Knee flexion,knee_angle,-89.7,deg,60.6,29.3,23
+isometric,Knee flexion,knee_angle,-84.3,deg,60.6,29.3,23
+isometric,Knee flexion,knee_angle,-78.9,deg,60.6,29.3,23
+isometric,Knee flexion,knee_angle,-73.4,deg,60.6,29.3,23
+isometric,Knee flexion,knee_angle,-68.0,deg,60.6,29.3,23
+isometric,Knee flexion,knee_angle,-62.6,deg,61.9,29.4,23
+isometric,Knee flexion,knee_angle,-57.2,deg,64.6,29.5,23
+isometric,Knee flexion,knee_angle,-51.8,deg,66.0,29.5,23
+isometric,Knee flexion,knee_angle,-46.3,deg,64.5,28.1,23
+isometric,Knee flexion,knee_angle,-40.9,deg,61.5,25.3,23
+isometric,Knee flexion,knee_angle,-35.5,deg,60.0,23.9,23
+isometric,Knee flexion,knee_angle,-30.1,deg,60.0,23.9,23
+isokinetic,Ankle dorsiflexion,ankle_angle,30.0,deg/s,27.3,8.6,60
+isokinetic,Ankle dorsiflexion,ankle_angle,47.0,deg/s,26.2,9.7,60
+isokinetic,Ankle dorsiflexion,ankle_angle,64.0,deg/s,24.8,10.4,60
+isokinetic,Ankle dorsiflexion,ankle_angle,80.0,deg/s,23.8,10.5,60
+isokinetic,Ankle dorsiflexion,ankle_angle,97.0,deg/s,23.5,10.6,60
+isokinetic,Ankle dorsiflexion,ankle_angle,113.0,deg/s,22.6,10.9,60
+isokinetic,Ankle dorsiflexion,ankle_angle,130.0,deg/s,29.5,15.8,60
+isokinetic,Ankle dorsiflexion,ankle_angle,146.0,deg/s,29.1,16.0,60
+isokinetic,Ankle dorsiflexion,ankle_angle,163.0,deg/s,28.7,16.2,60
+isokinetic,Ankle dorsiflexion,ankle_angle,179.0,deg/s,28.3,16.5,60
+isokinetic,Ankle plantarflexion,ankle_angle,32.0,deg/s,103.6,40.9,100
+isokinetic,Ankle plantarflexion,ankle_angle,48.0,deg/s,99.4,39.5,100
+isokinetic,Ankle plantarflexion,ankle_angle,65.0,deg/s,82.9,36.0,100
+isokinetic,Ankle plantarflexion,ankle_angle,81.0,deg/s,77.2,33.3,100
+isokinetic,Ankle plantarflexion,ankle_angle,98.0,deg/s,71.7,32.2,100
+isokinetic,Ankle plantarflexion,ankle_angle,114.0,deg/s,66.7,31.7,100
+isokinetic,Ankle plantarflexion,ankle_angle,130.0,deg/s,72.1,37.4,100
+isokinetic,Ankle plantarflexion,ankle_angle,147.0,deg/s,68.6,38.4,100
+isokinetic,Ankle plantarflexion,ankle_angle,163.0,deg/s,65.9,39.8,100
+isokinetic,Ankle plantarflexion,ankle_angle,180.0,deg/s,62.5,41.2,100
+isokinetic,Hip abduction,hip_adduction,10.0,deg/s,138.6,38.4,23
+isokinetic,Hip abduction,hip_adduction,29.0,deg/s,127.9,37.6,23
+isokinetic,Hip abduction,hip_adduction,48.0,deg/s,78.1,23.7,23
+isokinetic,Hip abduction,hip_adduction,67.0,deg/s,75.0,24.3,23
+isokinetic,Hip abduction,hip_adduction,85.0,deg/s,72.0,25.0,23
+isokinetic,Hip abduction,hip_adduction,104.0,deg/s,64.7,27.0,23
+isokinetic,Hip abduction,hip_adduction,123.0,deg/s,61.0,28.1,23
+isokinetic,Hip abduction,hip_adduction,142.0,deg/s,57.4,29.4,23
+isokinetic,Hip abduction,hip_adduction,161.0,deg/s,54.2,30.7,23
+isokinetic,Hip abduction,hip_adduction,180.0,deg/s,51.4,32.0,23
+isokinetic,Hip adduction,hip_adduction,10.0,deg/s,144.3,42.0,22
+isokinetic,Hip adduction,hip_adduction,29.0,deg/s,139.8,45.2,22
+isokinetic,Hip adduction,hip_adduction,48.0,deg/s,92.9,36.7,22
+isokinetic,Hip adduction,hip_adduction,67.0,deg/s,89.4,37.4,22
+isokinetic,Hip adduction,hip_adduction,85.0,deg/s,86.2,38.0,22
+isokinetic,Hip adduction,hip_adduction,104.0,deg/s,77.4,43.2,22
+isokinetic,Hip adduction,hip_adduction,123.0,deg/s,73.2,44.2,22
+isokinetic,Hip adduction,hip_adduction,142.0,deg/s,69.0,45.4,22
+isokinetic,Hip adduction,hip_adduction,161.0,deg/s,65.3,46.4,22
+isokinetic,Hip adduction,hip_adduction,180.0,deg/s,62.0,47.2,22
+isokinetic,Hip extension,hip_flexion,30.0,deg/s,188.3,66.4,31
+isokinetic,Hip extension,hip_flexion,40.0,deg/s,200.6,74.3,31
+isokinetic,Hip extension,hip_flexion,50.0,deg/s,189.4,75.3,31
+isokinetic,Hip extension,hip_flexion,60.0,deg/s,183.6,73.9,31
+isokinetic,Hip extension,hip_flexion,70.0,deg/s,193.2,88.4,31
+isokinetic,Hip extension,hip_flexion,80.0,deg/s,190.2,88.3,31
+isokinetic,Hip extension,hip_flexion,89.0,deg/s,187.3,88.2,31
+isokinetic,Hip extension,hip_flexion,99.0,deg/s,189.0,108.9,31
+isokinetic,Hip extension,hip_flexion,109.0,deg/s,187.0,108.2,31
+isokinetic,Hip extension,hip_flexion,119.0,deg/s,185.1,107.5,31
+isokinetic,Hip external rotation,hip_rotation,30.0,deg/s,44.5,11.9,20
+isokinetic,Hip external rotation,hip_rotation,37.0,deg/s,43.7,12.0,20
+isokinetic,Hip external rotation,hip_rotation,43.0,deg/s,42.9,12.0,20
+isokinetic,Hip external rotation,hip_rotation,50.0,deg/s,42.1,12.1,20
+isokinetic,Hip external rotation,hip_rotation,57.0,deg/s,41.3,12.2,20
+isokinetic,Hip external rotation,hip_rotation,63.0,deg/s,40.5,12.3,20
+isokinetic,Hip external rotation,hip_rotation,70.0,deg/s,39.7,12.2,20
+isokinetic,Hip external rotation,hip_rotation,76.0,deg/s,39.0,12.2,20
+isokinetic,Hip external rotation,hip_rotation,83.0,deg/s,38.2,12.2,20
+isokinetic,Hip external rotation,hip_rotation,90.0,deg/s,37.5,12.2,20
+isokinetic,Hip flexion,hip_flexion,30.0,deg/s,127.0,45.7,28
+isokinetic,Hip flexion,hip_flexion,37.0,deg/s,134.5,45.7,28
+isokinetic,Hip flexion,hip_flexion,43.0,deg/s,131.2,44.0,28
+isokinetic,Hip flexion,hip_flexion,50.0,deg/s,126.3,44.0,28
+isokinetic,Hip flexion,hip_flexion,56.0,deg/s,123.1,42.5,28
+isokinetic,Hip flexion,hip_flexion,63.0,deg/s,120.8,40.0,28
+isokinetic,Hip flexion,hip_flexion,70.0,deg/s,119.5,40.1,28
+isokinetic,Hip flexion,hip_flexion,76.0,deg/s,118.2,40.3,28
+isokinetic,Hip flexion,hip_flexion,83.0,deg/s,116.7,40.4,28
+isokinetic,Hip flexion,hip_flexion,89.0,deg/s,115.3,40.6,28
+isokinetic,Hip internal rotation,hip_rotation,30.0,deg/s,48.2,16.0,19
+isokinetic,Hip internal rotation,hip_rotation,37.0,deg/s,47.2,15.8,19
+isokinetic,Hip internal rotation,hip_rotation,43.0,deg/s,46.2,15.5,19
+isokinetic,Hip internal rotation,hip_rotation,50.0,deg/s,45.2,15.3,19
+isokinetic,Hip internal rotation,hip_rotation,57.0,deg/s,44.3,15.2,19
+isokinetic,Hip internal rotation,hip_rotation,63.0,deg/s,43.4,15.0,19
+isokinetic,Hip internal rotation,hip_rotation,70.0,deg/s,42.8,14.8,19
+isokinetic,Hip internal rotation,hip_rotation,76.0,deg/s,42.2,14.7,19
+isokinetic,Hip internal rotation,hip_rotation,83.0,deg/s,41.5,14.6,19
+isokinetic,Hip internal rotation,hip_rotation,90.0,deg/s,40.9,14.6,19
+isokinetic,Knee extension,knee_angle,61.0,deg/s,171.2,60.0,121
+isokinetic,Knee extension,knee_angle,75.0,deg/s,167.5,58.8,121
+isokinetic,Knee extension,knee_angle,88.0,deg/s,163.9,57.8,121
+isokinetic,Knee extension,knee_angle,101.0,deg/s,166.2,56.6,121
+isokinetic,Knee extension,knee_angle,114.0,deg/s,163.0,55.7,121
+isokinetic,Knee extension,knee_angle,127.0,deg/s,174.0,57.7,121
+isokinetic,Knee extension,knee_angle,140.0,deg/s,170.8,57.9,121
+isokinetic,Knee extension,knee_angle,153.0,deg/s,165.5,57.7,121
+isokinetic,Knee extension,knee_angle,166.0,deg/s,162.3,58.2,121
+isokinetic,Knee extension,knee_angle,179.0,deg/s,159.1,58.9,121
+isokinetic,Knee flexion,knee_angle,62.0,deg/s,97.8,37.3,94
+isokinetic,Knee flexion,knee_angle,75.0,deg/s,96.4,36.7,94
+isokinetic,Knee flexion,knee_angle,88.0,deg/s,95.0,36.1,94
+isokinetic,Knee flexion,knee_angle,101.0,deg/s,98.5,35.8,94
+isokinetic,Knee flexion,knee_angle,114.0,deg/s,97.4,35.3,94
+isokinetic,Knee flexion,knee_angle,127.0,deg/s,106.0,38.3,94
+isokinetic,Knee flexion,knee_angle,140.0,deg/s,104.8,38.2,94
+isokinetic,Knee flexion,knee_angle,153.0,deg/s,101.6,37.5,94
+isokinetic,Knee flexion,knee_angle,166.0,deg/s,100.3,37.5,94
+isokinetic,Knee flexion,knee_angle,179.0,deg/s,99.0,37.6,94

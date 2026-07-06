@@ -152,7 +152,6 @@ _PRESERVE: list[tuple[Optional[str], str, str]] = [
     (None, "SUBJECTS",          "Subject ID list"),
     # Analysis / comparison config
     (None, "SESSION",             "Session name"),
-    (None, "session_list",        "Session list"),
     (None, "trial_list",          "Trials to analyse"),
     (None, "SUBJECTS",            "Subjects (Subject objects)"),
     (None, "CONTRASTS",           "Comparison contrasts"),

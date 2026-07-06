@@ -211,7 +211,7 @@ def normalise_emg_across_session(trial_objects):
     """
     trial_dfs = {}
     for trial in trial_objects:
-        filt_path = os.path.join(trial.path, 'emg_filtered.mot')
+        filt_path = os.path.join(trial.path, os.path.dirname(getattr(trial, 'emg', '')) or "", 'emg_filtered.mot')
         if os.path.exists(filt_path):
             try:
                 trial_dfs[trial] = _u.load_any_data_file(filt_path)
@@ -237,7 +237,9 @@ def normalise_emg_across_session(trial_objects):
     _u.print_to_log(f"Session EMG max: { {k: round(v,4) for k,v in session_max.items()} }")
 
     for trial, df in trial_dfs.items():
-        out_path = os.path.join(trial.path, 'emg_filtered_normalised.mot')
+        _norm_rel = getattr(trial, 'emg_filtered_normalised', 'emg_filtered_normalised.mot')
+        out_path = os.path.join(trial.path, _norm_rel)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         norm = df.copy()
         for col in emg_cols:
             if col in norm.columns:
@@ -245,8 +247,16 @@ def normalise_emg_across_session(trial_objects):
                 if mx <= 0:
                     mx = 1.0  # zero channel — keep as-is, avoid 0/0 → NaN
                 norm[col] = (pd.to_numeric(norm[col], errors='coerce') / mx).clip(0.0, 1.0)
+        # Canonical column order: 'time' first, then EMG channels SORTED by name
+        # (EMG01..EMG16). CEINMS pairs the excitation generator's inputSignals to
+        # the excitations-file columns POSITIONALLY, so EVERY trial's .mot must
+        # share one order (and match the generator), else CEINMS execution aborts:
+        # "Muscle names are different between excitation generator and input file".
+        _tcol = [c for c in norm.columns if c.lower() == 'time']
+        _emg = sorted([c for c in norm.columns if c.lower() != 'time'])
+        norm = norm[_tcol + _emg]
         write_sto_file(norm, out_path)
-        trial.update_trial_attribute('ceinms_excitations', 'emg_filtered_normalised.mot')
+        trial.update_trial_attribute('ceinms_excitations', _norm_rel)
         _u.print_to_log(f"[Success] EMG normalised -> {out_path}", trial=trial.trial)
 
 

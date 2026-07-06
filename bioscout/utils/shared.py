@@ -56,18 +56,79 @@ def print_to_log(message, terminal=None, trial=None):
         print(f'{prefix}{message}')
 
 
+# --- verbosity-aware line filtering (settings.LOG_TYPE) --------------------
+# Noisy per-trial / per-tool chatter dropped in "minimal"; only errors, section
+# headers and the final summary kept in "quiet". Lines matching _ALWAYS are
+# never dropped regardless of level.
+# "minimal" is a WHITELIST: keep only meaningful lines (section headers, stage
+# markers, per-trial results, successes, skips, warnings and errors); everything
+# else (OpenSim tool chatter, per-channel/plate detection, file-saved notices,
+# CEINMS iteration dumps, etc.) is dropped. "quiet" keeps the same set minus the
+# routine progress markers (so essentially errors + headers + final summary).
+_KEEP_MINIMAL = re.compile(
+    r"(\[ERROR\]|\bERROR\b|Error:|Traceback|Exception|FAILED|\[Warning\]|"
+    r"\[Success\]|\[skip\]|\[ok\]|\[pipeline\]|\[plan |\bstarting\b|\bsaved:|\[run_sessions\]|\[scale|\[CEINMS|"
+    r"\[bioscout\]|^BioScout |PIPELINE DONE|SESSIONS DONE|CEINMS-ONLY DONE|"
+    r"^\s*={3,}|^\s*-{3,}\s)")
+# Progress-only markers dropped further in "quiet".
+_QUIET_DROP = re.compile(r"(\[ok\]|\[skip\]|\[Success\]|^\s*-{3,}\s|\[Warning\])")
+
+
+def _log_verbosity():
+    try:
+        from bioscout import utils as _u
+        return str(getattr(getattr(_u, "settings", None), "LOG_TYPE", "detailed")).lower()
+    except Exception:
+        return "detailed"
+
+
+def _keep_line(line, level):
+    if level not in ("minimal", "quiet"):
+        return True                       # "detailed" -> everything
+    if not _KEEP_MINIMAL.search(line):
+        return False                      # not whitelisted -> drop
+    if level == "quiet" and _QUIET_DROP.search(line):
+        return False                      # quiet: also drop routine progress
+    return True
+
+
 class _Tee:
-    """Write to several streams at once (e.g. the console AND a log file)."""
+    """Write to several streams at once (console AND log), filtering whole lines
+    by settings.LOG_TYPE ("detailed" | "minimal" | "quiet")."""
     def __init__(self, *streams):
         self.streams = streams
+        self._buf = ""
 
-    def write(self, data):
+    def _emit(self, text):
         for s in self.streams:
             try:
-                s.write(data)
-                s.flush()
+                s.write(text); s.flush()
             except Exception:
                 pass
+
+    #: lines that get a [HH:MM:SS] timestamp prefix (warnings / errors / assembly)
+    _TS_LINE = re.compile(r"(\bWarning\b|\[Warning\]|\[ERROR\]|\bError\b|Traceback|"
+                          r"assemble|tolerance)", re.IGNORECASE)
+
+    def _stamp(self, line):
+        if self._TS_LINE.search(line):
+            return f"[{time.strftime('%H:%M:%S')}] {line}"
+        return line
+
+    def write(self, data):
+        level = _log_verbosity()
+        if level not in ("minimal", "quiet"):
+            # detailed: still timestamp warning/error lines, but keep everything.
+            self._buf += data
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                self._emit(self._stamp(line) + "\n")
+            return
+        self._buf += data
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if _keep_line(line, level):
+                self._emit(self._stamp(line) + "\n")
 
     def flush(self):
         for s in self.streams:
@@ -77,28 +138,68 @@ class _Tee:
                 pass
 
 
-def start_logging(name="run", log_dir=None):
-    """Tee stdout+stderr to ``<log_dir>/<name>_<timestamp>.log`` and the console.
+LOG_DISCLAIMER = (
+    "DISCLAIMER: BioScout is research software provided \"as is\", without warranty "
+    "of any kind. The user is solely responsible for correct usage and for "
+    "validating all inputs, settings and results; the authors accept no liability "
+    "for misuse or for any decisions or conclusions based on its output. See LICENSE."
+)
 
-    ``log_dir`` defaults to ``<project>/logs`` (``utils.PROJECT_DIR``), so any
-    script can save a run log to the project's logs folder with one call::
+# Set once the first time file logging starts in a process, so auto-logging
+# (ensure_logging, called from Project/Analyse) never opens a second log.
+_LOG_STARTED = False
+_LOG_HANDLE = None
+
+
+def ensure_logging(name="bioscout", log_dir=None):
+    """Start file logging ONCE per process (idempotent).
+
+    Called automatically whenever a Project or Analyse/Trial is created, so any
+    bioscout run writes ``<project>/logs/bioscout_<timestamp>.log`` without the
+    caller doing anything. No-op if logging was already started (e.g. an explicit
+    ``start_logging`` or the CLI). Returns the log handle, or None if already on."""
+    if _LOG_STARTED:
+        return _LOG_HANDLE
+    try:
+        return start_logging(name=name, log_dir=log_dir)
+    except Exception:
+        return None
+
+
+def start_logging(name="run", log_dir=None, filename=None, append=False):
+    """Tee stdout+stderr to a timestamped project log file, with a run heading.
+
+    Every run writes to ``<log_dir>/bioscout_<YYYYmmdd_HHMMSS>.log`` — one naming
+    scheme (``bioscout_…``) for all runs, with the timestamp in the filename so
+    runs never collide, and a heading inside identifying what was done (``name``
+    + time + disclaimer)::
 
         from bioscout import utils
-        utils.start_logging("downsample")
+        utils.start_logging("export Athlete_03_Cateli/25_03_31")
 
-    Captures Python-level output. OpenSim's C++ ``[info]`` lines are written at
-    the file-descriptor level; to capture those too, also pipe the process:
-    ``python ... 2>&1 | tee logs/run.log``. Returns the open log file handle.
+    ``log_dir`` defaults to ``<project>/logs`` (``utils.PROJECT_DIR``). Pass an
+    explicit ``filename=`` to override, or ``append=True`` to append. Captures
+    Python-level output; OpenSim's C++ ``[info]`` lines are fd-level — pipe
+    ``... 2>&1 | tee`` to capture those too. Returns the open log file handle.
     """
     if log_dir is None:
         from bioscout import utils as _u
         log_dir = os.path.join(getattr(_u, "PROJECT_DIR", os.getcwd()), "logs")
     os.makedirs(log_dir, exist_ok=True)
-    path = os.path.join(log_dir, f"{name}_{datetime.datetime.now():%Y%m%d_%H%M%S}.log")
-    f = open(path, "w", encoding="utf-8")
+    if filename is None:
+        filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+    path = os.path.join(log_dir, filename)
+    f = open(path, "a" if append else "w", encoding="utf-8")
+    f.write(f"\n{'=' * 72}\n"
+            f"=== {name}   {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n"
+            f"{LOG_DISCLAIMER}\n"
+            f"{'=' * 72}\n")
+    f.flush()
+    global _LOG_STARTED, _LOG_HANDLE
+    _LOG_STARTED, _LOG_HANDLE = True, f   # mark started so auto-logging won't re-open
     sys.stdout = _Tee(sys.__stdout__, f)
     sys.stderr = _Tee(sys.__stderr__, f)
-    print(f"[bioscout] logging this run to {path}")
+    print(f"[bioscout] logging '{name}' -> {path}")
     return f
 
 
@@ -140,3 +241,81 @@ def time_normalise_df(df, fs=''):
         normalised_df[column] = np.interp(Tnorm, timeTrial, currentData)
 
     return normalised_df
+
+
+# ===========================================================================
+# Central plotting style (reads settings.PlottingSettings, else these defaults)
+# ===========================================================================
+#: default {source: {color, ls, lw}} — overridden per-project by
+#: settings.PlottingSettings.sources (any omitted source falls back to here).
+DEFAULT_PLOT_STYLE = {
+    "inverse_dynamics":    {"color": "black",    "ls": "-", "lw": 2.0},
+    "ceinms":              {"color": "tab:blue", "ls": "-", "lw": 1.8},
+    "static_optimisation": {"color": "tab:red",  "ls": "-", "lw": 1.8},
+    "emg":                 {"color": "0.5",      "ls": "-", "lw": 1.5},
+    "activation":          {"color": "0.35",     "ls": "-", "lw": 1.2},
+    "muscle_force":        {"color": "tab:red",  "ls": "-", "lw": 1.2},
+}
+
+
+def _to_mpl_color(c):
+    """Normalise a colour spec for matplotlib. Accepts an (R,G,B[,A]) tuple in
+    0-255 or 0-1, a hex string, or a named colour (returned unchanged)."""
+    if isinstance(c, (tuple, list)):
+        vals = list(c)
+        if any(isinstance(v, (int, float)) and v > 1 for v in vals[:3]):
+            rgb = [max(0.0, min(1.0, float(v) / 255.0)) for v in vals[:3]]
+        else:
+            rgb = [float(v) for v in vals[:3]]
+        alpha = [float(vals[3])] if len(vals) > 3 else []
+        return tuple(rgb + alpha)
+    return c
+
+
+def _plotting_settings():
+    try:
+        from bioscout import utils as _u
+        return getattr(getattr(_u, "settings", None), "PlottingSettings", None)
+    except Exception:
+        return None
+
+
+def plot_style(source):
+    """Return ``{'color','ls','lw'}`` for a plot SOURCE. Merges the project's
+    ``settings.PlottingSettings.sources[source]`` over ``DEFAULT_PLOT_STYLE``;
+    the colour is normalised for matplotlib."""
+    style = dict(DEFAULT_PLOT_STYLE.get(source, {"color": "black", "ls": "-", "lw": 1.5}))
+    ps = _plotting_settings()
+    src = getattr(ps, "sources", None) or {}
+    if isinstance(src.get(source), dict):
+        style.update(src[source])
+    style["color"] = _to_mpl_color(style.get("color", "black"))
+    style.setdefault("ls", "-")
+    style.setdefault("lw", 1.5)
+    return style
+
+
+def side_color(side):
+    """Body-side colour convention used across bioscout figures: right = blue,
+    left = red. Accepts 'r'/'right'/'_r' or 'l'/'left'/'_l'."""
+    s = str(side).lower().lstrip("_")
+    if s in ("r", "right"):
+        return "tab:blue"
+    if s in ("l", "left"):
+        return "tab:red"
+    return "black"
+
+
+def fig_size(nrows, ncols):
+    """Figure size (inches) for an ``nrows x ncols`` subplot grid, scaled by
+    ``settings.PlottingSettings.scale_per_subplot`` = (row_mult, col_mult) and
+    ``fig_scale``. Defaults to a sensible per-subplot size if unset."""
+    ps = _plotting_settings()
+    spp = getattr(ps, "scale_per_subplot", None) or (2, 3)
+    try:
+        row_mult, col_mult = float(spp[0]), float(spp[1])
+    except Exception:
+        row_mult, col_mult = 2.0, 3.0
+    fs = float(getattr(ps, "fig_scale", 1.0) or 1.0)
+    return (max(1, int(ncols)) * col_mult * fs,
+            max(1, int(nrows)) * row_mult * fs)

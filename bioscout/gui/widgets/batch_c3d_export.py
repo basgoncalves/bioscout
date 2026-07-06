@@ -1589,6 +1589,43 @@ class BatchC3DExport(ctk.CTkFrame):
             else:
                 logger.debug("Using analog.csv from export_emg")
 
+            # Time window (Start/End) for this trial, read straight from the c3d.
+            # Persisted into the <events> subtree of trial_settings.xml — no
+            # separate events file.
+            _evt_start, _evt_end = 0.0, 1.0
+            try:
+                if HAS_C3D:
+                    with open(str(c3d_file), 'rb') as f:
+                        reader = c3d.Reader(f)
+                        frame_rate = getattr(reader, 'point_rate', 1.0) or 1.0
+                        frame_count = 0
+                        for frame_num, point_data, analog_data in reader.read_frames():
+                            frame_count = frame_num + 1
+                        if frame_count > 0 and frame_rate > 0:
+                            _evt_end = frame_count / frame_rate
+            except Exception as e:
+                logger.warning(f"Could not read time window from c3d: {e}")
+
+            def _add_events_subtree(root_el):
+                """Write <events> (Start/End window) into the trial_settings root."""
+                ev_el = root_el.find("events")
+                if ev_el is None:
+                    ev_el = ET.SubElement(root_el, "events")
+                for _e in list(ev_el):
+                    ev_el.remove(_e)
+                for _nm, _tv in (("Start", _evt_start), ("End", _evt_end)):
+                    _ee = ET.SubElement(ev_el, "event")
+                    _ee.set("name", _nm)
+                    _ee.set("time", f"{float(_tv):.4f}")
+                start_elem = root_el.find('start_time')
+                if start_elem is None:
+                    start_elem = ET.SubElement(root_el, 'start_time')
+                start_elem.text = f"{_evt_start:.4f}"
+                end_elem = root_el.find('end_time')
+                if end_elem is None:
+                    end_elem = ET.SubElement(root_el, 'end_time')
+                end_elem.text = f"{_evt_end:.4f}"
+
             # Create trial_settings.xml using Inputs class
             try:
                 settings_file = output_folder / "trial_settings.xml"
@@ -1602,7 +1639,6 @@ class BatchC3DExport(ctk.CTkFrame):
                     inputs.emg = "emg_filtered_normalised.mot"
                     inputs.grf_mot = "grf.mot"
                     inputs.markers = "marker_experimental.trc"
-                    inputs.events = "events.csv"
 
                     # Update with batch export settings
                     inputs.alpha = "10"  # Default values
@@ -1690,45 +1726,8 @@ class BatchC3DExport(ctk.CTkFrame):
                     ET.SubElement(root, "left_foot_markers").text = ", ".join(selected_left)
                     ET.SubElement(root, "right_foot_markers").text = ", ".join(selected_right)
 
-                    # Update time range from events.csv if it exists
-                    events_file = output_folder / "events.csv"
-                    if events_file.exists():
-                        try:
-                            import pandas as pd
-                            events_df = pd.read_csv(str(events_file), header=None)
-
-                            start_time = None
-                            end_time = None
-
-                            for _, row in events_df.iterrows():
-                                event_name = str(row[0]).lower().strip()
-                                try:
-                                    event_time = float(row[1])
-                                except (ValueError, TypeError):
-                                    continue
-
-                                if 'start' in event_name:
-                                    start_time = event_time
-                                elif 'end' in event_name:
-                                    end_time = event_time
-
-                            # Update time range elements if found
-                            if start_time is not None and end_time is not None:
-                                # Update start_time
-                                start_elem = root.find('start_time')
-                                if start_elem is None:
-                                    start_elem = ET.SubElement(root, 'start_time')
-                                start_elem.text = f"{start_time:.4f}"
-
-                                # Update end_time
-                                end_elem = root.find('end_time')
-                                if end_elem is None:
-                                    end_elem = ET.SubElement(root, 'end_time')
-                                end_elem.text = f"{end_time:.4f}"
-
-                                logger.info(f"Updated time range from events.csv: {start_time:.4f} - {end_time:.4f}")
-                        except Exception as e:
-                            logger.warning(f"Could not update time range from events.csv: {e}")
+                    # Write Start/End window into the <events> subtree
+                    _add_events_subtree(root)
 
                     # Save with pretty formatting
                     tree = ET.ElementTree(root)
@@ -1748,7 +1747,6 @@ class BatchC3DExport(ctk.CTkFrame):
                     ET.SubElement(root, "emg").text = "emg_filtered_normalised.mot"
                     ET.SubElement(root, "grf_mot").text = "grf.mot"
                     ET.SubElement(root, "markers").text = "marker_experimental.trc"
-                    ET.SubElement(root, "events").text = "events.csv"
                     ET.SubElement(root, "emg_lowpass_hz").text = self.emg_lowpass_var.get()
                     ET.SubElement(root, "emg_highpass_hz").text = self.emg_highpass_var.get()
                     ET.SubElement(root, "emg_notch_hz").text = self.emg_notch_var.get()
@@ -1756,68 +1754,14 @@ class BatchC3DExport(ctk.CTkFrame):
                     ET.SubElement(root, "left_foot_markers").text = ", ".join(selected_left)
                     ET.SubElement(root, "right_foot_markers").text = ", ".join(selected_right)
 
-                    # Update time range from events.csv if it exists
-                    events_file = output_folder / "events.csv"
-                    if events_file.exists():
-                        try:
-                            import pandas as pd
-                            events_df = pd.read_csv(str(events_file), header=None)
-
-                            start_time = None
-                            end_time = None
-
-                            for _, row in events_df.iterrows():
-                                event_name = str(row[0]).lower().strip()
-                                try:
-                                    event_time = float(row[1])
-                                except (ValueError, TypeError):
-                                    continue
-
-                                if 'start' in event_name:
-                                    start_time = event_time
-                                elif 'end' in event_name:
-                                    end_time = event_time
-
-                            # Update time range elements if found
-                            if start_time is not None and end_time is not None:
-                                ET.SubElement(root, 'start_time').text = f"{start_time:.4f}"
-                                ET.SubElement(root, 'end_time').text = f"{end_time:.4f}"
-                                logger.info(f"Updated time range from events.csv: {start_time:.4f} - {end_time:.4f}")
-                        except Exception as e:
-                            logger.warning(f"Could not update time range from events.csv: {e}")
+                    # Write Start/End window into the <events> subtree
+                    _add_events_subtree(root)
 
                     tree = ET.ElementTree(root)
                     tree.write(str(settings_file), encoding='utf-8', xml_declaration=True)
             except Exception as e:
                 logger.warning(f"Could not create trial_settings.xml: {e}")
                 logger.debug(f"Exception details: {e}", exc_info=True)
-
-            # Create events.csv with trial timing
-            try:
-                if HAS_C3D:
-                    with open(str(c3d_file), 'rb') as f:
-                        reader = c3d.Reader(f)
-                        frame_count = 0
-                        frame_rate = 1.0
-
-                        if hasattr(reader, 'point_rate'):
-                            frame_rate = reader.point_rate
-
-                        # Count frames using read_frames()
-                        for frame_num, point_data, analog_data in reader.read_frames():
-                            frame_count = frame_num + 1
-
-                        # Calculate timing
-                        trial_start = 0.0
-                        trial_end = frame_count / frame_rate if frame_count > 0 and frame_rate > 0 else 1.0
-
-                        events_file = output_folder / "events.csv"
-                        with open(str(events_file), 'w', newline='') as f:
-                            writer = csv.writer(f, lineterminator='\n')
-                            writer.writerow(["Start", f"{trial_start:.3f}"])
-                            writer.writerow(["End", f"{trial_end:.3f}"])
-            except Exception as e:
-                logger.warning(f"Could not create events.csv: {e}")
 
             # Clean up the temporary C3D copy from output folder
             try:

@@ -6,6 +6,10 @@ scikit-learn
 matplotlib
 plotly
 
+# Statistics — statistical parametric mapping of 1D biomechanical waveforms
+# (optional; only needed for bioscout.utils.stats.spm_* functions)
+spm1d
+
 # Data / file I/O
 pyyaml
 c3d

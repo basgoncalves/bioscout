@@ -312,7 +312,6 @@ class AnalysisControlTabV2(ctk.CTkFrame):
             'markers': '*marker*.trc',
             'emg': ('*emg*.mot', '*emg*.sto'),  # Support both MOT and STO formats
             'grf': '*grf*.mot',
-            'events': '*.csv',
         }
 
         model_files = {}
@@ -398,7 +397,7 @@ class AnalysisControlTabV2(ctk.CTkFrame):
                     var.set(step.value in enabled_steps)
 
             self.selected_files = {}
-            for tag in ['c3d', 'markers', 'emg', 'grf_mot', 'events', 'model_dir']:
+            for tag in ['c3d', 'markers', 'emg', 'grf_mot', 'model_dir']:
                 value = root.findtext(tag)
                 if value:
                     self.selected_files[tag] = value
@@ -534,12 +533,6 @@ class AnalysisControlTabV2(ctk.CTkFrame):
                 if grf_elem is None:
                     grf_elem = ET.SubElement(root, "grf_mot")
                 grf_elem.text = str(self.current_path / self.file_vars['grf'].get())
-
-            if 'events' in self.file_vars and self.file_vars['events'].get():
-                events_elem = root.find("events")
-                if events_elem is None:
-                    events_elem = ET.SubElement(root, "events")
-                events_elem.text = str(self.current_path / self.file_vars['events'].get())
 
             self._save_pretty_xml(ET.ElementTree(root), str(settings_file))
 

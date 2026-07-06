@@ -55,10 +55,20 @@ parser.add_argument('-b', '--batch', type=str, help="Path to batch settings file
 parser.add_argument('-g', '--gui',   action='store_true', help="Launch GUI (default when no flags given)")
 parser.add_argument('--init', type=str, metavar='PROJECT_PATH',
                     help="Initialise a new project: create folder structure and copy settings template")
-parser.add_argument('--add_subject', type=str, nargs='?', const='.', metavar='PROJECT_PATH',
-                    help="Interactively add a subject to subjects.json in PROJECT_PATH (default: cwd)")
+parser.add_argument('--ingest-c3d', dest='ingest_c3d', type=str, default=None,
+                    metavar='C3D_FOLDER',
+                    help="Add a new subject/session by distributing loose .c3d files into the "
+                         "simulations tree: each <trial>.c3d in C3D_FOLDER becomes "
+                         "simulations/<subject>/<session>/<trial>/inputs/c3dfile.c3d. Requires "
+                         "--subject and --session. Follow with --run_subject … --export to build.")
 parser.add_argument('--install', action='store_true',
                     help="Check dependencies and install missing ones (opensim via conda, others via pip)")
+parser.add_argument('--pylance-fix', '--pyglance-fix', '--pylance_fix', dest='pylance_fix',
+                    nargs='?', const='.', default=None, metavar='PROJECT_DIR',
+                    help="Write a project .vscode/settings.json so VS Code / Pylance resolves "
+                         "'import bioscout' (colours Subject/functions instead of white, no unresolved "
+                         "warnings). Points the interpreter at the current Python and adds bioscout to "
+                         "analysis.extraPaths. Optional PROJECT_DIR (default: current folder).")
 parser.add_argument('--run_subject', nargs='?', const='__ALL__', default=None,
                     metavar='SUBJECT_NAME',
                     help="Run the full pipeline (IK->ID->MA->SO->JRA + CEINMS) for a subject, "
@@ -99,54 +109,65 @@ parser.add_argument('-s', '--subject', type=str, default=None, metavar='SUBJECT_
 parser.add_argument('-t', '--trial', type=str, default=None, metavar='TRIAL',
                     help="With --summary: build only this one trial folder (fast iteration). "
                          "With --run_subject: restrict to this trial name (comma-separated for several).")
-parser.add_argument('--shots', type=str, default=None, metavar='VIDEO',
-                    help="Basketball shot analysis: count shots, per-shot kinematics (0-100%%), "
+# -------------------------------------------------------------------------
+# EXPERIMENTAL — player / movement tracking (video + wearables). NOT part of
+# the OpenSim/CEINMS pipeline and NOT stable yet; targeted for bioscout 3.0.
+# Grouped so they appear separately (and clearly flagged) in --help.
+# -------------------------------------------------------------------------
+experimental = parser.add_argument_group(
+    "player tracking — EXPERIMENTAL (targeted for bioscout 3.0, NOT ready yet)")
+experimental.add_argument('--add_subject', type=str, nargs='?', const='.', metavar='PROJECT_PATH',
+                    help="[3.0] Add a PLAYER-TRACKING subject to subjects.json (video/wearables "
+                         "features, NOT the OpenSim pipeline). For the OpenSim/CEINMS pipeline, add "
+                         "subjects to the 'subjects' list in settings.py and use --ingest-c3d.")
+experimental.add_argument('--shots', type=str, default=None, metavar='VIDEO',
+                    help="[3.0] Basketball shot analysis: count shots, per-shot kinematics (0-100%%), "
                          "assisted made/missed tagging, kinematics-only muscle forces")
-parser.add_argument('--shooting-hand', type=str, default='right', choices=['right', 'left'],
+experimental.add_argument('--shooting-hand', type=str, default='right', choices=['right', 'left'],
                     help="With --shots: which hand releases the ball (default: right)")
-parser.add_argument('--poses', type=str, default=None, metavar='POSES_JSON',
+experimental.add_argument('--poses', type=str, default=None, metavar='POSES_JSON',
                     help="With --shots: precomputed {frame:{landmark:[x,y]}} JSON (skip MediaPipe). "
                          "A poses.json is written to the output folder on every run for re-tuning.")
-parser.add_argument('--fps', type=float, default=None,
+experimental.add_argument('--fps', type=float, default=None,
                     help="With --shots: override the video frame rate (e.g. 5 for 5 fps footage)")
-parser.add_argument('--min-gap', type=float, default=1.5, dest='min_gap',
+experimental.add_argument('--min-gap', type=float, default=1.5, dest='min_gap',
                     help="With --shots: minimum seconds between detected shots (default 1.5)")
-parser.add_argument('--n-points', type=int, default=1000, dest='n_points',
+experimental.add_argument('--n-points', type=int, default=1000, dest='n_points',
                     help="With --shots: samples per shot for the smooth 0-100%% curves (default 1000)")
-parser.add_argument('--hoop-side', type=str, default='auto', dest='hoop_side',
+experimental.add_argument('--hoop-side', type=str, default='auto', dest='hoop_side',
                     choices=['auto', 'right', 'left'],
                     help="With --shots: which side the hoop is on (ball flies toward it). Default auto")
-parser.add_argument('--yolo-model', type=str, default=None, dest='yolo_model', metavar='WEIGHTS.pt',
+experimental.add_argument('--yolo-model', type=str, default=None, dest='yolo_model', metavar='WEIGHTS.pt',
                     help="With --shots: YOLO (ultralytics) ball+hoop model -> robust avishah3-style "
                          "shot/make detection. `pip install ultralytics` and supply a trained model.")
-parser.add_argument('--hoop', type=str, default=None, metavar='CX,CY,W,H',
+experimental.add_argument('--hoop', type=str, default=None, metavar='CX,CY,W,H',
                     help="With --shots: rim box (pixels) for hoop-based detection without YOLO "
                          "(uses HSV ball + this hoop). E.g. --hoop 955,235,70,40")
 parser.add_argument('-p', '--project', type=str, default=None, metavar='PROJECT_PATH',
                     help="With --summary: project root override (defaults to settings.PROJECT_ROOT)")
-parser.add_argument('--load-report', type=str, default=None, dest='load_report',
+experimental.add_argument('--load-report', type=str, default=None, dest='load_report',
                     metavar='FILES_OR_FOLDER',
-                    help="Training-load & fatigue report from fitness-tracker exports "
+                    help="[3.0] Training-load & fatigue report from fitness-tracker exports "
                          "(.fit/.tcx/.gpx/.csv). Pass a folder, a glob, or files. "
                          "e.g. --load-report C:/zepp_exports/")
-parser.add_argument('--load-out', type=str, default=None, dest='load_out', metavar='PDF',
+experimental.add_argument('--load-out', type=str, default=None, dest='load_out', metavar='PDF',
                     help="With --load-report: output PDF path (default: load_report.pdf)")
-parser.add_argument('--hr-max', type=float, default=None, dest='hr_max',
+experimental.add_argument('--hr-max', type=float, default=None, dest='hr_max',
                     help="With --load-report: athlete max heart rate (else 220-age)")
-parser.add_argument('--hr-rest', type=float, default=None, dest='hr_rest',
+experimental.add_argument('--hr-rest', type=float, default=None, dest='hr_rest',
                     help="With --load-report: athlete resting heart rate (default 60)")
-parser.add_argument('--age', type=int, default=None, dest='age',
+experimental.add_argument('--age', type=int, default=None, dest='age',
                     help="With --load-report: athlete age (for HRmax fallback)")
-parser.add_argument('--sex', type=str, default='M', choices=['M', 'F'], dest='sex',
+experimental.add_argument('--sex', type=str, default='M', choices=['M', 'F'], dest='sex',
                     help="With --load-report: athlete sex (Banister TRIMP constant)")
-parser.add_argument('--zepp-pull', action='store_true', dest='zepp_pull',
+experimental.add_argument('--zepp-pull', action='store_true', dest='zepp_pull',
                     help="Pull workouts straight from your Zepp/Huami cloud account "
                          "(needs a captured apptoken in the credentials file), then "
                          "build the load report.")
-parser.add_argument('--strava-pull', action='store_true', dest='strava_pull',
+experimental.add_argument('--strava-pull', action='store_true', dest='strava_pull',
                     help="Pull activities from Strava (Zepp→Strava sync), then build "
                          "the load report. Needs Strava creds in the credentials file.")
-parser.add_argument('--creds', type=str, default=None, dest='creds', metavar='JSON',
+experimental.add_argument('--creds', type=str, default=None, dest='creds', metavar='JSON',
                     help="Path to the cloud credentials JSON "
                          "(default ~/.bioscout/load_credentials.json)")
 args = parser.parse_args()
@@ -253,18 +274,94 @@ if getattr(args, 'run_subject', None) is not None:
 # --run_subject, the block above handles it (reset-then-run) and exits before we
 # reach here, so this only fires for a reset with no pipeline run.
 # ---------------------------------------------------------------------------
+
+# --- --pylance-fix : write a project .vscode/settings.json so VS Code/Pylance
+# resolves 'import bioscout' (fixes white/unresolved Subject etc.) -----------
+if getattr(args, 'pylance_fix', None) is not None:
+    import json as _json
+    import bioscout as _bs
+    proj = os.path.abspath(args.pylance_fix or '.')
+    pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(_bs.__file__)))  # dir holding the 'bioscout' package
+    vpath = os.path.join(proj, '.vscode', 'settings.json')
+    os.makedirs(os.path.dirname(vpath), exist_ok=True)
+    cfg = {}
+    if os.path.exists(vpath):
+        try:
+            with open(vpath, 'r', encoding='utf-8') as fh:
+                cfg = _json.load(fh) or {}
+        except Exception:
+            cfg = {}   # unreadable/JSONC — start fresh but keep a backup
+            try:
+                os.replace(vpath, vpath + '.bak')
+                print(f"[pylance-fix] existing settings.json unreadable; backed up to {vpath}.bak")
+            except Exception:
+                pass
+    cfg['python.defaultInterpreterPath'] = sys.executable
+    extra = cfg.get('python.analysis.extraPaths') or []
+    if pkg_parent not in extra:
+        extra.append(pkg_parent)
+    cfg['python.analysis.extraPaths'] = extra
+    with open(vpath, 'w', encoding='utf-8') as fh:
+        _json.dump(cfg, fh, indent=2)
+    print(f"[pylance-fix] wrote {vpath}")
+    print(f"  python.defaultInterpreterPath = {sys.executable}")
+    print(f"  python.analysis.extraPaths   += {pkg_parent}")
+    print("  -> In VS Code: Ctrl+Shift+P -> 'Developer: Reload Window' "
+          "(or 'Python: Restart Language Server'). Subject/functions should colour now.")
+    sys.exit(0)
+
+# --- --ingest-c3d : distribute loose <trial>.c3d files into the simulations tree
+# so a new subject/session is ready for --run_subject --export -----------------
+if getattr(args, 'ingest_c3d', None):
+    import glob as _glob, shutil as _shutil
+    _proj = os.path.abspath(args.project or os.getcwd())
+    _subj = args.subject
+    _sess = ([s.strip() for s in args.session.split(',')][0] if args.session else None)
+    if not _subj or not _sess:
+        print("[ingest-c3d] requires --subject and --session, e.g.:\n"
+              "  python -m bioscout --ingest-c3d \"C:/…/c3dfiles/25_03_31\" "
+              "-s Athlete_03_X --session 25_03_31")
+        sys.exit(2)
+    _src = os.path.abspath(args.ingest_c3d)
+    if not os.path.isdir(_src):
+        print(f"[ingest-c3d] c3d folder not found: {_src}"); sys.exit(1)
+    _dry = getattr(args, 'reset_dry_run', False)
+    _sim_sess = os.path.join(_proj, "simulations", _subj, _sess)
+    _made = []
+    for _c in sorted(_glob.glob(os.path.join(_src, "*.c3d"))):
+        _stem = os.path.splitext(os.path.basename(_c))[0]
+        _dst = os.path.join(_sim_sess, _stem, "inputs", "c3dfile.c3d")
+        if os.path.exists(_dst):
+            continue
+        _made.append(_stem)
+        if not _dry:
+            os.makedirs(os.path.dirname(_dst), exist_ok=True)
+            _shutil.copy2(_c, _dst)
+    # ensure the models/<subject>/<session>/ folder exists (drop the scaled .osim there)
+    _mdl = os.path.join(_proj, "models", _subj, _sess)
+    if not _dry:
+        os.makedirs(_mdl, exist_ok=True)
+    print(f"[ingest-c3d] {'would create' if _dry else 'created'} {len(_made)} trial(s) "
+          f"in simulations/{_subj}/{_sess}: {_made}")
+    print(f"  models dir: {_mdl}  (put the scaled .osim here)")
+    print(f"  next: add the subject to settings.py 'subjects', then\n"
+          f"        python -m bioscout --run_subject {_subj} --session {_sess} --export --REPLACE")
+    sys.exit(0)
+
 if getattr(args, 'reset', False) and getattr(args, 'run_subject', None) is None:
     import bioscout as _bioscout_reset
     _rst_project  = args.project or os.getcwd()
     _rst_sessions = [s.strip() for s in args.session.split(',')] if args.session else None
     _rst_trials   = [t.strip() for t in args.trial.split(',')]   if args.trial   else None
-    print(f"[reset] project={_rst_project}  sessions={_rst_sessions or 'ALL'}  "
-          f"trials={_rst_trials or 'ALL'}  dry_run={args.reset_dry_run}", flush=True)
+    _rst_subjects = [s.strip() for s in args.subject.split(',')] if args.subject else None
+    print(f"[reset] project={_rst_project}  subjects={_rst_subjects or 'ALL'}  "
+          f"sessions={_rst_sessions or 'ALL'}  trials={_rst_trials or 'ALL'}  "
+          f"dry_run={args.reset_dry_run}", flush=True)
     _rst_rc = 0
     try:
         _bioscout_reset.pipeline.reset_simulations(
             project_dir=_rst_project,
-            session=_rst_sessions, trials=_rst_trials,
+            subjects=_rst_subjects, session=_rst_sessions, trials=_rst_trials,
             raw_inputs=getattr(args, 'reset_raw', False),
             dry_run=args.reset_dry_run)
     except Exception as _rst_e:
@@ -1287,9 +1384,10 @@ def main() -> int:
         import bioscout
         _sessions = [s.strip() for s in args.session.split(',')] if args.session else None
         _trials   = [t.strip() for t in args.trial.split(',')]   if args.trial   else None
+        _subjects = [s.strip() for s in args.subject.split(',')] if args.subject else None
         bioscout.pipeline.reset_simulations(
             project_dir=args.project or os.getcwd(),
-            session=_sessions, trials=_trials,
+            subjects=_subjects, session=_sessions, trials=_trials,
             raw_inputs=getattr(args, 'reset_raw', False),
             dry_run=args.reset_dry_run)
         return 0

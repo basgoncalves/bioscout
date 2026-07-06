@@ -1,0 +1,51 @@
+# Muscle-centric function/mapping matrix (replaces muscle_map.csv + strength_muscle_groups.csv).
+# One row per MODEL muscle (name WITHOUT side; _r/_l added at run time).
+# literature_muscle : the literature name this compartment is aggregated under for the
+#   moment-arm / fibre validation (blank = not compared to literature). Many compartments
+#   share one literature_muscle (e.g. addmag* -> adductor_magnus).
+# Remaining columns are JOINT ACTIONS: 1 = this muscle is an agonist for that action
+#   (used by the strength validation), 0 = not. The action's coordinate lives in
+#   literature_strength.csv. Edit any 0/1 to add or remove a muscle from a strength group.
+model_muscle,literature_muscle,Hip flexion,Hip extension,Hip abduction,Hip adduction,Hip internal rotation,Hip external rotation,Knee extension,Knee flexion,Ankle plantarflexion,Ankle dorsiflexion
+psoas,psoas,1,0,0,0,0,0,0,0,0,0
+iliacus,iliacus,1,0,0,0,0,0,0,0,0,0
+tfl,tfl,1,0,1,0,1,0,0,0,0,0
+sart,sartorius,1,0,0,0,0,0,0,1,0,0
+grac,gracilis,1,0,0,1,0,0,0,1,0,0
+pect,,0,0,0,1,0,0,0,0,0,0
+addbrev,,0,0,0,1,0,0,0,0,0,0
+addlong,,1,0,0,1,0,0,0,0,0,0
+addmagProx,adductor_magnus,0,1,0,1,0,0,0,0,0,0
+addmagMid,adductor_magnus,0,1,0,1,0,0,0,0,0,0
+addmagDist,adductor_magnus,0,1,0,1,0,0,0,0,0,0
+addmagIsch,adductor_magnus,0,1,0,1,0,0,0,0,0,0
+glmax1,gluteus_maximus,0,1,0,0,0,1,0,0,0,0
+glmax2,gluteus_maximus,0,1,0,0,0,1,0,0,0,0
+glmax3,gluteus_maximus,0,1,0,0,0,1,0,0,0,0
+glmed1,gluteus_medius,0,0,1,0,1,0,0,0,0,0
+glmed2,gluteus_medius,0,0,1,0,0,0,0,0,0,0
+glmed3,gluteus_medius,0,0,1,0,0,0,0,0,0,0
+glmin1,,0,0,1,0,1,0,0,0,0,0
+glmin2,,0,0,1,0,0,0,0,0,0,0
+glmin3,,0,0,1,0,0,0,0,0,0,0
+piri,piriformis,0,0,0,0,0,1,0,0,0,0
+quadfem,quadratus_femoris,0,0,0,0,0,1,0,0,0,0
+recfem,rectus_femoris,1,0,0,0,0,0,1,0,0,0
+vasmed,vastus_medialis,0,0,0,0,0,0,1,0,0,0
+vaslat,vastus_lateralis,0,0,0,0,0,0,1,0,0,0
+vasint,vastus_intermedius,0,0,0,0,0,0,1,0,0,0
+bflh,biceps_femoris_lh,0,1,0,0,0,0,0,1,0,0
+bfsh,biceps_femoris_sh,0,0,0,0,0,0,0,1,0,0
+semimem,semimembranosus,0,1,0,0,0,0,0,1,0,0
+semiten,semitendinosus,0,1,0,0,0,0,0,1,0,0
+soleus,soleus,0,0,0,0,0,0,0,0,1,0
+gaslat,gastrocnemius_lateralis,0,0,0,0,0,0,0,1,1,0
+gasmed,gastrocnemius_medialis,0,0,0,0,0,0,0,1,1,0
+tibpost,tibialis_posterior,0,0,0,0,0,0,0,0,1,0
+perlong,peroneus_longus,0,0,0,0,0,0,0,0,1,0
+perbrev,peroneus_brevis,0,0,0,0,0,0,0,0,1,0
+fdl,fdl,0,0,0,0,0,0,0,0,1,0
+fhl,fhl,0,0,0,0,0,0,0,0,1,0
+tibant,tibialis_anterior,0,0,0,0,0,0,0,0,0,1
+edl,edl,0,0,0,0,0,0,0,0,0,1
+ehl,ehl,0,0,0,0,0,0,0,0,0,1

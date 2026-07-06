@@ -657,6 +657,21 @@ def _remap_grf_axes(grf_file, axis_map=None, cop_scale=0.001,
             f.write('\t'.join(_fmt(v) for v in _row) + '\n')
 
 
+def _apply_plate_force_sign(grf_file, plate_sign):
+    """Flip the sign of specific force components for individual plates in a
+    grf.mot. ``plate_sign`` = {plate_id: {axis: sign}}, e.g. {1: {'vx': -1}}
+    negates ``ground_force_1_vx`` (plate 1 anterior-posterior force)."""
+    import pandas as _pd
+    from bioscout import utils as _u
+    df = _u.load_any_data_file(grf_file)
+    for pid, axes in plate_sign.items():
+        for axis, sign in axes.items():
+            col = f"ground_force_{pid}_{axis}"
+            if col in df.columns:
+                df[col] = float(sign) * _pd.to_numeric(df[col], errors="coerce")
+    _u.write_sto_file(df, os.path.abspath(grf_file))
+
+
 def export_grf(c3d_filepath, output_dir=None):
 
     def transform_labels(labels):
@@ -737,6 +752,20 @@ def export_grf(c3d_filepath, output_dir=None):
               f"(map: {_axis_map or 'default'}, CoP*{_cop_scale}, moment*{_moment_scale})")
     except Exception as _re_err:
         print(f"  [WARN] GRF axis remap skipped: {_re_err}")
+
+    # Per-PLATE sign correction for individually mis-wired plates (e.g. one plate
+    # whose AP force channel is inverted). settings.BatchSettings.grf_plate_force_sign
+    # = {plate_id: {axis: sign}}, e.g. {1: {'vx': -1}} flips plate 1's AP force.
+    try:
+        _plate_sign = getattr(_bs, 'grf_plate_force_sign', None)
+    except Exception:
+        _plate_sign = None
+    if _plate_sign:
+        try:
+            _apply_plate_force_sign(grf_file, _plate_sign)
+            print(f"  [OK] Applied per-plate force sign correction: {_plate_sign}")
+        except Exception as _ps_err:
+            print(f"  [WARN] per-plate sign correction skipped: {_ps_err}")
 
     # Clean NaN rows from exported GRF file
     print(f"Cleaning NaN rows from GRF data...")

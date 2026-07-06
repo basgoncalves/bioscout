@@ -16,7 +16,6 @@
    <emg>emg.mot</emg>
    <grf_mot>grf.mot</grf_mot>
    <markers>markers.trc</markers>
-   <events>events.csv</events>
    <setup_ik>setup_IK.xml</setup_ik>
    <setup_grf>GRF.xml</setup_grf>
    <setup_id>setup_ID.xml</setup_id>

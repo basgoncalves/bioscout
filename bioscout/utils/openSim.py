@@ -1988,18 +1988,29 @@ def validate_markers_used(osim_modelPath, ikTool, markers_path):
     except Exception:
         _marker_weights = {}
 
+    # Markers to exclude from IK entirely (e.g. belt/noise markers BL, BR). Their
+    # IK task is disabled so they don't pull the fit. Listed in
+    # BatchSettings.markers_to_skip; matched case-insensitively.
+    try:
+        _skip = {str(s).upper() for s in getattr(settings.BatchSettings, 'markers_to_skip', []) or []}
+    except Exception:
+        _skip = set()
+
     def _weight_for(_mname):
         _pf = (markers_parent_frames.get(_mname) or "").replace("/bodyset/", "")
         return float(_marker_weights.get(_pf, 1.0)), _pf
 
     for marker_name in markers_model:
         _w, _pf = _weight_for(marker_name)
-        _in_trc = marker_name in markers_trc
+        _skipped = marker_name.upper() in _skip
+        _in_trc = (marker_name in markers_trc) and not _skipped
         if marker_name in markers_in_task:
             task = task_set_template.get(marker_name)
             task.setWeight(_w)                 # apply weight to template markers too
             task.setApply(_in_trc)
-            if not _in_trc:
+            if _skipped:
+                print(f"Marker '{marker_name}' SKIPPED (markers_to_skip). Disabling task.")
+            elif not _in_trc:
                 print(f"Marker '{marker_name}' not found in TRC file. Disabling task.")
             else:
                 print(f"Marker '{marker_name}' weight={_w} (body '{_pf}').")
@@ -2008,7 +2019,9 @@ def validate_markers_used(osim_modelPath, ikTool, markers_path):
             newTask.setName(marker_name)
             newTask.setWeight(_w)
             newTask.setApply(_in_trc)
-            if _in_trc:
+            if _skipped:
+                print(f"Marker '{marker_name}' SKIPPED (markers_to_skip). Disabling task.")
+            elif _in_trc:
                 print(f"Marker '{marker_name}' added with weight={_w} (body '{_pf}').")
             else:
                 print(f"Marker '{marker_name}' in Model not found in TRC file. Disabling task.")
@@ -2053,12 +2066,14 @@ def compare_marker_locations(marker_experimental_path=None, marker_virtual_path=
 
     distances = pd.DataFrame({'time': time.values})
     
-    # Marker errors describe IK quality -> write them into external_biomechanics/
-    # (next to the IK outputs), not the raw inputs/ folder. The experimental TRC
-    # lives in <trial>/inputs/, so the trial root is one level up.
-    output_dir = os.path.dirname(marker_experimental_path)          # <trial>/inputs
+    # Marker errors describe IK quality -> write them next to the IK outputs,
+    # i.e. the same folder as the virtual/model marker locations file
+    # (<sim_trial>/external_biomechanics/). Deriving the folder from the
+    # experimental TRC (marker_experimental_path) is wrong: that file lives in
+    # the experimental data tree, so the errors ended up there.
+    output_dir = os.path.dirname(os.path.abspath(marker_virtual_path))
     _extbio = os.path.join(os.path.dirname(output_dir), "external_biomechanics")
-    if os.path.isdir(_extbio):
+    if os.path.basename(output_dir) != "external_biomechanics" and os.path.isdir(_extbio):
         output_dir = _extbio
     mean_errors_filename = os.path.join(output_dir, '_ik_marker_errors_mean.txt')
 
@@ -3514,7 +3529,7 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
             print(f"Warning: Could not restore original working directory: {e}")
 
 def run_ma(osim_modelPath=None, ik_output=None,
-         grf_xml=None, results_dir=None):
+         grf_xml=None, results_dir=None, coordinates=None):
 
     if osim_modelPath is None:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
@@ -3555,6 +3570,40 @@ def run_ma(osim_modelPath=None, ik_output=None,
     muscleAnalysis.setModel(model)
     muscleAnalysis.setStartTime(motion.getFirstTime())
     muscleAnalysis.setEndTime(motion.getLastTime())
+
+    # Restrict MA to the coordinates we actually use. By default MuscleAnalysis
+    # computes moment arms + moments for EVERY coordinate (arms, lumbar, wrist,
+    # mtp, ...), which is the bulk of MA compute and disk I/O (~80 .sto files).
+    # Limiting to the lower-limb DOFs is a large speed-up with no loss for our
+    # analyses/validation. The list can be overridden via the `coordinates`
+    # argument or settings.MuscleAnalysisSettings.coordinates.
+    if coordinates is None:
+        try:
+            coordinates = list(getattr(settings, 'MuscleAnalysisSettings', None)
+                               and settings.MuscleAnalysisSettings.coordinates or [])
+        except Exception:
+            coordinates = []
+        if not coordinates:
+            coordinates = ['hip_flexion', 'hip_adduction', 'hip_rotation',
+                           'knee_angle', 'ankle_angle', 'subtalar_angle']
+    try:
+        cs = model.getCoordinateSet()
+        model_names = {cs.get(i).getName() for i in range(cs.getSize())}
+        want = []
+        for base in coordinates:
+            cands = [base] if base in model_names else [f'{base}_r', f'{base}_l']
+            for nm in cands:
+                if nm in model_names and nm not in want:
+                    want.append(nm)
+        if want:
+            arr = osim.ArrayStr()
+            for nm in want:
+                arr.append(nm)
+            muscleAnalysis.setCoordinates(arr)
+            print(f"MuscleAnalysis restricted to {len(want)} coordinates: {want}")
+    except Exception as _e:
+        print(f"Warning: could not restrict MuscleAnalysis coordinates ({_e}); "
+              "computing all.")
 
     # Create the muscle analysis tool
     maTool = osim.AnalyzeTool()

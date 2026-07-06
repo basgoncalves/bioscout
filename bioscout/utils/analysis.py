@@ -1662,6 +1662,10 @@ class Analyse:
                            # dir derived from jra_forces_ceinms — not read from here
             if attr in ('parentdir', '_parentdir'):
                 continue   # derived from the trial path; rebuilt on load
+            if attr in ('_log_tag', '_session_setup_dir', 'experimental_dir'):
+                continue   # transient runtime hooks (log prefix / session I/O redirects);
+                           # set per-run by the driver, never persisted — otherwise a stale
+                           # _log_tag reloads and mis-labels every later log line
             if attr in self._LAYOUT_FIELDS:
                 continue   # structural file/dir paths are code-driven (settings.Inputs)
                            # and rebuilt on load by _apply_inputs_layout — not persisted,
@@ -1968,8 +1972,8 @@ class Analyse:
                 continue
             _d = os.path.dirname(_v)
             # In the session-centric layout raw inputs live in experimental/, so
-            # don't create an empty inputs/ folder inside the iteration trial dir.
-            if exp and _d == _inputs_dir:
+            # never create an empty inputs/ folder inside the iteration trial dir.
+            if _d == _inputs_dir:
                 continue
             if _d and not _d.startswith("..") and not os.path.isabs(_d):
                 try:
@@ -3327,14 +3331,27 @@ class Analyse:
             self._log('[Warning] no JRA results to compare.'); return
 
         # Which contact-force columns to plot (per joint) — from settings.
-        _subject = os.path.normpath(self.path).split(os.sep)[-3]
+        # New layout: .../<session>/<iteration>/<trial>; the model/iteration that
+        # decides the knee-joint naming is the PARENT of the trial folder ([-2]).
+        _subject = os.path.normpath(self.path).split(os.sep)[-2]
+        _side = str(getattr(self, "side", "r")).lower()   # per-trial leg (from session.yaml)
+        # Legs to draw: 'both' -> R (solid) + L (dashed); else the single leg solid.
+        if _side.startswith("b"):
+            _sides = [("r", "-", "R"), ("l", "--", "L")]
+        elif _side.startswith("l"):
+            _sides = [("l", "-", "")]
+        else:
+            _sides = [("r", "-", "")]
         try:
-            jcols = _u.settings.BatchSettings.JRA_COLUMNS(_subject)   # {joint: [fx, fy, fz]}
+            jcols_by = {sd: _u.settings.BatchSettings.JRA_COLUMNS(_subject, sd)
+                        for sd, _, _ in _sides}
         except Exception as e:
             self._log(f'[Warning] JRA_COLUMNS unavailable ({e}); skipping JRA comparison.'); return
-        joints = [j for j, cols in jcols.items()
+        _ref = jcols_by[_sides[0][0]]
+        joints = [j for j in _ref
                   if any((so is not None and c in so.columns) or
-                         (ce is not None and c in ce.columns) for c in cols)]
+                         (ce is not None and c in ce.columns)
+                         for sd, _, _ in _sides for c in jcols_by[sd][j])]
         if not joints:
             self._log('[Warning] none of JRA_COLUMNS found in the JRA outputs.'); return
 
@@ -3400,24 +3417,30 @@ class Analyse:
                 axg[r][c].axis('off')
 
         for r, j in enumerate(joints):
-            # columns 0..2: Fx/Fy/Fz
-            for c, col in enumerate(jcols[j][:3]):
+            # columns 0..2: Fx/Fy/Fz — one line per side (leg) x source (SO/CEINMS)
+            for c in range(3):
                 ax = axg[r][c]; ax.axis('on')
-                s, e = _norm(_get(so, col)), _norm(_get(ce, col))
-                if s is not None: ax.plot(so['time'].values, s, color='tab:blue', label='SO')
-                if e is not None: ax.plot(ce['time'].values, e, color='tab:red', label='CEINMS')
+                for sd, lsty, slab in _sides:
+                    col = jcols_by[sd][j][c]
+                    sfx = f" {slab}" if slab else ""
+                    s, e = _norm(_get(so, col)), _norm(_get(ce, col))
+                    if s is not None: ax.plot(so['time'].values, s, color='tab:blue', ls=lsty, label=f'SO{sfx}')
+                    if e is not None: ax.plot(ce['time'].values, e, color='tab:red', ls=lsty, label=f'CEINMS{sfx}')
                 ax.set_title(f"{j} {_axis[c]}"); ax.set_xlabel("time normalised (s)"); ax.set_ylabel(f"Force ({_unit})")
                 ax.legend(fontsize=8)
 
-            # column 3: |resultant| = sqrt(Fx^2+Fy^2+Fz^2)
+            # column 3: |resultant| = sqrt(Fx^2+Fy^2+Fz^2) — per side
             ax = axg[r][3]; ax.axis('on')
-            def _mag(df):
-                comps = [_get(df, col) for col in jcols[j][:3]]
+            def _mag(df, cols3):
+                comps = [_get(df, col) for col in cols3]
                 return (np.sqrt(comps[0]**2 + comps[1]**2 + comps[2]**2)
                         if all(x is not None for x in comps) else None)
-            sm, em = _norm(_mag(so)), _norm(_mag(ce))
-            if sm is not None: ax.plot(so['time'].values, sm, color='tab:blue', label='SO')
-            if em is not None: ax.plot(ce['time'].values, em, color='tab:red', label='CEINMS')
+            for sd, lsty, slab in _sides:
+                _cols3 = jcols_by[sd][j][:3]
+                sfx = f" {slab}" if slab else ""
+                sm, em = _norm(_mag(so, _cols3)), _norm(_mag(ce, _cols3))
+                if sm is not None: ax.plot(so['time'].values, sm, color='tab:blue', ls=lsty, label=f'SO{sfx}')
+                if em is not None: ax.plot(ce['time'].values, em, color='tab:red', ls=lsty, label=f'CEINMS{sfx}')
             ax.set_title(f"{j} |resultant|"); ax.set_xlabel("time normalised (s)"); ax.set_ylabel(f"|F| ({_unit})")
 
             # Overlay literature joint-contact-force bands (xBW) on the resultant
@@ -3459,7 +3482,7 @@ class Analyse:
         os.makedirs(_dir, exist_ok=True)
         save_path = os.path.join(_dir, save_name)
         plt.savefig(save_path, dpi=150)
-        self._log(f"[Success] JRA comparison figure saved: {save_path}", terminal=True)
+        print(f"    JRA comparison figure saved: {save_path}", flush=True)
         return fig, axg
 
     def run_emg_filter(self):
@@ -4237,7 +4260,7 @@ class Analyse:
         fig.tight_layout(rect=[0, 0.03, 1, 0.97])
         save_path = os.path.join(self.path, os.path.splitext(self.id)[0] + '_summary.png')
         plt.savefig(save_path, dpi=140)
-        self._log(f'[Success] IK+ID summary figure saved: {save_path}', terminal=True)
+        print(f"    IK+ID summary figure saved: {save_path}", flush=True)
         return fig, axg
 
     def plot_kin_mom_summary(self, dofs=None):
@@ -4287,6 +4310,62 @@ class Analyse:
                 order.append(base)
             groups[base][side or 'none'] = d
 
+        # ---- per-joint IK marker error (mm) for annotation ------------------
+        # Prefer the per-marker file (_ik_marker_errors_all.sto) so the error can
+        # be split by joint/side; otherwise fall back to the aggregate RMS file
+        # (_ik_marker_errors.sto) and stamp one global value on every panel.
+        _ext = os.path.join(self.path, os.path.dirname(self.ik))
+        _jm = (getattr(_u.settings.SummarySettings, 'joint_marker_patterns', None)
+               or {
+                   'pelvis': ['ASI', 'PSI', 'SACR'],
+                   'hip':    ['ASI', 'PSI', 'SACR', 'THI', 'TH'],
+                   'knee':   ['THI', 'FC', 'KNE', 'TIB', 'SHA', 'TH'],
+                   'ankle':  ['MAL', 'ANK', 'HEE', 'TOE', 'MT', 'M5', 'SHA', 'TIB'],
+               })
+        marker_err, global_rms = {}, None
+        try:
+            _allp = os.path.join(_ext, '_ik_marker_errors_all.sto')
+            if os.path.isfile(_allp):
+                _me = _u.load_any_data_file(_allp)
+                _cols = [c for c in _me.columns if str(c).lower() != 'time']
+
+                def _rms(sel):
+                    v = _me[sel].apply(pd.to_numeric, errors='coerce').values
+                    v = v[np.isfinite(v)]
+                    return float(np.sqrt(np.mean(v ** 2)) * 1000.0) if v.size else None
+
+                for jk in {b.split('_')[0] for b in order}:
+                    pats = _jm.get(jk)
+                    if not pats:
+                        continue
+                    per = {}
+                    for side, letter in (('r', 'R'), ('l', 'L')):
+                        sel = [c for c in _cols
+                               if any(p.upper() in str(c).upper() for p in pats)
+                               and (str(c).upper().startswith(letter)
+                                    or not str(c).upper().startswith(('L', 'R')))]
+                        r = _rms(sel) if sel else None
+                        if r is not None:
+                            per[side] = r
+                    if per:
+                        marker_err[jk] = per
+            else:
+                _aggp = os.path.join(_ext, '_ik_marker_errors.sto')
+                if os.path.isfile(_aggp):
+                    _agg = _u.load_any_data_file(_aggp)
+                    if 'marker_error_RMS' in _agg.columns:
+                        rms = pd.to_numeric(_agg['marker_error_RMS'],
+                                            errors='coerce').values
+                        rms = rms[np.isfinite(rms)]
+                        if rms.size:
+                            global_rms = float(np.sqrt(np.mean(rms ** 2)) * 1000.0)
+                    self._log('[plot_kin_mom_summary] per-marker error file '
+                              '(_ik_marker_errors_all.sto) not found; using global '
+                              'IK RMS. Run the per-marker error calc to get '
+                              'per-joint values.')
+        except Exception as _e:
+            self._log(f'[plot_kin_mom_summary] marker-error annotation skipped: {_e}')
+
         ncols = len(order)
         fig, axes = plt.subplots(2, ncols, figsize=(max(3.0 * ncols, 6), 6),
                                  squeeze=False)
@@ -4307,6 +4386,21 @@ class Analyse:
                     ax_mom.plot(tm, pd.to_numeric(mom[mcol], errors='coerce'),
                                 color=color, label=lab)
             ax_ang.set_title(base, fontsize=10)
+            # marker-error text box (per-joint RMS if available, else global)
+            jk = base.split('_')[0]
+            note = None
+            if jk in marker_err:
+                parts = [f"{s.upper()} {marker_err[jk][s]:.1f}"
+                         for s in ('r', 'l') if s in marker_err[jk]]
+                if parts:
+                    note = 'mk err (mm): ' + ', '.join(parts)
+            elif global_rms is not None:
+                note = f'IK RMS(all mk): {global_rms:.1f} mm'
+            if note:
+                ax_ang.text(0.02, 0.97, note, transform=ax_ang.transAxes,
+                            fontsize=6.5, va='top', ha='left',
+                            bbox=dict(boxstyle='round,pad=0.25', fc='white',
+                                      ec='0.6', alpha=0.85))
             ax_ang.set_ylabel('Angle (deg)', fontsize=9)
             ax_mom.set_ylabel('Moment (Nm)', fontsize=9)
             ax_mom.set_xlabel('Time (s)', fontsize=9)
@@ -4319,8 +4413,7 @@ class Analyse:
         save_path = os.path.join(self.path, os.path.dirname(self.ik),
                                  'kinematics_moments.png')
         fig.savefig(save_path, dpi=140)
-        self._log(f'[Success] kinematics+moments summary saved: {save_path}',
-                  terminal=True)
+        print(f"    kinematics+moments summary saved: {save_path}", flush=True)
         return fig, axes
 
     def plot_so(self):
@@ -4443,14 +4536,29 @@ class Analyse:
         groups = getattr(_u.settings.BatchSettings, 'MUSCLE_GROUPS', {}) or {}
         if not groups or not sources:
             return None
-        t0, t1 = self.get_time_range()
+        # Use the trial's SIMULATION window (persisted crop), not the full-trial
+        # data span, so the plot matches the analysed time range.
+        _tr = getattr(self, "time_range", None)
+        if isinstance(_tr, (list, tuple)) and len(_tr) == 2:
+            t0, t1 = float(_tr[0]), float(_tr[1])
+        else:
+            t0, t1 = self.get_time_range()
+        # Per-trial leg filter: walking trials set side left/right -> keep only that
+        # leg's muscles; squats (side unset / 'both') keep BOTH legs.
+        _s = str(getattr(self, "side", "both")).lower()
+        def _leg_ok(mus):
+            if _s.startswith('l'):
+                return not mus.endswith('_r')
+            if _s.startswith('r'):
+                return not mus.endswith('_l')
+            return True
         te = (pd.to_numeric(emg_df['time'], errors='coerce').to_numpy(float)
               if emg_df is not None else None)
 
         panels = []  # (group_name, [muscles_with_emg], channel)
         for gname, gmuscles in groups.items():
             mm = [m for m in gmuscles
-                  if m in rev and any(m in s[1].columns for s in sources)]
+                  if m in rev and _leg_ok(m) and any(m in s[1].columns for s in sources)]
             if mm:
                 panels.append((gname, mm, rev.get(mm[0])))
         if not panels:
@@ -4807,8 +4915,9 @@ class Analyse:
                 jra_path = os.path.join(self.path, self.jra)
                 jra = _u.load_any_data_file(jra_path) if os.path.exists(jra_path) else None
                 bw = (float(self.body_mass) * 9.81) if getattr(self, 'body_mass', None) else None
-                _subj = getattr(self, 'model_name', None) or os.path.basename(self.model_dir)
-                jcols = (_u.settings.BatchSettings.JRA_COLUMNS(_subj)
+                # iteration folder (parent of trial) decides knee-joint naming
+                _subj = os.path.normpath(self.path).split(os.sep)[-2]
+                jcols = (_u.settings.BatchSettings.JRA_COLUMNS(_subj, getattr(self, "side", "r"))
                          if hasattr(_u.settings.BatchSettings, 'JRA_COLUMNS') else {})
                 xpct = np.linspace(0, 100, 101)
                 for _ent in ('hip', 'knee'):

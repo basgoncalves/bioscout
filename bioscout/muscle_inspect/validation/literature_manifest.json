@@ -1,0 +1,54 @@
+{
+  "schema": [
+    "source",
+    "variable",
+    "entity",
+    "condition",
+    "series",
+    "x",
+    "y",
+    "x_unit",
+    "y_unit"
+  ],
+  "sources": {
+    "Bergmann2001": {
+      "citation": "Bergmann et al. 2001, J Biomech (HIP98 / OrthoLoad)",
+      "variable": "hip_contact_force",
+      "y_unit": "%BW",
+      "notes": "Instrumented hip implant contact force during walking, % body weight.",
+      "file": "BergmannWalkingData.mat",
+      "n_series": 1,
+      "n_rows": 101
+    },
+    "Giarmatzis2015": {
+      "citation": "Giarmatzis et al. 2015, J Bone Miner Res",
+      "variable": "hip_contact_force",
+      "y_unit": "xBW",
+      "notes": "Hip contact force vs gait cycle at walking/running speeds (6-12 km/h). 'curve' = mean waveform; 'peak' series as stored in source .mat. Units multiples of body weight (xBW).",
+      "file": "Giarmatzis2015JBMR.mat",
+      "n_series": 14,
+      "n_rows": 1414
+    },
+    "Hoang": {
+      "citation": "Hoang et al. (assisted gait, minimum-moment condition)",
+      "variable": "hip_contact_force",
+      "y_unit": "xBW",
+      "notes": "Assisted walking hip contact force, minimum-moment strategy. series mean/lower/upper form a confidence band.",
+      "file": "HoangWalkingData.mat",
+      "n_series": 3,
+      "n_rows": 303
+    },
+    "Pandy2021": {
+      "citation": "Pandy et al. 2021, Scand J Med Sci Sports",
+      "variable": "muscle_force",
+      "y_unit": "normalized",
+      "notes": "Muscle forces over gait cycle for 10 muscles (GAS, GMAX, GMED, HAMS, IP, RF, SOL, VAS ...) across conditions FC1/FC7/FC19. y stored as in source (normalized).",
+      "file": "Pandy2021SJMSS.mat",
+      "n_series": 24,
+      "n_rows": 2424
+    }
+  },
+  "skipped": {
+    "MuscleParamenters.mat": "no adapter"
+  }
+}

@@ -137,7 +137,8 @@ def _resolve_project_dir():
                 for d in ('simulations', 'Simulations', 'models', 'Models'))):
         return cwd
     try:
-        _pr = getattr(getattr(settings, 'BatchSettings', None), 'PROJECT_ROOT', None)
+        _pr = (getattr(getattr(settings, 'BatchSettings', None), 'PROJECT_ROOT', None)
+               or getattr(settings, 'PROJECT_ROOT', None))
         if _pr and os.path.isdir(str(_pr)):
             return os.path.abspath(str(_pr))
     except Exception:
@@ -154,7 +155,11 @@ CODE_DIR = UTILS_DIR   # where this package physically lives (e.g. for log.txt)
 # utils.SIMULATIONS_DIR / utils.RESULTS_DIR. They are None until a project's
 # settings define them, and bioscout.Project() (re)points them via _point_dirs().
 def _dir_from_settings(name):
+    # Prefer BatchSettings.<name>; fall back to a module-level settings.<name>
+    # so a project may declare its paths as plain globals outside BatchSettings.
     val = getattr(getattr(settings, "BatchSettings", None), name, None)
+    if val is None:
+        val = getattr(settings, name, None)
     return str(val) if val is not None else None
 
 MODELS_DIR       = _dir_from_settings('MODELS_DIR')
@@ -243,7 +248,8 @@ def create_session(subject, session):
 ## Utility functions — moved to utils/shared.py and re-exported so that
 ## utils.updir / utils.print_to_log / utils.time_normalise_df and every bare-name
 ## internal reference keep working unchanged.
-from .shared import updir, print_to_log, time_normalise_df, start_logging, trial_type
+from .shared import (updir, print_to_log, time_normalise_df, start_logging, trial_type,
+                     plot_style, side_color, fig_size, DEFAULT_PLOT_STYLE)
 
 
 def summarize_results(settings_path=None):
@@ -398,40 +404,14 @@ def create_color_and_style_dict(labels):
 # `utils.rmse` / `utils.rsquared` / `utils.compare_curves` / `utils.sum3d` and
 # every internal reference keep working unchanged).
 from .stats import rsquared, rmse, compare_curves, sum3d
-
-# dir manipulation
-def rename_all_files_in_dir(dir_path, old_str, new_str):
-    """
-    Renames all files in the specified directory by replacing old_str with new_str in their names.
-    
-    Args:
-        dir_path (str): The path to the directory containing the files.
-        old_str (str): The substring to be replaced in the file names.
-        new_str (str): The substring to replace old_str with.
-    """
-    if not os.path.isdir(dir_path):
-        raise ValueError(f"The provided path '{dir_path}' is not a valid directory.")
-    
-    for filename in os.listdir(dir_path):
-        if old_str in filename:
-            new_filename = filename.replace(old_str, new_str)
-            try:
-                os.rename(os.path.join(dir_path, filename), os.path.join(dir_path, new_filename))
-                print(f"Renamed '{filename}' to '{new_filename}'")
-            except Exception as e:
-                print(f"Error renaming '{filename}': {e}")
-
-
-class gitTools():
-    def __init__(self, local_repo_path):
-        self.local_repo_path = local_repo_path
-        try:
-            self.repo = Repo(local_repo_path)
-        except Exception as e:
-            print(f"Error initializing git repository at {local_repo_path}: {e}")
-            self.repo = None
-
-# ------------------------------------------------
+# Statistical parametric mapping (spm1d wrappers; spm1d is an optional dep).
+from .stats import (
+    spm_ttest,
+    spm_ttest2,
+    spm_ttest_paired,
+    spm_anova1,
+    spm_plot,
+)
 
 # Katya funtions TPS
 class osimTools():
@@ -1058,29 +1038,6 @@ class osimTools():
     ####
 
 
-# Project specific command line interface
-class Organise():
-    def __init__(self):
-        pass
-
-    def open_dir_in_explorer(self):
-        'Open the models and simulations directory in file explorer in the same window'
-
-        try:
-            # Open the first directory
-            os.startfile(PROJECT_DIR)
-            time.sleep(0.5)  # Small delay to ensure first window opens
-
-        except Exception as e:
-            print(f"Error opening directories: {e}")
-
-
-    def rename_files_in_dir(self):
-        dir_path = input("Enter directory path: ").strip('"')
-        old_str = input("Enter string to be replaced: ")
-        new_str = input("Enter new string: ")
-        rename_all_files_in_dir(dir_path, old_str, new_str)
-
 # Deferred imports to break circular dependency
 # (these modules import utils, so they must load AFTER utils is fully defined)
 try:
@@ -1127,6 +1084,26 @@ try:
     from . import analysis
 except Exception as _e:
     print(f"[bioscout.utils] analysis model not loaded: {_e}")
+
+
+# Back-compat: `utils.Inputs()` used to be the trial-layout class. In 2.0 the
+# canonical layout is a plain dict (analysis._default_layout_paths); expose a
+# thin object here so legacy `utils.Inputs().id` / `.ceinms_exe_setup` etc. keep
+# working (a few call sites in ceinms.py / summary.py still use it).
+try:
+    from .analysis import _default_layout_paths as _default_layout_paths
+
+    class Inputs:
+        """Attribute view over the canonical trial layout (back-compat shim)."""
+        def __init__(self, parentdir=None):
+            self._parentdir = parentdir
+            _lay = _default_layout_paths()
+            for _k, _v in _lay.items():
+                setattr(self, _k, _v)
+            # legacy attribute names some old call sites still use
+            self.emg_normalised = _lay.get("emg_filtered_normalised")
+except Exception:
+    Inputs = None
 
 
 # EMG processing consolidated into utils/emg.py — re-exported here so
