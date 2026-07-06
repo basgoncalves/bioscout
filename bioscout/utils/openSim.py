@@ -5,8 +5,45 @@ import datetime
 from time import time
 import warnings
 import numpy as np
+from scipy import linalg, optimize
 import opensim as osim
 import pandas as pd
+
+
+def mean_squared_error(y_true, y_pred, squared=True):
+    """Local RMSE/MSE helper (avoids sklearn version differences over the
+    removed `squared=` kwarg). Returns RMSE when squared=False."""
+    err = float(np.mean((np.asarray(y_true, float) - np.asarray(y_pred, float)) ** 2))
+    return err if squared else np.sqrt(err)
+
+
+def _assembly_accuracy(default=1e-8):
+    """Model assembly/constraint tolerance to use when loading models.
+
+    Constraint-coupled knees (Lerner/JAM, GPK, patella couplers) frequently miss
+    OpenSim's ultra-tight default constraint tolerance during assemble(), spamming
+    'Unable to achieve required assembly error tolerance' before it relaxes and
+    recovers. Loosening to ~1e-8 (physically negligible for joint moments / JCF)
+    silences it. Override via BatchSettings.assembly_accuracy in a project."""
+    try:
+        from bioscout import utils as _u
+        v = getattr(getattr(_u, "settings", None), "BatchSettings", None)
+        v = getattr(v, "assembly_accuracy", None)
+        return float(v) if v else default
+    except Exception:
+        return default
+
+
+def load_model(path, accuracy=None):
+    """opensim.Model(path) with a relaxed assembly accuracy applied (see
+    _assembly_accuracy). Use everywhere a model is loaded for a tool run."""
+    model = osim.Model(path)
+    acc = accuracy if accuracy is not None else _assembly_accuracy()
+    try:
+        model.set_assembly_accuracy(acc)
+    except Exception:
+        pass
+    return model
 import matplotlib.pyplot as plt
 from xml.etree import ElementTree as ET
 from pathlib import Path
@@ -911,16 +948,171 @@ def muscles_per_coordinate(osimModel=None):
 
     return muscles, indexes
 
-def muscle_optimimizer_Modenese2015(osim_model_path=None, save_path=None):
+def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
+    """Sample muscle-tendon quantities across the range of motion of the
+    coordinates spanned by the muscle (Modenese 2015 muscle optimiser helper).
+
+    For each combination of N_eval values per spanned coordinate the model is
+    posed, muscles are equilibrated (elastic tendon, activation = 1) and the
+    following are recorded per evaluation point:
+
+        [muscleTendonLength, normalizedFiberLength, tendonLength,
+         normalizedFiberLength*cos(pennation), pennationAngle]
+
+    muscleQuant='MTL' returns only muscleTendonLength per point; 'all' returns
+    the full row above (the indices used by optimMuscleParams are 0,1,2,4).
+    """
+    import itertools
+
+    # cap on total evaluation points per muscle (guards against combinatorial
+    # explosion for muscles that span many DOFs). Grid is sub-sampled if larger.
+    MAX_EVAL_POINTS = 1500
+
+    state = osimModel.initSystem()
+    gp = osimMuscle.getGeometryPath()
+    coords = osimModel.getCoordinateSet()
+
+    def _equilibrate_single():
+        """Equilibrate ONLY the current muscle (not all ~100 muscles)."""
+        for meth in ("computeInitialFiberEquilibrium", "computeFiberEquilibrium"):
+            fn = getattr(osimMuscle, meth, None)
+            if fn is not None:
+                try:
+                    fn(state)
+                    return
+                except Exception:
+                    pass
+        try:
+            osimModel.equilibrateMuscles(state)   # fallback (slow)
+        except Exception:
+            pass
+
+    # --- coordinates spanned by the muscle (non-zero moment arm in ROM) -------
+    # Detection only needs the muscle path length/moment arm, so realizePosition
+    # (cheap) is enough here -- no need for the full constraint assembler.
+    spanned = []
+    for i in range(coords.getSize()):
+        c = coords.get(i)
+        try:
+            if c.getLocked(state) or c.isConstrained(state):
+                continue
+        except Exception:
+            pass
+        rmin, rmax = c.getRangeMin(), c.getRangeMax()
+        hit = False
+        for frac in (0.0, 0.5, 1.0):
+            c.setValue(state, rmin + frac * (rmax - rmin), False)
+            osimModel.realizePosition(state)
+            try:
+                if abs(gp.computeMomentArm(state, c)) > 1e-4:
+                    hit = True
+                    break
+            except Exception:
+                pass
+        c.setValue(state, 0.5 * (rmin + rmax), False)
+        if hit:
+            spanned.append(i)
+
+    # --- full-factorial grid over the spanned coordinates --------------------
+    # Bound the grid BEFORE building it: cap the number of DOFs and reduce the
+    # points-per-axis so N_per**nDOF stays under MAX_EVAL_POINTS (a full product
+    # of N_eval**nDOF would blow up memory for multi-joint muscles).
+    MAX_DOF = 6
+    if len(spanned) > MAX_DOF:
+        spanned = spanned[:MAX_DOF]
+    nDOF = len(spanned)
+    n_per = N_eval
+    if nDOF and n_per ** nDOF > MAX_EVAL_POINTS:
+        n_per = max(2, int(MAX_EVAL_POINTS ** (1.0 / nDOF)))
+    axes = [np.linspace(coords.get(i).getRangeMin(),
+                        coords.get(i).getRangeMax(), n_per) for i in spanned]
+    combos = list(itertools.product(*axes)) if axes else [()]
+
+    need_equil = (muscleQuant != 'MTL')                   # MTL needs geometry only
+    if need_equil:
+        try:
+            osimMuscle.setActivation(state, 1.0)
+        except Exception:
+            pass
+
+    musOutput = []
+    for combo in combos:
+        # set independent coords; enforce constraints once (updates coupled DOFs)
+        for k, i in enumerate(spanned):
+            coords.get(i).setValue(state, float(combo[k]),
+                                   k == len(spanned) - 1)
+        if not spanned:
+            osimModel.assemble(state)
+
+        if not need_equil:
+            osimModel.realizePosition(state)
+            musOutput.append(osimMuscle.getLength(state))
+            continue
+
+        osimModel.realizeVelocity(state)
+        _equilibrate_single()
+        MTL = osimMuscle.getLength(state)
+        try:
+            LfibNorm = osimMuscle.getNormalizedFiberLength(state)
+            Lten = osimMuscle.getTendonLength(state)
+            penAngle = osimMuscle.getPennationAngle(state)
+        except Exception:
+            LfibNorm, Lten, penAngle = np.nan, np.nan, 0.0
+        musOutput.append([MTL, LfibNorm, Lten,
+                          LfibNorm * np.cos(penAngle), penAngle])
+    return musOutput
+
+
+def muscle_optimimizer_Modenese2015(osim_model_path=None, save_path=None,
+                                    ref_model_path=None, N_eval=10,
+                                    log_folder=None):
     """
     Optimize muscle parameters in an OpenSim model using the Modenese 2015 method.
-    
-    Args:
-        osim_model_path (str): Path to the input .osim model file
-        save_path (str, optional): Path to save the optimized model. If None, saves to osim_model_path with '_optimized' suffix
-    """
 
-    # Optimiser functions
+    Args:
+        osim_model_path (str): Path to the TARGET (e.g. scaled) .osim model whose
+            muscle optimal-fiber-length / tendon-slack-length will be optimised.
+        save_path (str, optional): Where to write the optimised model. Defaults to
+            '<target>_opt_N<N_eval>.osim'.
+        ref_model_path (str, optional): Reference (template/generic) model whose
+            muscle operating range is preserved. Defaults to the target model.
+        N_eval (int): Sampling points per spanned coordinate (default 10 -> _N10).
+        log_folder (str, optional): Folder for the per-muscle optimisation log.
+    """
+    if osim_model_path is None:
+        osim_model_path = input("Path to target model (.osim): ").strip('"')
+    if ref_model_path is None:
+        ref_model_path = osim_model_path
+    if log_folder is None:
+        log_folder = os.path.dirname(osim_model_path)
+
+    # The Modenese sampling equilibrates muscles at extreme joint poses, which
+    # makes OpenSim emit a flood of "at its minimum fiber length" warnings --
+    # this both spams the console and slows the run dramatically (log I/O).
+    # Silence the OpenSim logger during optimisation, then restore it.
+    try:
+        _prev_log_level = osim.Logger.getLevelString()
+    except Exception:
+        _prev_log_level = "Info"
+    try:
+        osim.Logger.setLevelString("off")
+    except Exception:
+        pass
+    try:
+        osim_model_opt, sims_info = optimMuscleParams(ref_model_path, osim_model_path,
+                                                      N_eval, log_folder)
+    finally:
+        try:
+            osim.Logger.setLevelString(_prev_log_level)
+        except Exception:
+            pass
+
+    if save_path is None:
+        save_path = osim_model_path.replace('.osim', f'_opt_N{N_eval}.osim')
+    osim_model_opt.printToXML(save_path)
+    print(f"Optimized model saved to: {save_path}")
+    return save_path
+
 
 def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, log_folder):
     
@@ -1007,6 +1199,19 @@ def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, l
         
         # checking the muscle configuration that do not respect the condition.
         okList = [pos for pos, value in enumerate(LfibNorm_ref) if value > LfibNorm_min]
+
+        # Guard: if too few valid evaluation points remain (< 2 needed to fit the
+        # two parameters), the linear system is unsolvable. Keep this muscle's
+        # existing (scaled) optimal-fiber / tendon-slack lengths unchanged and
+        # move on instead of crashing on empty arrays.
+        if len(okList) < 2:
+            LmOptLts_opt[n_mus] = [curr_mus_scaled.getOptimalFiberLength(),
+                                   curr_mus_scaled.getTendonSlackLength()]
+            logging.warning('Only %d valid sample(s) for %s; kept scaled '
+                            'parameters (not optimised).'
+                            % (len(okList), curr_mus_name))
+            continue
+
         # keeping only acceptable values
         MTL_ref = np.array([MTL_ref[index] for index in okList])
         LfibNorm_ref = np.array([LfibNorm_ref[index] for index in okList])
@@ -1027,8 +1232,18 @@ def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, l
         b = MTL_targ
         
         # ===== LINSOL =======
-        # solving the problem to calculate the muscle param 
-        x = linalg.solve(np.dot(A.T , A) , np.dot(A.T , b))
+        # solving the problem to calculate the muscle param
+        try:
+            x = linalg.solve(np.dot(A.T , A) , np.dot(A.T , b))
+        except (np.linalg.LinAlgError, linalg.LinAlgError, ValueError):
+            # normal-equations matrix is (near-)singular for this muscle
+            # (e.g. tendon length ~constant over the sampled range). Fall back
+            # to a rank-revealing least-squares solve, then to NNLS.
+            x, *_ = np.linalg.lstsq(A, b, rcond=None)
+            if np.min(x) <= 0:
+                x = optimize.nnls(np.dot(A.T , A), np.dot(A.T , b))[0]
+            logging.warning('Singular system for %s; used least-squares fallback.'
+                            % curr_mus_name)
         LmOptLts_opt[n_mus] = x
         
         # checking the results
@@ -1838,7 +2053,13 @@ def compare_marker_locations(marker_experimental_path=None, marker_virtual_path=
 
     distances = pd.DataFrame({'time': time.values})
     
-    output_dir = os.path.dirname(marker_experimental_path)
+    # Marker errors describe IK quality -> write them into external_biomechanics/
+    # (next to the IK outputs), not the raw inputs/ folder. The experimental TRC
+    # lives in <trial>/inputs/, so the trial root is one level up.
+    output_dir = os.path.dirname(marker_experimental_path)          # <trial>/inputs
+    _extbio = os.path.join(os.path.dirname(output_dir), "external_biomechanics")
+    if os.path.isdir(_extbio):
+        output_dir = _extbio
     mean_errors_filename = os.path.join(output_dir, '_ik_marker_errors_mean.txt')
 
     print('Calculating marker errors for all markers...')
@@ -1999,10 +2220,17 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
                 return c
         return None
 
+    # The plate->foot assignment must compare the CoP and the foot markers on the
+    # SAME (medio-lateral) axis. In the OpenSim GRF frame Y is VERTICAL, so CoP-Y
+    # is ~0 at the ground and cannot separate left from right — every plate then
+    # collapses to the nearest foot. Use the lateral axis (BatchSettings.
+    # trc_lateral_axis, default Z), matching how the foot markers are read below.
+    _lateral = getattr(getattr(settings, 'BatchSettings', None),
+                       'trc_lateral_axis', 'Z').upper()
     cop_y_per_plate = {}
     for pnum, ids in valid.items():
-        fy_col = find_col(ids['force_id'] + 'y')
-        py_col = find_col(ids['point_id'] + 'y')
+        fy_col = find_col(ids['force_id'] + 'y')                 # vertical force (active-plate test)
+        py_col = find_col(ids['point_id'] + _lateral.lower())    # lateral CoP (L/R assignment)
         if fy_col is None or py_col is None:
             print(f"  Plate {pnum}: Fy or CoP-Y column missing — skipping")
             continue
@@ -2090,24 +2318,90 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
     # ------------------------------------------------------------------ #
     # 5. Assign each plate to a foot
     # ------------------------------------------------------------------ #
-    plate_to_body = {}
+    # ------------------------------------------------------------------ #
+    # 5. TEMPORAL, horizontal-plane assignment.
+    #    For each plate, over ONLY the frames it is loaded, pick the foot whose
+    #    markers are closest to the CoP in the (X,Z) horizontal plane (Y is
+    #    vertical in the OpenSim GRF frame). Robust to walkway orientation and
+    #    straight-line walking — does NOT use session-mean foot positions.
+    # ------------------------------------------------------------------ #
+    _tcol = find_col('time')
+    _gt = pd.to_numeric(grf_df[_tcol], errors='coerce').values if _tcol is not None else None
 
-    if r_foot_y is not None and l_foot_y is not None:
-        print("  Assignment (min |CoP Y − foot Y|):")
-        for pnum, cop_y in sorted(cop_y_per_plate.items(), key=lambda x: int(x[0])):
-            r_dist = abs(cop_y - r_foot_y)
-            l_dist = abs(cop_y - l_foot_y)
-            body = right_foot_body if r_dist <= l_dist else left_foot_body
-            side = 'R' if body == right_foot_body else 'L'
+    _trc = None
+    if marker_trc_path and os.path.exists(str(marker_trc_path)):
+        try:
+            _trc = utils.load_trc(marker_trc_path)
+        except Exception as _e:
+            print(f"  Warning: could not load TRC for assignment — {_e}")
+
+    def _series(pref):
+        """First TRC column whose flattened NAME_AXIS starts with pref (upper)."""
+        if _trc is None:
+            return None
+        if isinstance(_trc.columns, pd.MultiIndex):
+            for m, c in _trc.columns:
+                if f"{str(m).upper()}_{str(c).upper()}".startswith(pref):
+                    return pd.to_numeric(_trc[(m, c)], errors='coerce').values
+        else:
+            for c in _trc.columns:
+                if str(c).upper().startswith(pref):
+                    return pd.to_numeric(_trc[c], errors='coerce').values
+        return None
+
+    _tt = _series("TIME")
+
+    def _foot_xz(markers, t0, t1):
+        xs, zs = [], []
+        for m in markers:
+            for axis, acc in (('X', xs), ('Z', zs)):
+                v = _series(f"{m.upper()}_{axis}")
+                if v is None:
+                    continue
+                if _tt is not None and np.isfinite(_tt).any():
+                    sel = (_tt >= t0) & (_tt <= t1) & np.isfinite(v)
+                    if sel.any():
+                        acc.append(float(np.nanmedian(v[sel])))
+                        continue
+                acc.append(float(np.nanmedian(v)))
+        return (float(np.mean(xs)) if xs else None,
+                float(np.mean(zs)) if zs else None)
+
+    plate_to_body = {}
+    print("  Assignment (temporal CoP<->foot distance, horizontal plane):")
+    for pnum in sorted(valid.keys(), key=int):
+        ids = valid[pnum]
+        fy = pd.to_numeric(grf_df[find_col(ids['force_id'] + 'y')], errors='coerce').values
+        pxc = find_col(ids['point_id'] + 'x')
+        pzc = find_col(ids['point_id'] + 'z')
+        active = np.abs(fy) > vert_force_threshold
+        if pxc is None or pzc is None or not active.any():
+            body = right_foot_body if int(pnum) % 2 == 1 else left_foot_body
             plate_to_body[pnum] = body
-            print(f"    Plate {pnum}: CoP Y={cop_y:.1f}  ΔR={r_dist:.1f}  ΔL={l_dist:.1f}  →  {side} ({body})")
-    else:
-        print("  Fallback: assigning by CoP Y rank (lowest → R, next → L, ...)")
-        for i, (pnum, cop_y) in enumerate(sorted(cop_y_per_plate.items(), key=lambda x: x[1])):
-            body = right_foot_body if i % 2 == 0 else left_foot_body
-            plate_to_body[pnum] = body
-            print(f"    Plate {pnum}: CoP Y={cop_y:.1f} mm  →  {body}")
-        print("    Tip: supply marker_trc_path for anatomically correct assignment")
+            print(f"    Plate {pnum}: incomplete data -> fallback {body}")
+            continue
+        px = pd.to_numeric(grf_df[pxc], errors='coerce').values
+        pz = pd.to_numeric(grf_df[pzc], errors='coerce').values
+        cx = float(np.nanmedian(px[active]))
+        cz = float(np.nanmedian(pz[active]))
+        if max(abs(cx), abs(cz)) < 10.0:          # metres -> mm (match TRC)
+            cx *= 1000.0; cz *= 1000.0
+        if _gt is not None:
+            ta = _gt[active]
+            t0, t1 = float(np.nanmin(ta)), float(np.nanmax(ta))
+        else:
+            t0, t1 = -np.inf, np.inf
+        rx, rz = _foot_xz(right_markers, t0, t1)
+        lx, lz = _foot_xz(left_markers, t0, t1)
+        dR = np.hypot(cx - rx, cz - rz) if rx is not None else np.inf
+        dL = np.hypot(cx - lx, cz - lz) if lx is not None else np.inf
+        if not np.isfinite(dR) and not np.isfinite(dL):
+            body = right_foot_body if int(pnum) % 2 == 1 else left_foot_body
+        else:
+            body = right_foot_body if dR <= dL else left_foot_body
+        side = 'R' if body == right_foot_body else 'L'
+        plate_to_body[pnum] = body
+        print(f"    Plate {pnum}: CoP=({cx:.0f},{cz:.0f})  dR={dR:.0f}  dL={dL:.0f}  ->  {side} ({body})")
 
     return plate_to_body
 
@@ -2347,13 +2641,38 @@ def scale_model_from_xml(setup_xml_path, generic_model_path, static_trc_path, sc
 
     return scale_tool
 
-def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, scale_setup_output_dir=None, mass=None, time_range=None, marker_set_file=None):
+def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, scale_setup_output_dir=None, mass=None, time_range=None, marker_set_file=None, linear_scaling=True, marker_placer=False):
     """
     Scale an OpenSim model using the ScaleTool based on static marker data from a TRC file.
+
+    The ScaleTool has two independent stages, exposed here as booleans that map
+    1:1 onto OpenSim's own ``ModelScaler`` and ``MarkerPlacer``:
+
+      * ``linear_scaling`` (ModelScaler) — dimensional scaling from marker
+        distances. Turn OFF for an already-personalised model (e.g. MRI/TPS
+        geometry) so its segment sizes are NOT changed.
+      * ``marker_placer`` (MarkerPlacer) — move the model's markers onto the
+        subject's static-trial markers (with an IK pass). Useful even when
+        ``linear_scaling`` is off, so markers line up for IK. Off by default
+        because it is memory-heavy with 100+ marker sets.
+
+    Combinations: both True = classic scale+placement; linear only = size but
+    keep template markers; placer only = keep geometry, re-place markers
+    (MRI case); both False = copy the model through unchanged.
 
     Args:
         scale_setup_output_dir: Directory where to save scale_setup.xml (defaults to scaled_model directory)
     """
+    import shutil as _shutil
+    # Neither stage requested → nothing for the ScaleTool to do; pass the model
+    # through unchanged so downstream steps still find scaled_model_path.
+    if not linear_scaling and not marker_placer:
+        os.makedirs(os.path.dirname(scaled_model_path) or ".", exist_ok=True)
+        if os.path.abspath(generic_opensim_model_path) != os.path.abspath(scaled_model_path):
+            _shutil.copyfile(generic_opensim_model_path, scaled_model_path)
+        print(f"[scale] linear_scaling=False, marker_placer=False → copied model "
+              f"unchanged to: {scaled_model_path}")
+        return
     model = osim.Model(generic_opensim_model_path)
     state = model.initSystem()
     subject_mass = mass if mass is not None else model.getTotalMass(state)
@@ -2375,36 +2694,36 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     if marker_set_file:
         gmm.setMarkerSetFileName(marker_set_file)
 
-    # ModelScaler
-    modelScaler = scaleTool.getModelScaler()
-    modelScaler.setApply(True)
-    modelScaler.setMarkerFileName(static_trc_path)
-    modelScaler.setTimeRange(osim_time_range)
-    modelScaler.setOutputModelFileName(scaled_model_path)
-
     # Determine where to save scale setup XML
     if scale_setup_output_dir is None:
         scale_setup_output_dir = os.path.dirname(scaled_model_path)
     os.makedirs(scale_setup_output_dir, exist_ok=True)
 
+    # ModelScaler (dimensional scaling) — toggled by ``linear_scaling``.
+    modelScaler = scaleTool.getModelScaler()
+    modelScaler.setApply(bool(linear_scaling))
+    modelScaler.setMarkerFileName(static_trc_path)
+    modelScaler.setTimeRange(osim_time_range)
+    modelScaler.setOutputModelFileName(scaled_model_path)
     modelScaler.setOutputScaleFileName(
         os.path.join(scale_setup_output_dir, 'scale_setup.xml')
     )
 
-    # MarkerPlacer - disabled by default due to memory constraints with large marker sets
-    # Enable only if you have sufficient RAM and need refined marker positions
+    # MarkerPlacer (place model markers onto static-trial markers) — toggled by
+    # ``marker_placer``. Off by default (memory-heavy with 100+ markers). When
+    # linear_scaling is off but this is on, it operates on the (unscaled) model —
+    # the MRI case — and writes the final model to scaled_model_path.
     markerPlacer = scaleTool.getMarkerPlacer()
-    markerPlacer.setApply(False)  # Disable to avoid memory issues with 100+ markers
+    markerPlacer.setApply(bool(marker_placer))
+    if marker_placer:
+        markerPlacer.setMarkerFileName(static_trc_path)
+        markerPlacer.setTimeRange(osim_time_range)
+        markerPlacer.setOutputModelFileName(scaled_model_path)
+        markerPlacer.setOutputMarkerFileName(
+            os.path.join(scale_setup_output_dir, 'static_output.trc')
+        )
 
-    # If you need MarkerPlacer enabled, uncomment below and ensure sufficient RAM
-    # markerPlacer.setApply(True)
-    # markerPlacer.setMarkerFileName(static_trc_path)
-    # markerPlacer.setTimeRange(osim_time_range)
-    # markerPlacer.setOutputModelFileName(scaled_model_path)
-    # markerPlacer.setOutputMarkerFileName(
-    #     os.path.join(os.path.dirname(scaled_model_path), 'static_output.trc')
-    # )
-
+    print(f"[scale] linear_scaling={bool(linear_scaling)}, marker_placer={bool(marker_placer)}")
     scaleTool.run()
     print(f"Scaled model saved to: {scaled_model_path}")
     
@@ -2656,6 +2975,40 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
         except Exception as _nan_e:
             print(f"[IK] Warning: NaN interpolation step failed (continuing): {_nan_e}")
 
+        # Setup XML now lives in a subfolder (external_biomechanics/). OpenSim
+        # resolves relative <marker_file>/<output_motion_file> in a deserialized
+        # tool against the SETUP FILE's directory, not the cwd — so trial-root-
+        # relative paths (e.g. inputs\marker_experimental.trc) break. Force them
+        # absolute on the tool so the subfoldered layout works.
+        try:
+            import xml.etree.ElementTree as _ET2
+            _setup_dir = os.path.dirname(os.path.abspath(setup_xml))
+            _r2 = _ET2.parse(setup_xml).getroot()
+            _mk = _r2.findtext('.//marker_file') or ''
+            _om = _r2.findtext('.//output_motion_file') or ''
+            # marker_file is written trial-root-relative; resolve to wherever the
+            # file actually exists (trial root, else next to the setup).
+            if _mk and not os.path.isabs(_mk):
+                _cands = [os.path.abspath(os.path.join(resultsDir, _mk)),
+                          os.path.abspath(os.path.join(_setup_dir, _mk))]
+                _mk_abs = next((c for c in _cands if os.path.isfile(c)), _cands[0])
+            else:
+                _mk_abs = _mk
+            # output_motion_file is written relative to the setup file's own dir
+            # (OpenSim convention), i.e. it belongs NEXT TO setup_IK.xml.
+            _om_abs = _om if (not _om or os.path.isabs(_om)) else \
+                os.path.abspath(os.path.join(_setup_dir, _om))
+            if _mk:
+                try:    ikTool.set_marker_file(_mk_abs)
+                except Exception: ikTool.setMarkerDataFileName(_mk_abs)
+            if _om:
+                os.makedirs(os.path.dirname(_om_abs), exist_ok=True)
+                try:    ikTool.set_output_motion_file(_om_abs)
+                except Exception: ikTool.setOutputMotionFileName(_om_abs)
+            print(f"[IK] marker_file={_mk_abs}\n[IK] output_motion_file={_om_abs}")
+        except Exception as _abs_e:
+            print(f"[IK] Warning: could not set absolute tool paths ({_abs_e})")
+
         # Run the inverse kinematics calculation
         print("Running inverse kinematics...")
         ikTool.run()
@@ -2845,14 +3198,14 @@ def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath,
     analyze_tool = osim.AnalyzeTool()
     analyze_tool.setModel(model)
 
-    # Set other parameters
-    relpath_modelfile = os.path.relpath(osim_modelPath, start=os.path.dirname(marker_trc))
-    analyze_tool.setModelFilename(relpath_modelfile)
+    # Set other parameters. Use ABSOLUTE paths: the setup XML may be saved in a
+    # different subfolder than the coordinates/model, and OpenSim resolves
+    # relative paths against the setup file's own dir — absolute sidesteps that.
+    analyze_tool.setModelFilename(os.path.abspath(osim_modelPath))
     analyze_tool.setReplaceForceSet(False)
-    
+
     # set results directory
-    relpath_results_directory = os.path.relpath(results_directory, start=os.path.dirname(marker_trc))
-    analyze_tool.setResultsDir(relpath_results_directory)
+    analyze_tool.setResultsDir(os.path.abspath(results_directory))
     analyze_tool.setOutputPrecision(8)
 
     # Set actuator force files (if provided)
@@ -2873,11 +3226,9 @@ def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath,
     analyze_tool.setMinDT(1e-8)
     analyze_tool.setErrorTolerance(1e-5)
 
-    # Set external loads and coordinates files
-    relpath_externalloadsfile = os.path.relpath(externalloadsfile, start=os.path.dirname(marker_trc))
-    relpath_coordinates_file = os.path.relpath(marker_trc, start=os.path.dirname(marker_trc))
-    analyze_tool.setExternalLoadsFileName(relpath_externalloadsfile)  # Replace with your filename
-    analyze_tool.setCoordinatesFileName(relpath_coordinates_file)
+    # Set external loads and coordinates files (absolute — see note above).
+    analyze_tool.setExternalLoadsFileName(os.path.abspath(externalloadsfile))
+    analyze_tool.setCoordinatesFileName(os.path.abspath(marker_trc))
 
     # Set filter cutoff frequency
     analyze_tool.setLowpassCutoffFrequency(6)
@@ -3115,7 +3466,7 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
     
     # Load the model
     print(f"Loading OpenSim model from {osimModelPath}")
-    model = osim.Model(osimModelPath)
+    model = load_model(osimModelPath)
     model.initSystem()
 
     # Load the motion data
@@ -3162,8 +3513,8 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
 
-def run_ma(osim_modelPath=None, ik_output=None, 
-         grf_xml=None):
+def run_ma(osim_modelPath=None, ik_output=None,
+         grf_xml=None, results_dir=None):
 
     if osim_modelPath is None:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
@@ -3173,8 +3524,10 @@ def run_ma(osim_modelPath=None, ik_output=None,
         grf_xml = input("Enter the path to the GRF XML file (.xml): ").strip('"')
     
     ikParentDir = os.path.dirname(os.path.abspath(ik_output))
-    resultsDir = os.path.join(ikParentDir, 'MuscleAnalysis')
-    setup_xml = os.path.join(ikParentDir, 'setup_ma.xml')
+    # Write MA outputs to the caller-specified folder (muscle_analysis/ in the
+    # subfoldered layout); fall back to the legacy MuscleAnalysis/ next to IK.
+    resultsDir = os.path.abspath(results_dir) if results_dir else os.path.join(ikParentDir, 'MuscleAnalysis')
+    setup_xml = os.path.join(resultsDir, 'setup_MA.xml')
     
 
     if not os.path.exists(osim_modelPath):
@@ -3191,7 +3544,7 @@ def run_ma(osim_modelPath=None, ik_output=None,
     
     # Load the model
     print(f"Loading OpenSim model from {osim_modelPath}")
-    model = osim.Model(osim_modelPath)
+    model = load_model(osim_modelPath)
     model.initSystem()
 
     # Load the motion data
@@ -3231,6 +3584,10 @@ def run_ma(osim_modelPath=None, ik_output=None,
 
     # Reload analysis from xml
     maTool = osim.AnalyzeTool(setup_xml)
+    try:
+        maTool.getModel().set_assembly_accuracy(_assembly_accuracy())
+    except Exception:
+        pass
     maTool.getModel().initSystem()
     # Run the muscle analysis calculation
     original_cwd = os.getcwd()
@@ -3285,13 +3642,13 @@ def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
 
     # Load the model
     print(f"Loading OpenSim model from {osim_modelPath}")
-    
-    model = osim.Model(osim_modelPath)
+
+    model = load_model(osim_modelPath)
     # model.initSystem()
-    
+
     # load the motion data
     motion = osim.Storage(ik_output)
-    
+
     # Create a StaticOptimization object
     so = osim.StaticOptimization()
     so.setStartTime(motion.getFirstTime())
@@ -3399,7 +3756,7 @@ def run_jra(osim_modelPath=None, ik_output=None,
     # Set other parameters as needed
     jr.setStartTime(initial_time)
     jr.setEndTime(final_time)
-    jr.setForcesFileName(os.path.relpath(muscle_force_path, start=os.path.dirname(os.path.abspath(setup_xml)))) # Has to be absolute path
+    jr.setForcesFileName(os.path.abspath(muscle_force_path))
 
     # add to analysis tool
     analyzeTool_JR = create_analysis_tool(marker_trc = ik_output,
@@ -3415,6 +3772,14 @@ def run_jra(osim_modelPath=None, ik_output=None,
     # save setup file and run
     analyzeTool_JR.printToXML(setup_xml)
     analyzeTool_JR = osim.AnalyzeTool(setup_xml)
+    # JRA's AnalyzeTool reloads the model from the setup XML, so the looser
+    # assembly accuracy set elsewhere is lost -> the coupled (walker/Lerner) knee
+    # trips SimTK's 1e-10 assembler tolerance and spams recoverable [error] lines.
+    # Re-apply the project assembly accuracy on JRA's own model copy.
+    try:
+        analyzeTool_JR.getModel().set_assembly_accuracy(_assembly_accuracy())
+    except Exception:
+        pass
     print('jra for', setup_xml)
     analyzeTool_JR.run()
     

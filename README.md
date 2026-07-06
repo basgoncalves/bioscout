@@ -4,6 +4,8 @@
 
 <h1 align="center">BioScout</h1>
 
+<p align="center">v2.0.0</p>
+
 <p align="center"><strong>A Python toolbox for musculoskeletal modelling.</strong></p>
 
 <p align="center">
@@ -12,6 +14,44 @@ validates the results against the literature, and organises everything by subjec
 Successor to <a href="https://pypi.org/project/msk-modelling-python/">msk_modelling_python</a>.<br>
 see <a href="LICENSE">License</a>
 </p>
+
+---
+
+## Session-centric YAML layout (2.x)
+
+A session owns its raw data **once** and one or more model **iterations** compared
+over the same trials. Config is a single `session.yaml`; raw inputs are exported
+once into `experimental/` and shared by every iteration.
+
+```
+simulations/<subject>/<session>/
+  c3dfiles/<trial>.c3d                 # raw captures
+  experimental/<trial>/                # processed inputs, model-independent, once
+    marker_experimental.trc  grf.mot  GRF.xml
+    emg.mot  emg_filtered.mot  emg_filtered_normalised.mot
+    grf_events.png  emg_processing.png
+  session.yaml                         # subject/session, static_trial, emg map,
+                                       # calibration/normalisation trials, iterations[]
+  <iteration>/                         # model-dependent outputs only
+    scaled_opt_N10.osim  scaled_opt_N10_mvicx3.00.osim
+    ceinms_calibration/output/
+    <trial>/ external_biomechanics/ muscle_analysis/ static_optimisation/ ceinms/ joint_contact_forces/
+  ../results/<session>/comparison/     # cross-model JCF figures
+```
+
+Run it (see `bioscout.utils.session_layout` and `REFACTOR_PLAN_YAML.md`):
+
+```python
+from bioscout.utils import exportC3D, session_layout as sl
+S = "simulations/Athlete_03/25_03_31"
+exportC3D.export_session(S)                                   # c3dfiles -> experimental/
+sl.import_models(S, "models", {...})                         # reuse existing scaled models
+sl.run_session(project_dir=".", session_path=S, do_so=True, do_ceinms=True, replace=True)
+sl.summarise_session(project_dir=".", session_path=S)        # cross-model comparison plots
+```
+
+`run_session(smoke=True)` no-ops figures/validation for a fast "does it run?" sweep;
+`frames=N` caps the simulation window (a "ghost run") while inputs stay full length.
 
 ---
 
@@ -101,11 +141,13 @@ my_project/
 
 Session-level CEINMS calibration lives in `simulations/<Subject>/<Session>/ceinms_calibration/`.
 
-**Trial layout & attribute names.** The canonical folder layout is owned by the
-package (`bioscout.layout.Inputs`); a project only needs its own `Inputs` in
-`settings.py` if it wants to *override* the default paths (`Analyse` falls back
-to the package layout otherwise). On an `Analyse`/trial object the terse layout
-fields have readable aliases (read/write proxies onto the same value):
+**Trial layout & attribute names.** As of 2.0 there is no `Inputs` class — the
+canonical folder layout is owned by `Analyse` itself
+(`bioscout.utils.analysis._default_layout_paths`). A project only needs to define
+its own `Inputs` class in `settings.py` if it wants to *override* the default
+paths (`Analyse` uses it automatically when present, else the inline default). On
+an `Analyse`/trial object the terse layout fields have readable aliases
+(read/write proxies onto the same value):
 
 | alias | field | | alias | field |
 |---|---|---|---|---|
@@ -153,7 +195,56 @@ Put each trial's raw data under `simulations/<Subject>/<Session>/<Trial>/inputs/
 
 ---
 
+## Adding a new subject
+
+A subject needs three things: **(1)** an entry in `settings.py`, **(2)** a scaled
+`.osim` model, and **(3)** the trial `.c3d` files placed in the simulations tree.
+
+Say your raw captures live as one folder per session with each file named after
+the trial, e.g.:
+
+```
+C:/…/Powerlifiting/c3dfiles/25_03_31/Walking_02.c3d
+                                     Squat_BW_01.c3d
+                                     Squat_35kg_01.c3d
+```
+
+1. **Declare the subject** in `settings.py` → `BatchSettings.subjects` (plain data):
+   ```python
+   dict(name="Athlete_04", label="Athlete 04", session="25_03_31",
+        model_so="scaled.osim", model_ceinms="scaled.osim",
+        generic_model="Rajagopal2015.osim", color="orange", group="generic"),
+   ```
+
+2. **Ingest the C3D files** — distributes each `<trial>.c3d` into
+   `simulations/<subject>/<session>/<trial>/inputs/c3dfile.c3d` and creates the
+   `models/<subject>/<session>/` folder:
+   ```bash
+   python -m bioscout --ingest-c3d "C:/…/Powerlifiting/c3dfiles/25_03_31" \
+     --subject Athlete_04 --session 25_03_31
+   # add --reset-dry-run to preview without copying
+   ```
+
+3. **Drop the scaled model** at `models/Athlete_04/25_03_31/scaled.osim` (matching
+   the `model_so`/`model_ceinms` names from step 1).
+
+4. **Run** — `--export` regenerates markers/GRF/EMG + `trial_settings.xml` from each c3d:
+   ```bash
+   python -m bioscout --run_subject Athlete_04 --session 25_03_31 --export --REPLACE
+   ```
+
+(`--ingest-c3d` is also available on the Python API as `session.ingest_c3d(source=…)`.)
+
+---
+
 ## Running the pipeline
+
+> The commands below are the **stable OpenSim / CEINMS pipeline** (the focus of
+> 2.x). `python -m bioscout --help` also lists a **"player tracking —
+> EXPERIMENTAL"** group (`--shots`, `--load-report`, `--zepp-pull`,
+> `--add_subject`, …) — those are the markerless-video / wearables features
+> **targeted for bioscout 3.0 and not stable yet**. Ignore them for pipeline
+> work; they're documented in [Future add-ons](#future-add-ons).
 
 **Command line** — run the full pipeline (SO + CEINMS) for one subject:
 
@@ -405,8 +496,21 @@ import bioscout as msk
 
 ## Future add-ons
 
+These features exist in early/experimental form (some already have CLI flags in
+the **"player tracking — EXPERIMENTAL"** group of `--help`) but are **not stable
+and not part of the 2.x OpenSim pipeline — targeted for bioscout 3.0**:
+
 - **Player / movement tracking (computer vision).** Markerless kinematics from a
   phone or laptop camera via pose estimation, feeding the same OpenSim pipeline.
+  Experimental CLI: `--shots` (video shot analysis), `--poses`, `--hoop`,
+  `--yolo-model`, and the player registry (`--add_subject` → `subjects.json`).
+- **Training-load & wearables.** Fatigue/load reports from fitness-tracker
+  exports and cloud pulls. Experimental CLI: `--load-report`, `--zepp-pull`,
+  `--strava-pull`, `--hr-max`/`--hr-rest`/`--age`/`--sex`, `--creds`.
 - **Real-time muscle forces.** A pre-trained ML model that maps camera-derived
   kinematics to muscle and joint contact forces in (semi-)real time, integrating
   the computer-vision and OpenSim/CEINMS pipelines.
+
+> Pipeline subjects (for the OpenSim/CEINMS batch) are declared in your project's
+> `settings.py` `subjects` list — **not** via `--add_subject`, which targets the
+> separate player-tracking registry.

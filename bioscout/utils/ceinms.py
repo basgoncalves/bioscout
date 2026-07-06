@@ -231,9 +231,13 @@ def create_excitation_generator(osim_model_path=None, emg_path=None, save_path=N
     
     emg_data = utils.load_any_data_file(emg_path)
     emg_labels = emg_data.columns.tolist()
-    
+
     if 'time' in emg_labels:
         emg_labels.remove('time')
+    # Canonical (sorted) channel order so the generator's inputSignals align
+    # positionally with the equally-sorted excitations .mot columns (CEINMS
+    # pairs them by position, not by name).
+    emg_labels = sorted(emg_labels)
 
     # Create root element
     tree = ET.ElementTree()
@@ -332,9 +336,15 @@ def create_calibrationCfg(osimModelPath=None, inputPaths: list = [], outputPath:
     # ------- muscleGroups (BASED ON SETTINGS PLEASE EDIT THIS FOR DIFFERENT MUSCLE GROUPS) ------
     muscleGroups = ET.SubElement(parametersToCalibrate, "muscleGroups")
 
+    # BatchSettings.MUSCLE_GROUPS is right-side only (used for the right-focused
+    # analysis figures). For CALIBRATION we mirror each group to the LEFT leg too,
+    # otherwise only right-side muscles ever get their strength coefficient (and
+    # other params) calibrated. Emit the right group + its _l counterpart.
     for group, muscles in settings.BatchSettings.MUSCLE_GROUPS.items():
-        muscleGroup = ET.SubElement(muscleGroups, "muscles")
-        muscleGroup.text = " ".join(muscles)
+        ET.SubElement(muscleGroups, "muscles").text = " ".join(muscles)
+        left = [m[:-2] + "_l" if m.endswith("_r") else m for m in muscles]
+        if left != list(muscles):
+            ET.SubElement(muscleGroups, "muscles").text = " ".join(left)
 
     # objectiveFunctions
     objectiveFunctions = ET.SubElement(calibrationTargets, "objectiveFunctions")
@@ -379,7 +389,7 @@ def create_calibrationSetupXML(uncalibratedCEINMSModelPath=None,
         outputSubjectFile = uncalibratedCEINMSModelPath.replace('.xml', '_calibrated.xml')
         
     if not outputDirectory:
-        outputDirectory = os.path.join(os.path.dirname(calibrationCfgPath), 'calibrationOutput')
+        outputDirectory = os.path.join(os.path.dirname(calibrationCfgPath), 'output')
     
     root = ET.Element("ceinmsCalibration")
 
@@ -403,10 +413,10 @@ def create_calibrationSetupXML(uncalibratedCEINMSModelPath=None,
     tree = ET.ElementTree(root)
     utils.save_pretty_xml(tree, setupXMLPath)
 
-def create_input_data(MAFolder=None, excitationsFile=None, motionFile=None, 
+def create_input_data(MAFolder=None, excitationsFile=None, motionFile=None,
                       externalTorquesFile=None, externalLoadsFile=None,
-                      startStopTime=None):
-    
+                      startStopTime=None, output_path=None):
+
     if not MAFolder:
         MAFolder = input("Enter path to Muscle Analysis folder: ").strip('"')
 
@@ -427,36 +437,46 @@ def create_input_data(MAFolder=None, excitationsFile=None, motionFile=None,
         stop_time = float(input("Enter stop time: ").strip())
         startStopTime = (start_time, stop_time) 
     
+    # CEINMS resolves every path in inputData.xml relative to the LOCATION of
+    # inputData.xml itself. So base all relative paths on the output file's
+    # directory (which may be a ceinms/ subfolder while the muscle analysis /
+    # kinematics live in sibling subfolders — e.g. "../muscle_analysis/...").
+    savePath = (os.path.abspath(output_path) if output_path
+                else os.path.join(os.path.dirname(os.path.abspath(MAFolder)), 'inputData.xml'))
+    base = os.path.dirname(savePath)
+
+    def _rel(p):
+        return os.path.relpath(os.path.abspath(p), start=base)
+
     root = ET.Element("inputData")
     length_path = os.path.join(MAFolder, '_MuscleAnalysis_Length.sto')
     muscle_length_elem = ET.SubElement(root, "muscleTendonLengthFile")
-    muscle_length_elem.text = os.path.relpath(length_path, start=os.path.dirname(MAFolder))
+    muscle_length_elem.text = _rel(length_path)
 
     excitations_elem = ET.SubElement(root, "excitationsFile")
-    excitations_elem.text = os.path.relpath(excitationsFile, start=os.path.dirname(MAFolder))
-    
-    # Add moment arms files 
+    excitations_elem.text = _rel(excitationsFile)
+
+    # Add moment arms files
     moment_arms = ET.SubElement(root, "momentArmsFiles")
     for dof in settings.BatchSettings.dof_list:
-
         dof_path = os.path.join(MAFolder, f'_MuscleAnalysis_MomentArm_{dof}.sto')
         dof_elem = ET.SubElement(moment_arms, "momentArmsFile")
         dof_elem.set("dofName", dof)
-        dof_elem.text = os.path.relpath(dof_path, start=os.path.dirname(MAFolder))  
+        dof_elem.text = _rel(dof_path)
 
     external_torques_elem = ET.SubElement(root, "externalTorquesFile")
-    external_torques_elem.text = os.path.relpath(externalTorquesFile, start=os.path.dirname(MAFolder))
+    external_torques_elem.text = _rel(externalTorquesFile)
 
     motion_elem = ET.SubElement(root, "motionFile")
-    motion_elem.text = os.path.relpath(motionFile, start=os.path.dirname(MAFolder))
+    motion_elem.text = _rel(motionFile)
 
     external_loads_elem = ET.SubElement(root, "externalLoadsFile")
-    external_loads_elem.text = os.path.relpath(externalLoadsFile, start=os.path.dirname(MAFolder))
+    external_loads_elem.text = _rel(externalLoadsFile)
 
     startStop_elem = ET.SubElement(root, "startStopTime")
     startStop_elem.text = f"{startStopTime[0]} {startStopTime[1]}"
-    
-    savePath = os.path.join(os.path.dirname(MAFolder), 'inputData.xml')
+
+    os.makedirs(base, exist_ok=True)
     tree = ET.ElementTree(root)
     utils.save_pretty_xml(tree, savePath)
 
@@ -630,10 +650,12 @@ def ceinms_terminal(executable_path=None, setupXML_path=None):
                 text=True,
             )
 
-            # Stream output
+            # Capture CEINMS stdout to out.txt ONLY (do not echo to the terminal).
+            # CEINMS is very chatty (ASCII banner + per-iteration dumps); it's all
+            # preserved in out.txt and the last 3000 chars are printed below with a
+            # pointer to the file, so echoing it live just doubles the noise.
             if process.stdout:
                 for line in process.stdout:
-                    print(line, end="")  # Print to terminal
                     log_file.write(line)
                     log_file.flush()
 
@@ -707,13 +729,12 @@ def calibrate(setupXML_path=None):
     setupXML = ET.parse(setupXML_path).getroot()
     outputDirectory = setupXML.find("outputDirectory").text
     
-    # Always strip any stale _run_ suffixes (from previous bad runs)
-    base_name = outputDirectory.split('_run_')[0]
-    outputDirectory = base_name
-
-    if os.path.exists(outputDirectory):
-        outputDirectory = base_name + f"_run_{time.strftime('%y_%m_%d_%H_%M')}"
-        print(f"Output directory exists. Using timestamped name: {outputDirectory}")
+    # Fixed calibrationOutput name — the whole ceinms_calibration/ folder is
+    # archived by the caller on re-calibration, so no per-run timestamp is needed
+    # (keeps paths stable). Clear any stale contents first.
+    outputDirectory = outputDirectory.split('_run_')[0]
+    if os.path.isdir(outputDirectory):
+        shutil.rmtree(outputDirectory, ignore_errors=True)
 
     # Write the final name back to the XML so ceinms_terminal reads the right path
     setupXML.find("outputDirectory").text = outputDirectory
@@ -1315,7 +1336,7 @@ def plot_ceinms_model_parameters(ceinmsModelPath=None):
         colors = ['red' if name.endswith('_l') else 'blue' for name in muscle_names]
         axs[i].bar(muscle_names, mtuSet[param], color=colors)
         axs[i].set_title(param)
-        axs[i].set_xticklabels(muscle_names, rotation=90)
+        axs[i].tick_params(axis='x', labelrotation=90)
         
     # set legend left leg on top right leg on bottom
     red_patch = plt.Line2D([0], [0], color='red', lw=4, label='Left Leg')
@@ -1396,11 +1417,11 @@ def plot_compare_ceinms_models(uncalibratedModelPath=None, calibratedModelPath=N
             diff = mtuSet_calibrated[param] - mtuSet_uncalibrated[param]
             axs[i].bar(muscle_names, diff, color=colors)
             axs[i].set_title(f'Difference in {param} (Calibrated - Uncalibrated)')
-            axs[i].set_xticklabels(muscle_names, rotation=90)
+            axs[i].tick_params(axis='x', labelrotation=90)
         else:            
             axs[i].bar(muscle_names, mtuSet_calibrated[param], color=colors)
             axs[i].set_title(param)
-            axs[i].set_xticklabels(muscle_names, rotation=90)
+            axs[i].tick_params(axis='x', labelrotation=90)
             
     # set legend left leg on top right leg on bottom
     red_patch = plt.Line2D([0], [0], color='red', lw=4, label='Left Leg')
@@ -1437,8 +1458,8 @@ def plot_moments_calibration_results(momentResultsCSV=None):
     ncols = 2  # 2 columns for better layout
     nrows = int(np.ceil(n_dofs / ncols))
     
-    # Create the figure and subplots
-    fig, axes = plt.subplots(nrows, ncols, figsize=(15, 4*nrows))
+    # Create the figure and subplots (size from PlottingSettings.scale_per_subplot)
+    fig, axes = plt.subplots(nrows, ncols, figsize=utils.fig_size(nrows, ncols))
     if n_dofs == 1:
         axes = [axes]
     elif nrows == 1:
@@ -1449,9 +1470,12 @@ def plot_moments_calibration_results(momentResultsCSV=None):
     for i, (dof, dof_id) in enumerate(dof_pairs):
         ax = axes[i]
         
-        # Plot the DOF angle
-        line1 = ax.plot(moments_df['time'], moments_df[dof], 'b-', linewidth=2, label=f'ceinms)')
-        line2 = ax.plot(moments_df['time'], moments_df[dof_id], 'r-', linewidth=2, label=f'inverse dynamics')
+        # Styling comes from the central scheme (utils.plot_style / settings.PlottingSettings).
+        _c = utils.plot_style('ceinms'); _i = utils.plot_style('inverse_dynamics')
+        line1 = ax.plot(moments_df['time'], moments_df[dof],
+                        color=_c['color'], ls=_c['ls'], linewidth=_c['lw'], label='CEINMS')
+        line2 = ax.plot(moments_df['time'], moments_df[dof_id],
+                        color=_i['color'], ls=_i['ls'], linewidth=_i['lw'], label='inverse dynamics')
 
         # Set labels and title
         ax.set_xlabel('Time (s)')
@@ -1556,8 +1580,9 @@ def plot_optimisation_results(optimisationOutputDir=None):
             else:
                 ax.set_xlabel('Time (%)')
                 
-            ax.legend()
-            
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend()
+
         
         # save figure
         fig_path = result_file.replace('.sto', '.png')

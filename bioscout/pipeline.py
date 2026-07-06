@@ -17,6 +17,7 @@ The settings module controls what runs via module-level flags::
 on a ``bioscout.Project`` rooted at the settings file's folder.
 """
 import os
+import sys
 import shutil
 import datetime
 import runpy
@@ -27,6 +28,16 @@ RAW_INPUTS = ["c3dfile.c3d"]
 C3D = "c3dfile.c3d"
 TRC = "marker_experimental.trc"
 GRF = "grf.mot"
+
+
+def _has_raw_inputs(trial_dir):
+    """True if a trial has a c3d OR marker file, in the current ``inputs/``
+    layout OR the legacy flat layout (files directly in the trial folder)."""
+    for name in (C3D, TRC):
+        if (os.path.exists(os.path.join(trial_dir, "inputs", name))
+                or os.path.exists(os.path.join(trial_dir, name))):
+            return True
+    return False
 
 # Raw C3D files for a session live in <session>/c3d/ (one per trial). This folder
 # is source data, so reset must never delete it.
@@ -422,6 +433,28 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                     if skip_done and os.path.exists(calibrated):
                         log("  [skip] CEINMS calibration already done")
                     else:
+                        # CEINMS calibration reads the calibration trial's muscle
+                        # analysis (_MuscleAnalysis_Length.sto + moment arms). That
+                        # trial is not necessarily in trials_run (e.g. running only
+                        # Walking_02 while calibrating on Static_01), so its IK/ID/MA
+                        # may never have been produced. Ensure it before calibrating.
+                        try:
+                            cal_names = sess._resolve_calibration_trials() or []
+                        except Exception:
+                            cal_names = []
+                        for cn in cal_names:
+                            try:
+                                ct = sess.trial(cn)
+                                ma_len = os.path.join(ct.path, ct.ma,
+                                                      "_MuscleAnalysis_Length.sto")
+                                if replace or not os.path.exists(ma_len):
+                                    log(f"  [CEINMS prep] muscle analysis for "
+                                        f"calibration trial {cn}")
+                                    ct.run_ik(replace=replace)
+                                    ct.run_id(replace=replace)
+                                    ct.run_ma(replace=replace)
+                            except Exception as e:
+                                log(f"  [CEINMS prep ERROR] {subj.name}/{cn}: {e}")
                         sess.prepare_ceinms(replace=replace)
                     for tn in trials_run:
                         try:
@@ -446,18 +479,31 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
     return results
 
 
-def _run_session_ceinms(subj, sess, sdir, trials, calibration_trials, replace):
+def _run_session_ceinms(subj, sess, sdir, trials, calibration_trials, replace,
+                        do_normalise=True):
     """Drive CEINMS for one subject/session using the tested Session/Trial verbs.
 
     Session-wide EMG normalisation + one calibrated model, then per-trial CEINMS
     execution. Non-destructive and full-resolution. ``calibration_trials`` may be
     None to let the Session resolve them from settings (with folder-matching and
     a squat/all fallback).
+
+    EMG normalisation is SESSION-WIDE (per-channel max across ALL trials = MVC
+    reference), so it can't be done for just a subset. With ``replace=False`` it
+    is skipped only when EVERY trial already has inputs/emg_filtered_normalised.mot.
     """
-    try:
-        sess.normalise_emg(replace=replace)
-    except Exception as e:
-        print(f"  [CEINMS] EMG normalise failed for {subj.name}/{sess.name}: {e}")
+    _norm_all_present = all(
+        os.path.exists(os.path.join(sdir, tr, "inputs", "emg_filtered_normalised.mot"))
+        for tr in trials) if trials else False
+    if not do_normalise:
+        print(f"  [CEINMS] EMG normalise disabled (enable_emg_normalise=False).")
+    elif not replace and _norm_all_present:
+        print(f"  [skip] EMG normalise: all {len(trials)} trials already normalised.")
+    else:
+        try:
+            sess.normalise_emg(replace=replace)
+        except Exception as e:
+            print(f"  [CEINMS] EMG normalise failed for {subj.name}/{sess.name}: {e}")
     cal = list(calibration_trials) if calibration_trials else None
     try:
         sess.calibrate(replace=replace, calibration_trials=cal)
@@ -472,6 +518,114 @@ def _run_session_ceinms(subj, sess, sdir, trials, calibration_trials, replace):
             t.run_ceinms_exe()
         except Exception as e:
             print(f"  [CEINMS ERROR] {subj.name}/{tr}: {e}")
+
+
+def _run_scaling(subj, sdir, session, config, u, replace=True):
+    """Scale a subject's generic model for ONE session, producing the models the
+    Subject references. Three stages, matching the naming convention:
+
+        generic  --scale-->  scaled.osim
+                 --Modenese2015 muscle-opt (N_eval)-->  scaled_opt_N<N>.osim   (= model_ceinms)
+                 --isometric-force x factor-->            <model_so>            (e.g. *_mvicx3.00.osim)
+
+    The static trial is taken from ``BatchSettings.static_trials[session]`` (a
+    ``{session: static_trial_name}`` map), else the Subject's ``static_trial``,
+    else the first trial folder whose name starts with 'static'. Outputs go to
+    ``models/<subject>/<session>/``. Returns the final model path, or None."""
+    from bioscout.utils import openSim as _os
+    import shutil
+
+    generic = subj.generic_model_path()
+    if not generic or not os.path.exists(generic):
+        print(f"  [scale ERROR] generic model not found for {subj.name}: "
+              f"{subj.generic_model!r} -> {generic}")
+        return None
+
+    # Resolve the static trial for this session.
+    smap = getattr(config, "static_trials", None) or {}
+    static_name = smap.get(session) or getattr(subj, "static_trial", None)
+    if not static_name:
+        static_name = next((d for d in sorted(os.listdir(sdir))
+                            if d.lower().startswith("static")
+                            and os.path.isdir(os.path.join(sdir, d))), None)
+    if not static_name:
+        print(f"  [scale ERROR] no static trial for {subj.name}/{session} "
+              f"(set BatchSettings.static_trials['{session}'])")
+        return None
+    static_dir = os.path.join(sdir, static_name)
+    trc = os.path.join(static_dir, "inputs", TRC)
+    if not os.path.exists(trc):
+        try:
+            subj.make_trial(static_dir).export_c3d()
+        except Exception as e:
+            print(f"  [scale] static export failed: {e}")
+    if not os.path.exists(trc):
+        print(f"  [scale ERROR] static TRC not found: {trc}")
+        return None
+
+    model_dir = os.path.join(str(u.MODELS_DIR), subj.name, session)
+    os.makedirs(model_dir, exist_ok=True)
+    final = os.path.join(model_dir, subj.model_so or f"{subj.name}.osim")
+    if os.path.exists(final) and not replace:
+        print(f"  [skip] scaled model already exists: {final}")
+        return final
+
+    markerset = getattr(config, "markerset", None)
+    print(f"  [scale] {subj.name}/{session}: {os.path.basename(generic)} "
+          f"+ static '{static_name}' -> {os.path.basename(final)}")
+
+    # Scaling-stage toggles (per-subject; map to OpenSim ScaleTool stages).
+    linear_scaling = bool(getattr(subj, "linear_scaling", True))
+    marker_placer  = bool(getattr(subj, "marker_placer", False))
+    prescaled      = getattr(subj, "prescaled_model", None)
+
+    def _resolve_model(pth):
+        if not pth:
+            return None
+        if os.path.isabs(pth) and os.path.exists(pth):
+            return pth
+        pd = getattr(u, "PROJECT_DIR", None) or os.getcwd()
+        for base in (str(u.MODELS_DIR), os.path.join(pd, "generic models"), pd):
+            cand = os.path.join(base, pth)
+            if os.path.exists(cand):
+                return cand
+        return pth
+
+    # 1) build the model that muscle-opt starts from. A prescaled/MRI model is
+    #    already geometry-personalised → never dimensionally scale it; only the
+    #    marker placer may run. Otherwise honour linear_scaling/marker_placer.
+    scaled = os.path.join(model_dir, "scaled.osim")
+    if prescaled:
+        scale_input = _resolve_model(prescaled)
+        linear_scaling = False
+        print(f"  [scale] {subj.name}: prescaled model (no geometric scaling): "
+              f"{os.path.basename(scale_input or prescaled)}")
+    else:
+        scale_input = generic
+    _os.scale_model(scale_input, trc, scaled, scale_setup_output_dir=model_dir,
+                    marker_set_file=markerset,
+                    linear_scaling=linear_scaling, marker_placer=marker_placer)
+
+    # 2) muscle-parameter optimisation (Modenese 2015) -> scaled_opt_N<N>.osim
+    #    Reference is the generic template even for a prescaled model (preserves
+    #    the template's muscle operating range in the personalised geometry).
+    n_eval = int(getattr(config, "muscle_opt_neval", 10) or 10)
+    opt = os.path.join(model_dir, f"scaled_opt_N{n_eval}.osim")
+    _os.muscle_optimimizer_Modenese2015(scaled, save_path=opt,
+                                        ref_model_path=generic, N_eval=n_eval)
+
+    # 3) isometric-force scaling x factor -> final (named as subj.model_so)
+    factor = float(getattr(config, "muscle_force_factor", 1.0) or 1.0)
+    if factor and factor != 1.0:
+        _os.increase_isometric_force(opt, muscleList="all", factor=factor)
+        produced = opt.replace(".osim", f"_increased_{factor:.2f}.osim")
+        if os.path.exists(produced) and os.path.abspath(produced) != os.path.abspath(final):
+            shutil.copyfile(produced, final)
+    elif os.path.abspath(opt) != os.path.abspath(final):
+        shutil.copyfile(opt, final)
+
+    print(f"  [scale OK] {subj.name}/{session} -> {final}")
+    return final
 
 
 def run_pipeline(project_dir=None, scale=False, ceinms=True, replace=True,
@@ -496,12 +650,27 @@ def run_pipeline(project_dir=None, scale=False, ceinms=True, replace=True,
     proj = bioscout.Project(project_dir)
     u = proj.utils
     sim = u.SIMULATIONS_DIR
-    print(f"[pipeline] full-resolution, non-destructive run; "
-          f"project={project_dir}; scale={scale}; ceinms={ceinms}")
 
-    if scale:
-        print("[pipeline] NOTE: scale=True requested, but project pipeline reuses "
-              "existing scaled models — skipping scaling.")
+    # Honour BatchSettings switches. ``replace_existing=False`` makes every stage
+    # SKIP trials that already have their outputs (resume a partial run without
+    # redoing finished trials).
+    _bs = getattr(getattr(proj, "settings", None), "BatchSettings", None)
+    replace   = bool(getattr(_bs, "replace_existing", replace))
+    do_export = bool(getattr(_bs, "enable_c3d_export", True))
+    do_norm   = bool(getattr(_bs, "enable_emg_normalise", True))
+    # Per-stage switches (external biomechanics = IK + ID; SO implies muscle
+    # moments + JRA). Any stage left True runs; set the rest False to stop early.
+    do_ik = bool(getattr(_bs, "enable_inverse_kinematics", True))
+    do_id = bool(getattr(_bs, "enable_inverse_dynamics", True))
+    do_ma = bool(getattr(_bs, "enable_muscle_analysis", True))
+    do_so = bool(getattr(_bs, "enable_static_optimization", True))
+    # Scaling runs only when BOTH the run flag (RUN_SCALING -> `scale`) and the
+    # per-project enable_scale_model switch are on.
+    do_scale = bool(scale) and bool(getattr(_bs, "enable_scale_model", True))
+    print(f"[pipeline] full-resolution, non-destructive run; "
+          f"project={project_dir}; scale={do_scale}; ceinms={ceinms}; "
+          f"replace={replace}; export_c3d={do_export}; emg_normalise={do_norm}; "
+          f"IK={do_ik} ID={do_id} MA={do_ma} SO={do_so}")
 
     for subj in proj.subjects:
         if not subj.sessions:
@@ -514,40 +683,115 @@ def run_pipeline(project_dir=None, scale=False, ceinms=True, replace=True,
             continue
         trials = [d for d in sorted(os.listdir(sdir))
                   if os.path.isdir(os.path.join(sdir, d))
-                  and (os.path.exists(os.path.join(sdir, d, C3D))
-                       or os.path.exists(os.path.join(sdir, d, TRC)))]
+                  and _has_raw_inputs(os.path.join(sdir, d))]
+        # Honour BatchSettings.trial_list if the project restricts the run to a
+        # subset (e.g. walks first). Empty/None = run every trial found on disk.
+        _wanted = getattr(getattr(proj, "settings", None), "BatchSettings", None)
+        _wanted = getattr(_wanted, "trial_list", None)
+        if _wanted:
+            trials = [t for t in trials if t in set(_wanted)]
         print(f"\n==================  {subj.name}/{session}: {len(trials)} trials  ==================")
+        if not trials:
+            print(f"  [skip] {subj.name}/{session}: no trials with raw inputs "
+                  f"(inputs/{C3D} or inputs/{TRC}) — skipping SO + CEINMS.")
+            continue
 
-        # Regenerate trial inputs from the C3D at full resolution (no downsample,
-        # no destructive strip). Trials with no C3D (template/MRI) keep their .trc.
-        for tr in trials:
-            tp = os.path.join(sdir, tr)
-            if os.path.exists(os.path.join(tp, C3D)):
-                print(f"  [inputs] {tr}: export c3d (full resolution)")
+        # A subject/session runs as a CLEAR, LINEAR sequence of named stages.
+        # Each stage is gated by its enable flag and skips finished work when
+        # replace=False. Order matters (each stage consumes the previous output).
+        def _mk(tr):
+            return subj.make_trial(os.path.join(sdir, tr))
+
+        # ---- STAGE 1 · export_c3d (raw c3d -> markers/GRF/EMG per trial) ----
+        if do_export:
+            print(f"\n---- export_c3d · {subj.name}/{session} ----")
+            for tr in trials:
+                tp = os.path.join(sdir, tr)
+                if not (os.path.exists(os.path.join(tp, "inputs", C3D))
+                        or os.path.exists(os.path.join(tp, C3D))):
+                    continue
+                if not replace and all(os.path.exists(os.path.join(tp, "inputs", f))
+                                       for f in (TRC, "emg_filtered.mot")):
+                    print(f"  [skip] {tr}: already exported"); continue
                 try:
-                    subj.make_trial(tp).export_c3d()
+                    _mk(tr).export_c3d(); print(f"  [ok] {tr}")
                 except Exception as e:
-                    print(f"  [ERROR] export_c3d {subj.name}/{tr}: {e}")
+                    print(f"  [ERROR] export_c3d {tr}: {e}")
 
-        for tr in trials:
-            print(f"\n=== SO  {subj.name}/{tr} ===")
+        # ---- STAGE 2 · run_scale_model (scale -> muscle-opt -> MVIC) --------
+        if do_scale:
+            print(f"\n---- run_scale_model · {subj.name}/{session} ----")
             try:
-                t = subj.make_trial(os.path.join(sdir, tr))
-                t.run_ik(replace=replace)
-                t.run_id(replace=replace)
-                t.run_ma(replace=replace)
-                t.run_so(replace=replace)
-                t.calculate_muscle_moments(forces_type="so")
-                t.run_jra(replace=replace)
+                _run_scaling(subj, sdir, session, _bs, u, replace=replace)
             except Exception as e:
-                print(f"  [ERROR] SO {subj.name}/{tr}: {e}")
+                print(f"  [ERROR] scale_model: {e}")
 
+        # ---- STAGE 3 · run_emg_normalise (session-wide MVC normalisation) ---
+        if do_norm:
+            _all_norm = bool(trials) and all(
+                os.path.exists(os.path.join(sdir, tr, "inputs",
+                               "emg_filtered_normalised.mot")) for tr in trials)
+            if not replace and _all_norm:
+                print(f"\n---- run_emg_normalise · [skip] all trials normalised ----")
+            else:
+                print(f"\n---- run_emg_normalise · {subj.name}/{session} ----")
+                try:
+                    sess.normalise_emg(replace=replace)
+                except Exception as e:
+                    print(f"  [ERROR] emg_normalise: {e}")
+
+        # ---- STAGE 4 · run_external_biomechanics (IK + ID) ------------------
+        if do_ik or do_id:
+            print(f"\n---- run_external_biomechanics (IK+ID) · {subj.name} ----")
+            for tr in trials:
+                try:
+                    t = _mk(tr)
+                    if do_ik: t.run_ik(replace=replace)
+                    if do_id: t.run_id(replace=replace)
+                except Exception as e:
+                    print(f"  [ERROR] external_biomechanics {tr}: {e}")
+
+        # ---- STAGE 5 · run_muscle_analysis ----------------------------------
+        if do_ma:
+            print(f"\n---- run_muscle_analysis · {subj.name} ----")
+            for tr in trials:
+                try:
+                    _mk(tr).run_ma(replace=replace)
+                except Exception as e:
+                    print(f"  [ERROR] muscle_analysis {tr}: {e}")
+
+        # ---- STAGE 6 · run_static_optimisation (+ JRA on SO forces) ---------
+        if do_so:
+            print(f"\n---- run_static_optimisation (+JRA) · {subj.name} ----")
+            for tr in trials:
+                try:
+                    t = _mk(tr)
+                    t.run_so(replace=replace)
+                    t.calculate_muscle_moments(forces_type="so")
+                    t.run_jra(replace=replace)
+                except Exception as e:
+                    print(f"  [ERROR] static_optimisation {tr}: {e}")
+
+        # ---- STAGE 7 · run_ceinms_calibration (once per session) ------------
         if ceinms:
-            print(f"\n=== CEINMS  {subj.name}/{session} ===")
+            print(f"\n---- run_ceinms_calibration · {subj.name}/{session} ----")
             try:
-                _run_session_ceinms(subj, sess, sdir, trials, calibration_trials, replace)
+                sess.calibrate(replace=replace, calibration_trials=(
+                    list(calibration_trials) if calibration_trials else None))
             except Exception as e:
-                print(f"  [CEINMS ERROR] {subj.name}: {e}")
+                print(f"  [ERROR] ceinms_calibration: {e}")
+
+        # ---- STAGE 8 · run_ceinms (per-trial execution + JRA on CEINMS) -----
+        if ceinms:
+            print(f"\n---- run_ceinms (+JRA) · {subj.name} ----")
+            for tr in trials:
+                try:
+                    t = subj.make_trial(os.path.join(sdir, tr), force_type="CEINMS")
+                    t.run_ceinms_exe()
+                    t.calculate_muscle_moments(forces_type="ceinms")
+                    t.run_jra_ceinms(replace=replace)
+                except Exception as e:
+                    print(f"  [ERROR] ceinms {tr}: {e}")
 
     print("\n==================  PIPELINE DONE  ==================")
     return True
@@ -573,14 +817,242 @@ def run_ceinms_only(project_dir=None, replace=True,
         trials = [d for d in sorted(os.listdir(sdir))
                   if os.path.isdir(os.path.join(sdir, d))
                   and not d.startswith("calibrationOutput")
-                  and (os.path.exists(os.path.join(sdir, d, C3D))
-                       or os.path.exists(os.path.join(sdir, d, TRC)))]
+                  and _has_raw_inputs(os.path.join(sdir, d))]
         print(f"\n====  CEINMS  {subj.name}/{session}: {len(trials)} trials  ====")
+        if not trials:
+            print(f"  [skip] {subj.name}/{session}: no trials with raw inputs.")
+            continue
         try:
             _run_session_ceinms(subj, sess, sdir, trials, calibration_trials, replace)
         except Exception as e:
             print(f"  [CEINMS ERROR] {subj.name}: {e}")
     print("\n====  CEINMS-ONLY DONE  ====")
+    return True
+
+
+# ===========================================================================
+# Session-centric runner (BioScout 2.x) — reads session.xml, loops MODEL x TRIAL.
+# Additive: does NOT replace run_pipeline. v1 covers export -> IK -> ID -> MA ->
+# SO(+JRA) per model; CEINMS is added in v2. Model creation (scaling) is a
+# separate step — each session.xml model must already point to an existing .osim.
+# ===========================================================================
+def _live(msg):
+    """Transient one-line status on the CONSOLE only (not the log file):
+    ``[running] <msg>`` overwritten in place via carriage return."""
+    try:
+        sys.__stdout__.write(f"\r[running] {msg}\x1b[K")
+        sys.__stdout__.flush()
+    except Exception:
+        pass
+
+
+def _live_clear():
+    try:
+        sys.__stdout__.write("\r\x1b[K")
+        sys.__stdout__.flush()
+    except Exception:
+        pass
+
+
+def _quiet_opensim():
+    """Reduce OpenSim's C++ logging (it bypasses the Python log filter). Keeps
+    warnings/errors, drops the per-frame [info] SO/assembly chatter."""
+    try:
+        import opensim as _os
+        _os.Logger.setLevel(_os.Logger.Level_Warn)
+    except Exception:
+        pass
+
+
+def _c3d_for_trial(project_dir, spec, trial):
+    """Locate a trial's raw .c3d: <session>/c3dfiles/<trial>.c3d first, else
+    <project>/c3dfiles/<subject>/<session>/<trial>.c3d."""
+    cands = []
+    if spec.path:
+        cands.append(os.path.join(spec.path, "c3dfiles", f"{trial}.c3d"))
+    cands.append(os.path.join(project_dir, "c3dfiles", spec.subject,
+                              spec.session, f"{trial}.c3d"))
+    return next((c for c in cands if os.path.isfile(c)), None)
+
+
+def run_sessions(project_dir=None, replace=None, models=None, trials=None,
+                 subjects=None):
+    """Run analysis for every ``session.xml`` — layout B: ONE model per session
+    folder, FLAT trial folders (no per-model subdir).
+
+    For each ``simulations/<folder>/<session>/session.xml`` this imports each
+    trial's raw c3d from the session's ``<c3d_source>`` into ``<trial>/inputs/``,
+    exports it (markers/GRF/EMG), then runs export->IK->ID->MA->SO(+JRA) into the
+    trial folder. The raw ``.c3d`` is NOT kept in ``inputs/``. ``subject`` / model
+    are metadata on the session (stats group by ``subject``). ``Analyse`` unchanged.
+
+    Filters: ``subjects`` (athlete) / ``models`` (model name) / ``trials``; each
+    defaults to the matching ``BatchSettings`` value."""
+    import bioscout
+    import shutil
+    from bioscout.utils.session_config import discover_session_specs
+
+    # Absolute: Analyse chdir()s into the trial folder, so model/setup/source
+    # paths must be absolute or they resolve relative to the wrong directory.
+    project_dir = os.path.abspath(project_dir or os.getcwd())
+    proj = bioscout.Project(project_dir)
+    u = proj.utils
+    _quiet_opensim()          # hush OpenSim's per-frame C++ chatter (bypasses tee)
+    sim = str(u.SIMULATIONS_DIR)
+    _stg = getattr(proj, "settings", None)
+    bs = getattr(_stg, "BatchSettings", None)
+
+    if replace is None:
+        replace = bool(getattr(bs, "replace_existing", True))
+    do_export = bool(getattr(bs, "enable_c3d_export", True))
+    do_ik = bool(getattr(bs, "enable_inverse_kinematics", True))
+    do_id = bool(getattr(bs, "enable_inverse_dynamics", True))
+    do_ma = bool(getattr(bs, "enable_muscle_analysis", True))
+    do_so = bool(getattr(bs, "enable_static_optimization", True))
+    do_ceinms = bool(getattr(_stg, "RUN_CEINMS", True))
+
+    def _norm(v):  # 'all'/None -> None (no filter); str -> [str]; list -> list
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return None if v.strip().lower() == "all" else [v]
+        return list(v) or None
+
+    want_subjects = _norm(subjects if subjects is not None else getattr(bs, "RUN_SUBJECTS", "all"))
+    want_models = _norm(models if models is not None else getattr(bs, "RUN_MODELS", "all"))
+    want_trials = _norm(trials if trials is not None else (getattr(bs, "trial_list", None) or None))
+
+    specs = [s for s in discover_session_specs(sim) if s.models]   # need a model
+    if want_subjects:
+        specs = [s for s in specs if s.subject in set(want_subjects)]
+    if want_models:
+        specs = [s for s in specs if s.models[0].name in set(want_models)]
+    print(f"[run_sessions] {len(specs)} session(s); replace={replace}; "
+          f"IK={do_ik} ID={do_id} MA={do_ma} SO={do_so} CEINMS={do_ceinms}")
+
+    _ok = _err = 0
+    for spec in specs:
+        sdir = spec.path
+        model = spec.models[0]
+        abs_model = model.model if os.path.isabs(model.model) \
+            else os.path.join(project_dir, model.model)
+        if not os.path.isfile(abs_model):
+            print(f"  [ERROR] {spec.subject}/{model.name}: model not found -> {abs_model}")
+            continue
+        setup_dir = (spec.setup_folder if (spec.setup_folder and os.path.isabs(spec.setup_folder))
+                     else os.path.join(project_dir, spec.setup_folder or "setupFiles"))
+        csrc = spec.c3d_source
+        csrc = (csrc if (csrc and os.path.isabs(csrc))
+                else (os.path.join(project_dir, csrc) if csrc else None))
+        trs = list(spec.trials.keys())
+        if want_trials:
+            trs = [t for t in trs if t in set(want_trials)]
+        print(f"\n==================  {spec.subject} / {model.name} / {spec.session}: "
+              f"{len(trs)} trial(s)  ==================")
+
+        for tr in trs:
+            work = os.path.join(sdir, tr)               # FLAT trial folder
+            print(f"  {tr}")
+            t = None
+            failed = False
+
+            def _stage(name, enabled, fn):
+                # Print every stage so the log shows the full sequence; 'skip' for
+                # disabled/upstream-failed stages. Live [running] status on console.
+                nonlocal failed
+                if not enabled:
+                    print(f"    {name:16s} skip"); return
+                if failed:
+                    print(f"    {name:16s} skip (upstream failed)"); return
+                _live(f"{model.name}/{tr}: {name}")
+                try:
+                    fn(); _live_clear(); print(f"    {name:16s} ok")
+                except Exception as e:
+                    _live_clear(); print(f"    {name:16s} ERROR: {e}"); failed = True
+
+            # Model scaling is a standalone step (not run by the analysis pipeline).
+            print(f"    {'run_scale_model':16s} skip (standalone)")
+
+            def _export():
+                nonlocal t
+                os.makedirs(os.path.join(work, "inputs"), exist_ok=True)
+                src = (os.path.join(csrc, f"{tr}.c3d") if csrc
+                       else _c3d_for_trial(project_dir, spec, tr))
+                if not (src and os.path.isfile(src)):
+                    raise FileNotFoundError("no c3d in source")
+                shutil.copy2(src, os.path.join(work, "inputs", C3D))
+                t = u.Analyse(work)
+                t.update_trial_attribute("model_dir", abs_model)
+                t.update_trial_attribute("setup_dir", setup_dir)
+                if spec.body_mass is not None:
+                    t.update_trial_attribute("body_mass", spec.body_mass)
+                t.export_c3d()
+                try:
+                    os.remove(os.path.join(work, "inputs", C3D))   # don't keep raw c3d
+                except OSError:
+                    pass
+                tw = (spec.trials.get(tr) or {}).get("time_range")
+                if tw:
+                    t.update_trial_attribute("time_range", list(tw)); t.time_range = list(tw)
+
+            _stage("export_c3d", do_export, _export)
+            if t is None and not failed:      # export disabled -> attach to existing folder
+                t = u.Analyse(work)
+                t.update_trial_attribute("model_dir", abs_model)
+                t.update_trial_attribute("setup_dir", setup_dir)
+
+            def _so():
+                t.run_so(replace=replace)
+                t.calculate_muscle_moments(forces_type="so")
+                t.run_jra(replace=replace)
+
+            _stage("IK", do_ik, lambda: t.run_ik(replace=replace))
+            _stage("ID", do_id, lambda: t.run_id(replace=replace))
+            _stage("MA", do_ma, lambda: t.run_ma(replace=replace))
+            _stage("SO+JRA", do_so, _so)
+            if failed:
+                _err += 1
+            else:
+                _ok += 1
+
+        # ---- CEINMS (session-level): normalise EMG -> calibrate -> per-trial
+        # execution + CEINMS moments + JRA. Reuses the tested _run_session_ceinms
+        # via a folder-scoped Subject/Session; the session's model_ceinms is used.
+        if do_ceinms and trs:
+            try:
+                from bioscout.utils.analysis import Subject as _Subject
+                folder = os.path.basename(os.path.dirname(sdir))   # e.g. Athlete_03_Cateli
+                sname = os.path.basename(sdir)                     # e.g. 25_03_31
+                _ceinms_model = model.model_ceinms or model.model
+                _subj = _Subject(name=folder, session=sname,
+                                 model_so=os.path.basename(model.model),
+                                 model_ceinms=os.path.basename(_ceinms_model),
+                                 setup_folder=setup_dir)
+                _sess = _subj.get_session(sname)
+                print(f"\n----  run_ceinms  {spec.subject} / {model.name}  ----")
+                # Session-level: normalise EMG across trials, then calibrate on the
+                # run trials that have muscle-analysis data (exclude static/quiet).
+                cal = [t for t in trs if "static" not in t.lower()] or list(trs)
+                _sess.normalise_emg(replace=replace)
+                _sess.calibrate(replace=replace, calibration_trials=cal)
+                # Per trial: execution + CEINMS moments + JRA on the SAME object,
+                # so run_ceinms_exe sets jra_forces_ceinms before it's read.
+                for tr in trs:
+                    try:
+                        tt = _subj.make_trial(os.path.join(sdir, tr), force_type="CEINMS")
+                        tt.run_ceinms_exe()
+                        tt.calculate_muscle_moments(forces_type="ceinms")
+                        tt.run_jra_ceinms(replace=replace)
+                        print(f"  [ok] {tr}  (CEINMS+JRA)")
+                        _ok += 1
+                    except Exception as e:
+                        print(f"  [ERROR] {tr} CEINMS: {e}")
+                        _err += 1
+            except Exception as e:
+                print(f"  [ERROR] {spec.subject}/{model.name} CEINMS: {e}")
+                _err += 1
+
+    print(f"\n==================  SESSIONS DONE — {_ok} ok, {_err} error(s)  ==================")
     return True
 
 

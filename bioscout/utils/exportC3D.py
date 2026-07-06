@@ -17,24 +17,55 @@ import pandas as pd
 import c3d
 import numpy as np
 
-# Access functions defined in utils/__init__.py
-try:
-    # Works when imported as package: app.utils.exportC3D
-    from . import load_any_data_file, filter_emg_file as filter_emg, osimTools, write_mot
-except (ImportError, ValueError):
-    # Works when running file directly or dynamically loaded
-    import sys
-    from pathlib import Path
-    _utils_path = str(Path(__file__).parent)
-    if _utils_path not in sys.path:
-        sys.path.insert(0, _utils_path)
-    # Use the already-cached utils module to avoid re-executing __init__.py
-    # (re-executing it would trigger circular imports again)
-    import utils as _utils_mod
-    load_any_data_file = _utils_mod.load_any_data_file
-    filter_emg = _utils_mod.filter_emg_file
-    osimTools = _utils_mod.osimTools
-    write_mot = _utils_mod.write_mot
+# Access functions defined in utils/__init__.py.
+#
+# These names are resolved LAZILY (PEP 562 module __getattr__) rather than bound
+# at import time. Binding them eagerly created a circular dependency:
+#   utils/__init__  ->  openSim  ->  exportC3D  ->  utils.filter_emg_file
+# but filter_emg_file is bound near the END of utils/__init__ (from .emg), so at
+# the moment exportC3D was imported the utils module was only partially
+# initialized and the attribute did not exist yet (AttributeError). This is what
+# broke `python -m bioscout`.
+#
+# Deferring the lookup until first *use* removes all import-time access to utils,
+# so exportC3D now imports cleanly regardless of order, while utils is always
+# fully initialized by the time these are actually called.
+# NOTE: write_mot is intentionally NOT proxied here — this module defines its own
+# write_mot() below.
+#
+# They are exposed as thin WRAPPER FUNCTIONS (not a module __getattr__): PEP 562
+# __getattr__ only fires for `module.attr` access, NOT for bare-name lookups
+# inside this module's own functions (e.g. `osimTools()`), which would raise
+# NameError. Real module-level functions resolve correctly as globals and still
+# defer the utils lookup to call time, so import stays cycle-free.
+import sys as _sys
+from pathlib import Path as _Path
+
+
+def _resolve_utils():
+    """Return the initialized utils module, whether it was loaded as a package
+    submodule (bioscout.utils) or as a top-level module (utils)."""
+    for _key in ("bioscout.utils", "utils"):
+        _mod = _sys.modules.get(_key)
+        if _mod is not None:
+            return _mod
+    _utils_path = str(_Path(__file__).parent)
+    if _utils_path not in _sys.path:
+        _sys.path.insert(0, _utils_path)
+    import utils as _u
+    return _u
+
+
+def load_any_data_file(*args, **kwargs):
+    return _resolve_utils().load_any_data_file(*args, **kwargs)
+
+
+def filter_emg(*args, **kwargs):
+    return _resolve_utils().filter_emg_file(*args, **kwargs)
+
+
+def osimTools(*args, **kwargs):
+    return _resolve_utils().osimTools(*args, **kwargs)
 
 
 def _crop_trc_file_text_based(filepath, nan_threshold=0.5):
@@ -364,13 +395,9 @@ def define_time_range(trc_filepath, markers, algorithm):
         
         start_time = data['Time'].iloc[start_frame]
         end_time = data['Time'].iloc[end_frame]
-        
-    # write events.csv file
-    data = [['start', start_time],
-            ['end', end_time]]
-    events = pd.DataFrame(data)
-    events.to_csv(os.path.dirname(trc_filepath) + '/events.csv', index=False, header=False)
-    print(f"Successfully exported {os.path.dirname(trc_filepath) + '/events.csv'}")
+
+    # Events (start/end window) are persisted by the caller into the <events>
+    # subtree of trial_settings.xml — there is no separate events file.
     return start_time, end_time
 
 def write_mot(analog_df, labels, mot_file):
@@ -744,8 +771,15 @@ def get_time_range_from_c3d(c3d_filepath):
     return None
 
 
-def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
+def main(c3d_filepath, emg_string_list=['emg'], create_folder=False, output_dir=None):
     """Export C3D data to TRC / GRF.mot / EMG.mot files.
+
+    Parameters
+    ----------
+    output_dir : str, optional
+        Explicit destination folder (created if needed). In the session-centric
+        layout this is ``<session>/experimental/<trial>/``. If omitted, exports
+        next to the c3d — optionally in a per-trial subfolder (``create_folder``).
 
     Returns
     -------
@@ -754,13 +788,14 @@ def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
         the time range could not be determined.
     """
 
-    # create a directory for the output files
-    output_dir = os.path.dirname(c3d_filepath)
-
-    if create_folder:
-        output_dir = os.path.join(output_dir, os.path.basename(c3d_filepath).replace('.c3d', ''))
-        os.makedirs(output_dir, exist_ok=True)
-        print(f"Created output directory: {output_dir}")
+    # Destination: explicit output_dir wins; else next to the c3d (optionally in
+    # a per-trial subfolder named after the c3d).
+    if output_dir is None:
+        output_dir = os.path.dirname(c3d_filepath)
+        if create_folder:
+            output_dir = os.path.join(output_dir, os.path.basename(c3d_filepath).replace('.c3d', ''))
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Exporting c3d -> {output_dir}")
 
     # Read time range before exports (C3D file intact, forces table is reliable)
     time_range = get_time_range_from_c3d(c3d_filepath)
@@ -787,6 +822,236 @@ def main(c3d_filepath, emg_string_list=['emg'], create_folder=False):
         _tb.print_exc()
 
     return time_range
+
+
+def _qc_figures(tdir):
+    """Established-style QC figures for one experimental trial folder, replicated
+    standalone (no Analyse): emg_processing.png (raw grey vs filtered+normalised
+    red on a twin axis, per channel) and grf_events.png (per-foot vertical GRF)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from xml.etree import ElementTree as ET
+    import re as _re
+    from bioscout import utils as _u
+    trial = os.path.basename(tdir)
+
+    # ---- EMG: raw vs filtered+normalised (matches Analyse.plot_emg_processing) ----
+    try:
+        raw = _u.load_any_data_file(os.path.join(tdir, "emg.mot"))
+        try:
+            norm = _u.load_any_data_file(os.path.join(tdir, "emg_filtered_normalised.mot"))
+        except Exception:
+            norm = None
+        tr = pd.to_numeric(raw["time"], errors="coerce").to_numpy(float)
+        tn = (pd.to_numeric(norm["time"], errors="coerce").to_numpy(float)
+              if norm is not None else None)
+        chans = [c for c in raw.columns if c.lower() != "time" and "emg" in c.lower()
+                 and any(k.isalpha() for k in str(c).split("EMG")[-1])] or \
+                [c for c in raw.columns if c.lower() != "time"]
+        if norm is not None:
+            chans = [c for c in chans if c in norm.columns] or chans
+        ncol = 3; nrow = int(np.ceil(len(chans) / ncol))
+        fig, axg = plt.subplots(nrow, ncol, figsize=(4.6 * ncol, 2.4 * nrow), squeeze=False)
+        for i, ch in enumerate(chans):
+            a = axg[i // ncol][i % ncol]
+            a.plot(tr, pd.to_numeric(raw[ch], errors="coerce"), color="0.6", lw=0.4)
+            if norm is not None and ch in norm.columns:
+                a2 = a.twinx()
+                a2.plot(tn, pd.to_numeric(norm[ch], errors="coerce"), color="tab:red", lw=1.5)
+                a2.set_ylim(-0.05, 1.05); a2.tick_params(labelsize=7, colors="tab:red")
+                a2.set_ylabel("norm", fontsize=7, color="tab:red")
+            a.set_title(str(ch).replace("EMG_Channels_", ""), fontsize=8)
+            a.tick_params(labelsize=7); a.set_ylabel("raw", fontsize=7); a.margins(x=0)
+        for j in range(len(chans), nrow * ncol):
+            axg[j // ncol][j % ncol].axis("off")
+        h = [plt.Line2D([], [], color="0.6", lw=1, label="raw EMG"),
+             plt.Line2D([], [], color="tab:red", lw=1.5, label="filtered + session-normalised (0-1)")]
+        fig.legend(handles=h, loc="lower center", ncol=2, fontsize=10, frameon=False)
+        fig.suptitle(f"{trial} — EMG: raw vs filtered-normalised", fontsize=13)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.98])
+        fig.savefig(os.path.join(tdir, "emg_processing.png"), dpi=130); plt.close(fig)
+    except Exception as e:
+        print(f"[export_session] {trial}: EMG figure warn — {e}")
+
+    # ---- GRF: per-foot vertical force (core of Analyse.plot_grf_events) ----
+    try:
+        grf = _u.load_any_data_file(os.path.join(tdir, "grf.mot"))
+        t = pd.to_numeric(grf["time"], errors="coerce").to_numpy(float)
+        foot = {}
+        try:
+            root = ET.parse(os.path.join(tdir, "GRF.xml")).getroot()
+            for ef in root.iter("ExternalForce"):
+                body = (ef.findtext("applied_to_body") or "").strip()
+                m = _re.search(r"(\d+)", (ef.findtext("force_identifier") or ""))
+                if m and body.startswith("calcn_"):
+                    foot[int(m.group(1))] = body.split("_")[-1]
+        except Exception:
+            pass
+
+        def _sum(side):
+            cols = [f"ground_force_{p}_vy" for p, s in foot.items()
+                    if s == side and f"ground_force_{p}_vy" in grf.columns]
+            return (np.sum([pd.to_numeric(grf[cN], errors="coerce").to_numpy(float)
+                            for cN in cols], axis=0) if cols else np.zeros_like(t))
+
+        vyR, vyL = _sum("r"), _sum("l")
+
+        # detect foot contact / foot off per side (as Analyse.detect_events_from_grf)
+        threshold, min_stance_s = 20.0, 0.05
+        n = len(t)
+
+        def _runs(mask):
+            out, i = [], 0
+            while i < n:
+                if mask[i]:
+                    j = i
+                    while j < n and mask[j]:
+                        j += 1
+                    out.append((i, j - 1)); i = j
+                else:
+                    i += 1
+            return out
+
+        def _cross(i_lo, i_hi, vy):
+            y0, y1 = vy[i_lo], vy[i_hi]
+            return float(t[i_hi]) if y1 == y0 else \
+                float(t[i_lo] + (threshold - y0) / (y1 - y0) * (t[i_hi] - t[i_lo]))
+
+        events = []
+        for side, label, vy in (("r", "Right", vyR), ("l", "Left", vyL)):
+            if not np.any(np.asarray(vy) > threshold):
+                continue
+            for a, b in _runs(np.asarray(vy) > threshold):
+                if (t[b] - t[a]) < min_stance_s:
+                    continue
+                if a > 0:
+                    events.append({"name": f"{label} Foot Contact", "time": round(_cross(a - 1, a, vy), 3),
+                                   "side": side, "contact": True})
+                if b < n - 1:
+                    events.append({"name": f"{label} Foot Off", "time": round(_cross(b, b + 1, vy), 3),
+                                   "side": side, "contact": False})
+
+        fig, ax = plt.subplots(figsize=(11, 5.2))
+        ax.plot(t, vyR, color="tab:red", lw=1.8, label="Right foot Fy")
+        ax.plot(t, vyL, color="tab:blue", lw=1.8, label="Left foot Fy")
+        ax.axhline(threshold, color="0.6", ls=":", lw=1, label=f"{threshold:.0f} N")
+        ymax = float(max(np.max(vyR), np.max(vyL)) or 1.0)
+        ax.set_ylim(-40, ymax * 1.28)
+        for i, e in enumerate(sorted(events, key=lambda x: x["time"])):
+            col = "tab:red" if e["side"] == "r" else "tab:blue"
+            tt = e["time"]; yv = float(np.interp(tt, t, vyR if e["side"] == "r" else vyL))
+            ax.axvline(tt, color=col, ls="-" if e["contact"] else "--", lw=1.0, alpha=0.5)
+            ax.plot(tt, yv, marker="^" if e["contact"] else "v", color=col, ms=11,
+                    mec="k", mew=0.6, zorder=6)
+            ax.annotate(f"{i+1}. {e['name']} ({tt:.2f}s)",
+                        (tt, ymax * (1.02 + 0.075 * (i % 3))), ha="center", va="bottom",
+                        fontsize=7.2, color=col,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=col, alpha=0.9))
+        ax.set_xlabel("Time (s)"); ax.set_ylabel("Vertical GRF Fy (N)")
+        ax.set_title(f"{trial} — vertical GRF per foot + gait events"); ax.legend(fontsize=9)
+        fig.tight_layout(); fig.savefig(os.path.join(tdir, "grf_events.png"), dpi=130)
+        plt.close(fig)
+    except Exception as e:
+        print(f"[export_session] {trial}: GRF figure warn — {e}")
+
+
+def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
+                   out_dirname="experimental", normalise=True):
+    """Export EVERY c3d of a session-centric session into per-trial folders.
+
+    New layout (model-INDEPENDENT data, produced ONCE and shared by all model
+    iterations)::
+
+        <session_dir>/<c3d_dirname>/<trial>.c3d          # raw input
+        <session_dir>/<out_dirname>/<trial>/             # created here
+            marker_experimental.trc  grf.mot  GRF.xml
+            emg.mot  emg_filtered.mot  emg_filtered_normalised.mot
+
+    EMG amplitude normalisation is SESSION-WIDE (per-channel max across all
+    trials = MVC reference) and writes columns in canonical SORTED order
+    (time, EMG01..EMGnn) so CEINMS pairs the excitation generator with each
+    trial's excitations consistently. Returns the list of exported trial names.
+    """
+    import glob
+    import numpy as np
+    import pandas as pd
+    from bioscout import utils as _u
+    from bioscout.utils import emg_normalise as _en
+
+    emg_string_list = emg_string_list or ['emg']
+    c3d_dir = os.path.join(session_dir, c3d_dirname)
+    out_dir = os.path.join(session_dir, out_dirname)
+
+    trials = []
+    for c3d in sorted(glob.glob(os.path.join(c3d_dir, "*.c3d"))):
+        trial = os.path.basename(c3d)[:-4]
+        tdir = os.path.join(out_dir, trial)
+        try:
+            main(c3d, emg_string_list=emg_string_list, output_dir=tdir)
+            trials.append(trial)
+        except Exception as e:
+            print(f"[export_session] {trial}: export failed — {type(e).__name__}: {e}")
+            continue
+        # GRF.xml (external loads) — model-independent, so build it here once with
+        # the raw data (previously created lazily inside ID). Lives in experimental/.
+        try:
+            from bioscout import utils as _u
+            from bioscout.utils import openSim as _os
+            _bs = getattr(_u, "settings", None)
+            _bs = getattr(_bs, "BatchSettings", None)
+            _os.create_grf_xml(
+                grf_mot_path=os.path.join(tdir, "grf.mot"),
+                output_xml_path=os.path.join(tdir, "GRF.xml"),
+                marker_trc_path=os.path.join(tdir, "marker_experimental.trc"),
+                right_foot_markers=getattr(_bs, "right_foot_markers", None),
+                left_foot_markers=getattr(_bs, "left_foot_markers", None),
+                right_foot_body="calcn_r", left_foot_body="calcn_l",
+                vert_force_threshold=10.0, filter_cutoff=6, datafile=None)
+        except Exception as e:
+            print(f"[export_session] {trial}: GRF.xml build warn — {type(e).__name__}: {e}")
+
+    if normalise and trials:
+        dfs = {}
+        for t in trials:
+            fp = os.path.join(out_dir, t, "emg_filtered.mot")
+            if os.path.exists(fp):
+                try:
+                    dfs[t] = _u.load_any_data_file(fp)
+                except Exception as e:
+                    print(f"[export_session] {t}: load emg_filtered failed — {e}")
+        if dfs:
+            chans = sorted({c for df in dfs.values()
+                            for c in df.columns if c.lower() != 'time'})
+            session_max = {}
+            for c in chans:
+                vals = []
+                for df in dfs.values():
+                    if c in df.columns:
+                        vals.extend(pd.to_numeric(df[c], errors='coerce').dropna().values)
+                m = float(np.max(vals)) if len(vals) else 1.0
+                session_max[c] = m if m > 1e-9 else 1.0
+            for t, df in dfs.items():
+                out = df[['time']].copy() if 'time' in df.columns else pd.DataFrame()
+                for c in chans:                       # canonical sorted order
+                    if c in df.columns:
+                        out[c] = (pd.to_numeric(df[c], errors='coerce') / session_max[c]).clip(0.0, 1.0)
+                _en.write_sto_file(out, os.path.join(out_dir, t, "emg_filtered_normalised.mot"))
+            print(f"[export_session] normalised EMG across {len(dfs)} trials "
+                  f"(canonical sorted columns).")
+
+    # QC figures need the normalised EMG + GRF.xml, so build them AFTER
+    # session normalisation, reusing the established Analyse plot methods.
+    for t in trials:
+        try:
+            _qc_figures(os.path.join(out_dir, t))
+        except Exception as e:
+            print(f"[export_session] {t}: QC figures warn — {e}")
+
+    print(f"[export_session] exported {len(trials)} trial(s) -> {out_dir}")
+    return trials
+
 
 def transform_labels(labels):
         """
@@ -1117,38 +1382,3 @@ def plot_GRF():
     axes.plot(grf_df['time'], total_fx, color='k', linewidth=1.4, linestyle='-.', label='Sum Fx')
     axes.plot(grf_df['time'], total_fy, color='k', linewidth=1.8, linestyle='--', label='Sum Fy')
     axes.plot(grf_df['time'], total_fz, color='k', linewidth=2.0, linestyle='-', label='Sum Fz')
-    axes.set_xlabel('Time (s)')
-    axes.set_ylabel('Force (N)')
-    axes.set_title('Ground Reaction Forces by Plate (Fx, Fy, and Fz)')
-    axes.grid(True, alpha=0.3)
-    axes.legend(ncol=3, fontsize=8)
-
-
-    plt.show()
-
-
-
-if __name__ == "__main__":
-
-    # c3d_filepath = input("Enter the path to the .c3d file: ").strip().strip('"')
-
-    # grf_from_c3d(c3d_filepath)
-    plot_GRF()
-
-    exit()
-    
-    # Check if file exists
-    if not os.path.exists(c3d_filepath):
-        print(f"Error: File not found at {c3d_filepath}")
-        exit(1)    
-    
-    # Check if it's a .c3d file
-    if not c3d_filepath.lower().endswith('.c3d'):
-        print(f"Error: File must be a .c3d file, got {c3d_filepath}")
-        exit(1)
-    
-    print(f"Processing {c3d_filepath}")
-    
-    main(c3d_filepath, create_folder=False, emg_string_list='TIBANTR_EMG_1_v	SOLEUSL_EMG_10_v	GASLATL_EMG_11_v	VLL_EMG_12_v	RECFL_EMG_13_v	GMEDL_EMG_14_v	GMAXL_EMG_15_v	SEMITENL_EMG_16_v	SOLEUSR_EMG_2_v	GASLATR_EMG_3_v	VLR_EMG_4_v	RECFR_EMG_5_v	GMEDR_EMG_6_v	GMAXR_EMG_7_v	SEMITENR_EMG_8_v	TIBANTL_EMG_9_v'.split())
-
-# END
