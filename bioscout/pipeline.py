@@ -272,6 +272,7 @@ def reset_simulations(project_dir=None, backup=True, dry_run=False,
 
 def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                 replace=False, do_so=True, do_ceinms=True, export=False,
+                do_exbiomec=False, export_src=None,
                 extra_trials=(), reset=False, verbose=True):
     """Run the FULL analysis pipeline for one (or every) subject.
 
@@ -390,6 +391,11 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
             # batch pipeline's export phase. Do this for ALL selected trials first
             # so the session-level EMG normalisation below sees fresh envelopes.
             if export:
+                if export_src:                       # distribute loose c3d first
+                    try:
+                        sess.ingest_c3d(source=export_src)
+                    except Exception as e:
+                        log(f"  [export ingest ERROR] {subj.name}: {e}")
                 for tn in trials_run:
                     try:
                         t = sess.trial(tn)
@@ -407,6 +413,18 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                         log(f"  [export ok] {subj.name}/{tn}")
                     except Exception as e:
                         log(f"  [export ERROR] {subj.name}/{tn}: {e}")
+
+            if do_exbiomec:                          # external biomechanics only
+                for tn in trials_run:
+                    try:
+                        t = sess.trial(tn)
+                        t.run_ik(replace=replace)
+                        t.run_id(replace=replace)
+                        t.run_ma(replace=replace)
+                        res.setdefault("exbiomec", []).append(tn)
+                        log(f"  [exbiomec ok] {subj.name}/{tn}")
+                    except Exception as e:
+                        log(f"  [exbiomec ERROR] {subj.name}/{tn}: {e}")
 
             if do_so:
                 for tn in trials_run:
@@ -890,7 +908,7 @@ def run_sessions(project_dir=None, replace=None, models=None, trials=None,
     defaults to the matching ``BatchSettings`` value."""
     import bioscout
     import shutil
-    from bioscout.utils.session_config import discover_session_specs
+    from bioscout.utils.session import discover_session_specs
 
     # Absolute: Analyse chdir()s into the trial folder, so model/setup/source
     # paths must be absolute or they resolve relative to the wrong directory.

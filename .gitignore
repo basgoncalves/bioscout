@@ -62,3 +62,6 @@ __wtest.tmp
 __probe_bw.py
 _*.txt
 *.bak_pre_fix
+
+# local pre-refactor backups (do not commit)
+bioscout_bak_*/

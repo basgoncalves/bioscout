@@ -295,15 +295,33 @@ class Subject:
             names = sorted(d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d)))
         else:
             names = []
-        return [Session(self, n) for n in names]
+        from bioscout.utils.session import Iteration as _S, find_session_dir as _fsd
+        _it = self._iteration()
+        out = []
+        for _n in names:
+            try:
+                out.append(_S(_fsd(_n), _it))
+            except Exception as _e:
+                print(f'[Subject] {self.name}: session {_n} -> {_e}')
+        return out
 
     def get_session(self, name):
         """Session by name."""
-        return Session(self, name)
+        from bioscout.utils.session import Iteration as _S, find_session_dir as _fsd
+        return _S(_fsd(name), self._iteration())
 
     def trials(self, session=None, force_type="SO"):
         """List of Trial objects for one session (default: self.session)."""
-        return Session(self, session or self.session).trials
+        return self.get_session(session or self.session).trials
+
+    def _iteration(self):
+        """On-disk model-iteration folder for this subject: settings.SUBJECT_GROUP
+        (name -> iteration), else self.group / lowercased name."""
+        from bioscout import utils as _u
+        s = getattr(_u, "settings", None)
+        sg = (getattr(s, "SUBJECT_GROUP", None)
+              or getattr(getattr(s, "BatchSettings", None), "SUBJECT_GROUP", None) or {})
+        return sg.get(self.name) or getattr(self, "group", None) or str(self.name).lower()
 
     def make_trial(self, trial_path, force_type="SO", configure=True):
         """Return a Trial (an Analyse) for an absolute trial path, with this
@@ -537,14 +555,18 @@ def load_project_subjects(settings=None, force=False):
 
     Legacy settings that still declare ``ALL_SUBJECTS = [Subject(...)]`` (or set
     ``SUBJECTS`` themselves) keep working: those objects are used as-is. Idempotent."""
-    if settings is None:
-        from bioscout import utils as _u
-        settings = getattr(_u, "settings", None)
-    BS = getattr(settings, "BatchSettings", None)
-    if BS is None:
-        return None
-    if getattr(BS, "_subjects_loaded", False) and not force:
-        return getattr(BS, "SUBJECTS", [])
+
+    import bioscout.utils as _u
+    BS = _u.settings.BatchSettings
+    
+    # if settings is None:
+    #     from bioscout import utils as _u
+    #     settings = getattr(_u, "settings", None)
+    #  = getattr(settings, "BatchSettings", None)
+    # if BS is None:
+    #     return None
+    # if getattr(BS, "_subjects_loaded", False) and not force:
+    #     return getattr(BS, "SUBJECTS", [])
 
     # 1. gather the raw subject list: prefer new `subjects` (dicts), else legacy
     #    `ALL_SUBJECTS` (already Subject objects).
@@ -608,337 +630,7 @@ def _trial_class():
     return Analyse
 
 
-class Session:
-    """One recording session of a Subject.
-
-    Two roles:
-
-    * **Navigation** — ``.trials``, ``.trial(name)``, ``.path``.
-    * **Session-level analysis** — operations that span the whole session
-      rather than a single trial. EMG normalisation builds one session-wide
-      envelope and applies it to every trial; CEINMS calibration produces one
-      calibrated model per subject/session from the calibration trials. Both
-      are already session-scoped inside ``Analyse``; this class drives them at
-      the right granularity. Add future session-scoped steps here (e.g. MVC
-      processing, per-session quality checks).
-
-    Example::
-
-        sess = proj.subject("Athlete_03_GPK").get_session("25_03_31")
-        sess.run_emg_normalise(replace=True)     # all trials, one envelope
-        sess.run_ceinms_calibration(replace=True)  # one calibrated model
-        # or both in order:
-        sess.prepare_ceinms(replace=True)
-    """
-
-    def __init__(self, subject, name):
-        self.subject = subject     # Subject
-        self.name = name           # session folder name, e.g. "25_03_31"
-
-    # -- navigation ---------------------------------------------------------
-    @property
-    def path(self):
-        return os.path.join(_sim_dir(), self.subject.name, self.name or "")
-
-    def _trial_names(self):
-        p = self.path
-        if not os.path.isdir(p):
-            return []
-        # A trial is a folder that holds a C3D (inputs/c3dfile.c3d, a root
-        # c3dfile.c3d, or any *.c3d). This excludes the session-level CEINMS
-        # folders ("ceinms_calibration", "ceinms_calibration_backup_*",
-        # "calibrationOutput*") and any other non-trial dirs, so they are never
-        # EMG-normalised / calibrated / given a trial_settings.xml.
-        out = []
-        for d in sorted(os.listdir(p)):
-            dp = os.path.join(p, d)
-            if not os.path.isdir(dp):
-                continue
-            if d.startswith(("_", ".", "calibrationOutput", "ceinms_calibration")):
-                continue
-            try:
-                has_c3d = (os.path.exists(os.path.join(dp, "inputs", "c3dfile.c3d"))
-                           or os.path.exists(os.path.join(dp, "c3dfile.c3d"))
-                           or any(f.lower().endswith(".c3d") for f in os.listdir(dp)))
-            except Exception:
-                has_c3d = False
-            if has_c3d:
-                out.append(d)
-        return out
-
-    @property
-    def trials(self):
-        """List of Trial objects (one per trial folder in this session)."""
-        return [self.subject.make_trial(os.path.join(self.path, d))
-                for d in self._trial_names()]
-
-    def trial(self, name, force_type="SO"):
-        """Trial by name (e.g. 'Squat_BW_01')."""
-        return self.subject.make_trial(os.path.join(self.path, name), force_type=force_type)
-
-    # -- session-level analysis --------------------------------------------
-    @property
-    def calibration_trials(self):
-        """CEINMS calibration trial names (from
-        ``settings.CEINMSSettings.calibration_trial_names``) that actually
-        exist in this session."""
-        from bioscout import utils
-        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
-        names = getattr(cs, "calibration_trial_names", None) or []
-        here = set(self._trial_names())
-        return [n for n in names if n in here]
-
-    def _ref_trial(self, force_type="CEINMS", prefer=None):
-        """A single Trial used to drive a session-level op. Prefers ``prefer``,
-        then a configured calibration trial present in the session, else the
-        first trial."""
-        names = self._trial_names()
-        if not names:
-            return None
-        if prefer and prefer in names:
-            pick = prefer
-        else:
-            calib = self.calibration_trials
-            pick = calib[0] if calib else names[0]
-        return self.trial(pick, force_type=force_type)
-
-    def export_c3d(self, replace=True, event_method='auto', normalise_emg=True):
-        """Export EVERY trial in the session from c3d, then normalise EMG.
-
-        EMG normalisation is SESSION-WIDE — each channel is scaled by its max
-        across all trials (MVC-style, see run_emg_normalise) — so every trial's
-        raw emg.mot must exist first. This runs both steps in the right order:
-
-          1. per trial: export markers / GRF (+GRF.xml) / EMG, auto-detect gait
-             events (``event_method``: 'auto' = GRF then kinematics) and set the
-             Start/End analysis window;
-          2. once all trials are exported: the session EMG normalisation.
-
-        Assumes each trial folder already holds inputs/c3dfile.c3d (ingest the raw
-        c3d files into <trial>/inputs/ first — the GUI's batch c3d export or a
-        short copy loop does this). Returns the list of trials exported.
-        """
-        trials = self.trials
-        exported = []
-        for t in trials:
-            name = os.path.basename(t.path)
-            try:
-                t.export_c3d(event_method=event_method)   # writes trial_settings.xml only if a c3d exists
-                exported.append(t)
-            except Exception as e:
-                print(f"[Session] export failed for {name}: {e}")
-        print(f"[Session] {self.subject.name}/{self.name}: exported {len(exported)}/"
-              f"{len(trials)} trials")
-        if normalise_emg and exported:
-            self.run_emg_normalise(replace=replace)
-        return exported
-
-    def ingest_c3d(self, source=None, dry_run=False):
-        """Distribute loose .c3d files into per-trial folders.
-
-        Handles the common "one session folder with many c3d files" case: each
-        ``<name>.c3d`` becomes a trial folder ``<session>/<name>/inputs/c3dfile.c3d``.
-        ``source`` is the folder holding the raw c3d files (default: the session
-        folder itself). Existing trial c3ds are left untouched. Follow with
-        :meth:`export_c3d` to export + session-normalise every trial.
-
-        Returns the list of trial names ingested.
-        """
-        import glob
-        import shutil
-        src = source or self.path
-        made = []
-        for c in sorted(glob.glob(os.path.join(src, "*.c3d"))):
-            stem = os.path.splitext(os.path.basename(c))[0]
-            dst = os.path.join(self.path, stem, "inputs", "c3dfile.c3d")
-            if os.path.exists(dst):
-                continue
-            made.append(stem)
-            if dry_run:
-                continue
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(c, dst)
-        print(f"[Session] {self.subject.name}/{self.name}: "
-              f"{'would ingest' if dry_run else 'ingested'} {len(made)} c3d -> trial folders")
-        return made
-
-    def run_emg_normalise(self, replace=None):
-        """Build CEINMS excitations for the whole session.
-
-        For each trial, compute the rectified low-pass EMG envelope from the RAW
-        emg.mot, take the per-channel max ACROSS the session (MVC-style), then
-        write each trial's ``emg_ceinms.mot`` = envelope / session-max clipped to
-        [0, 1] — exactly the excitation range CEINMS expects. This replaces the
-        old per-trial divide-by-own-max on the raw bipolar signal (which left
-        excitations negative / >1 and cascaded ``*_normalised_normalised`` files).
-        Returns the list of trials that produced valid excitations.
-        """
-        envelopes = {}
-        for t in self.trials:
-            if replace is not None:
-                t.update_trial_attribute("replace", replace)
-            try:
-                env = t._emg_envelope()
-            except Exception as e:
-                print(f"[Session] {self.subject.name}/{self.name}: EMG envelope "
-                      f"failed for {os.path.basename(t.path)}: {e}")
-                env = None
-            if env is not None:
-                envelopes[t] = env
-
-        if not envelopes:
-            print(f"[Session] {self.subject.name}/{self.name}: no EMG to normalise.")
-            return []
-
-        # per-channel session max envelope (MVC reference)
-        chans = set()
-        for env in envelopes.values():
-            chans |= {c for c in env.columns if c != 'time'}
-        session_max = {}
-        session_max_trial = {}   # {channel: trial that provided the max (MVC ref)}
-        for c in chans:
-            best_m, best_t = 0.0, None
-            for t, env in envelopes.items():
-                if c in env:
-                    m = float(env[c].max())
-                    if m > best_m:
-                        best_m, best_t = m, os.path.basename(t.path)
-            session_max[c] = best_m if best_m > 1e-9 else 1.0
-            session_max_trial[c] = best_t
-
-        done = []
-        # Sorted, canonical channel order (EMG01..EMG16). `chans` is a SET, so
-        # without this the normalised .mot columns come out in arbitrary order;
-        # CEINMS pairs excitationGenerator inputSignals to the .mot columns
-        # POSITIONALLY, so a scrambled .mot aborts execution with
-        # "Muscle names are different between excitation generator and input file".
-        chans_sorted = sorted(chans)
-        for t, env in envelopes.items():
-            out = env[['time']].copy()
-            for c in chans_sorted:
-                if c in env:
-                    out[c] = (env[c] / session_max[c]).clip(0.0, 1.0)
-            try:
-                # Single canonical normalised-EMG path: inputs/emg_filtered_normalised.mot.
-                # ceinms_excitations points there (no separate emg_ceinms.mot).
-                _exc_rel = t.emg_filtered_normalised
-                _exc_abs = os.path.join(t.path, _exc_rel)
-                os.makedirs(os.path.dirname(_exc_abs), exist_ok=True)
-                _u.emg_normalise.write_sto_file(out, _exc_abs)
-                t.update_trial_attribute('ceinms_excitations', _exc_rel)
-                done.append(t)
-            except Exception as e:
-                print(f"[Session] {self.subject.name}/{self.name}: EMG normalise "
-                      f"failed for {os.path.basename(t.path)}: {e}")
-        print(f"[Session] {self.subject.name}/{self.name}: wrote inputs/emg_filtered_normalised.mot "
-              f"for {len(done)} trials (session-max normalised, [0,1]).")
-        # QC figure per trial: raw EMG vs filtered+normalised -> inputs/emg_processing.png
-        # (per-channel red note = the trial that set the session max / MVC ref).
-        for t in done:
-            try:
-                t.plot_emg_processing(norm_source=session_max_trial)
-            except Exception as e:
-                print(f"[Session] EMG figure failed for {os.path.basename(t.path)}: {e}")
-        return done
-
-    def run_ceinms_calibration(self, replace=None, prefer_trial=None):
-        """Calibrate CEINMS once for THIS session — a SESSION-level operation.
-
-        Calibration belongs to the session, not to any single trial. The session
-        resolves its calibration trials (``CEINMSSettings.calibration_trial_names``,
-        matched to real folders) and drives the calibration off the FIRST of them
-        — always a real, dynamic calibration trial, never the static trial. The
-        per-trial CEINMS file builders on ``Analyse`` (model / excitation
-        generator / input data / cfg / setup) are used only as helpers; the
-        collection step then calibrates on ALL configured calibration trials.
-        Produces the calibrated model every trial's CEINMS execution reuses.
-        """
-        names = self._resolve_calibration_trials()
-        here = self._trial_names()
-        if prefer_trial and prefer_trial in here:
-            names = [prefer_trial] + [n for n in names if n != prefer_trial]
-        names = [n for n in names if n in here]
-        if not names:
-            print(f"[Session] {self.subject.name}/{self.name}: no calibration trials to calibrate.")
-            return None
-        # Drive off the first calibration trial (dynamic) — NOT a static trial.
-        host = self.trial(names[0], force_type="CEINMS")
-        if host is None:
-            print(f"[Session] {self.subject.name}/{self.name}: could not load calibration trial {names[0]!r}.")
-            return None
-        if replace is not None:
-            host.update_trial_attribute("replace", replace)
-        print(f"[Session] {self.subject.name}/{self.name}: CEINMS calibration "
-              f"(driver={names[0]}, trials={names})")
-        return host.run_ceinms_calibration()
-
-    def prepare_ceinms(self, replace=None):
-        """Convenience: session-level EMG normalisation, then CEINMS
-        calibration (the two steps a session needs before per-trial CEINMS
-        execution)."""
-        self.normalise_emg(replace=replace)
-        return self.calibrate(replace=replace)
-
-    # ---- clean public verbs ----------------------------------------------
-    def normalise_emg(self, replace=None):
-        """Session-wide EMG normalisation (alias of run_emg_normalise)."""
-        return self.run_emg_normalise(replace=replace)
-
-    def _resolve_calibration_trials(self):
-        """Which trial folders to calibrate on for THIS session.
-
-        Reads ``settings.CEINMSSettings.calibration_trial_names`` and matches
-        them to this session's actual trial folders (case-insensitive). If none
-        match (e.g. a stale or mistyped name in settings), falls back to the
-        session's squat trials, then to all trials, so calibration still runs.
-        """
-        here = self._trial_names()
-        lower = {t.lower(): t for t in here}
-        from bioscout import utils
-        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
-        wanted = list(getattr(cs, "calibration_trial_names", None) or [])
-        matched = [lower[w.lower()] for w in wanted if w.lower() in lower]
-        if matched:
-            return matched
-        if wanted:
-            print(f"[Session] {self.subject.name}/{self.name}: calibration trials "
-                  f"{wanted} not found in this session; falling back.")
-        squats = [t for t in here if "squat" in t.lower()]
-        return squats or here
-
-    def calibrate(self, replace=None, calibration_trials=None):
-        """Calibrate CEINMS for THIS session.
-
-        Uses the calibration trials named in ``settings.CEINMSSettings``
-        (matched to this session's folders via :meth:`_resolve_calibration_trials`),
-        or the explicit ``calibration_trials`` you pass. The resolved names are
-        fed to the underlying session-scoped calibration so it collects the
-        right input trials even if the settings value is stale.
-
-        Example::
-
-            proj.subjects[0].sessions[0].calibrate(replace=True)
-        """
-        names = list(calibration_trials) if calibration_trials else self._resolve_calibration_trials()
-        if not names:
-            print(f"[Session] {self.subject.name}/{self.name}: no calibration trials found.")
-            return None
-        from bioscout import utils
-        cs = getattr(getattr(utils, "settings", None), "CEINMSSettings", None)
-        old = getattr(cs, "calibration_trial_names", None) if cs is not None else None
-        try:
-            if cs is not None:
-                cs.calibration_trial_names = names   # point calibration at real folders
-            print(f"[Session] {self.subject.name}/{self.name}: calibrating CEINMS on {names}")
-            return self.run_ceinms_calibration(replace=replace, prefer_trial=names[0])
-        finally:
-            if cs is not None:
-                cs.calibration_trial_names = old
-
-    def __repr__(self):
-        n = len(self._trial_names())
-        return f"<Session {self.subject.name}/{self.name} — {n} trials>"
-
+# NOTE: the Session class now lives in bioscout.utils.session
 
 _DEFAULT_PALETTE = ["green", "blue", "red", "purple", "orange",
                     "brown", "teal", "magenta", "olive", "cyan"]
@@ -1341,6 +1033,13 @@ def __getattr__(name):
     if name in _REEXPORT:
         from bioscout import utils
         return getattr(utils, name)
+    if name in ("Session", "Iteration", "open_session"):
+        # Session (session-level) + Iteration (runnable) live in
+        # bioscout.utils.session. Re-export lazily so legacy
+        # `from bioscout.utils.analysis import Session` keeps working, without a
+        # module-load import cycle (session imports Analyse).
+        from bioscout.utils import session as _s
+        return getattr(_s, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -1636,6 +1335,16 @@ class Analyse:
 
     def _to_xml(self):
         '''Print all settings for the trial to an xml in trial.path'''
+        # trial_settings.xml is now an optional scratch cache — session.yaml is
+        # the source of truth (Session injects config via _overrides). Skip the
+        # write entirely when settings.BatchSettings.write_trial_settings_xml is
+        # False, so trial folders stay clean of per-trial XML.
+        try:
+            _bs = getattr(getattr(_u, 'settings', None), 'BatchSettings', None)
+            if getattr(_bs, 'write_trial_settings_xml', True) is False:
+                return
+        except Exception:
+            pass
         os.chdir(self.path)
         # The analysis window is persisted ONLY as start_time / end_time (scalars),
         # kept in sync with the working self.time_range; the redundant time_range
@@ -1662,7 +1371,8 @@ class Analyse:
                            # dir derived from jra_forces_ceinms — not read from here
             if attr in ('parentdir', '_parentdir'):
                 continue   # derived from the trial path; rebuilt on load
-            if attr in ('_log_tag', '_session_setup_dir', 'experimental_dir'):
+            if attr in ('_log_tag', '_session_setup_dir', 'experimental_dir',
+                        '_overrides'):
                 continue   # transient runtime hooks (log prefix / session I/O redirects);
                            # set per-run by the driver, never persisted — otherwise a stale
                            # _log_tag reloads and mis-labels every later log line
@@ -1827,6 +1537,22 @@ class Analyse:
     
     def load_settings(self, settingsXML):
         '''Load all settings for the trial from an xml in trial.path'''
+        # No trial_settings.xml? That's fine — session.yaml (+ the Session-injected
+        # _overrides) is the source of truth. Rebuild the code-driven folder layout,
+        # resolve the model, apply the overrides, and return (no XML required).
+        if not settingsXML or not os.path.exists(settingsXML):
+            self.settingsXML = settingsXML
+            self._apply_inputs_layout()
+            try:
+                self._resolve_model_dir()
+            except Exception:
+                pass
+            _ov = getattr(self, '_overrides', None)
+            if isinstance(_ov, dict):
+                for _k, _v in _ov.items():
+                    setattr(self, _k, _v)
+            return
+
         tree = _u.ET.parse(settingsXML)
         root = tree.getroot()
         
@@ -1910,6 +1636,16 @@ class Analyse:
 
         self._apply_inputs_layout()
         self._resolve_model_dir()
+
+        # Session-injected config (session.yaml is the single source of truth)
+        # is applied LAST so it wins over anything loaded from trial_settings.xml
+        # — the two can therefore never desync. Set by Session.trial(); values
+        # are the model-independent per-trial fields (time_range, side, body_mass,
+        # alpha/beta/gamma, trial_type). Migration step towards removing the XML.
+        _ov = getattr(self, '_overrides', None)
+        if isinstance(_ov, dict):
+            for _k, _v in _ov.items():
+                setattr(self, _k, _v)
 
         print(f"Settings loaded from: {os.path.abspath(self.settingsXML)}")
 
@@ -2067,6 +1803,18 @@ class Analyse:
 
     def get_time_range(self):
         os.chdir(self.path)
+
+        # session.yaml is authoritative: if the Session injected a time_range via
+        # _overrides, return it so the auto-derived event/marker span never wins
+        # (survives every load_settings reload).
+        _ov = getattr(self, '_overrides', None)
+        _win = _ov.get('time_range') if isinstance(_ov, dict) else None
+        if isinstance(_win, (list, tuple)) and len(_win) == 2:
+            try:
+                self.time_range = [float(_win[0]), float(_win[1])]
+                return self.time_range
+            except Exception:
+                pass
 
         # Use the trial's events (the <events> subtree in trial_settings.xml).
         # For gait-like trials this uses the schema window (first->last foot
@@ -3159,7 +2907,8 @@ class Analyse:
                     f"Actuators template not found: {template_actuators_path}")
 
         if os.path.exists(os.path.join(self.path, self.so_forces)) and not self.replace:
-            self._log(f'Static Optimization output already exists: {self.so_forces}')
+            self._log(f'Static Optimization output already exists: '
+                      f'{os.path.abspath(os.path.join(self.path, self.so_forces))}', terminal=True)
             return
 
         try:
@@ -3175,9 +2924,16 @@ class Analyse:
                     actuators=actuators_abs,
                     resultsDir=so_results_dir)
             
-            self._log(f'[Success] Static Optimization completed. Results are saved in:')
-            self._log(f' - Forces: {os.path.abspath(self.so_forces)}')
-            self._log(f' - Activations: {os.path.abspath(self.so_activations)}')
+            def _abs(rel):
+                try:
+                    return os.path.abspath(os.path.join(self.path, rel)) if rel else "(n/a)"
+                except Exception:
+                    return str(rel)
+            self._log(
+                "[Success] Static Optimization completed. Results saved in:\n"
+                f"   dir        : {os.path.abspath(so_results_dir)}\n"
+                f"   forces     : {_abs(self.so_forces)}\n"
+                f"   activations: {_abs(self.so_activations)}", terminal=True)
         except Exception as e:
             self._log(f'[Error] during Static Optimization: {e}')
             raise
@@ -3185,7 +2941,7 @@ class Analyse:
         # Plot SO results
         try:
             self.plot_so()
-            self._log(f'[Success] SO results plotted and saved in {self.path}')
+            self._log(f'   plots      : {os.path.abspath(so_results_dir)}', terminal=True)
         except Exception as e:
             self._log(f'[Error] during SO plotting: {e}')
         try:
@@ -3270,6 +3026,49 @@ class Analyse:
         except Exception as e:
             self._log(f'[Warning] SO JRA figure failed: {e}')
 
+        # Concise SO RESULT line for the run log (peak joint contact forces) — this
+        # is bioscout-logged, so it survives opensim_log_level='off' when OpenSim's
+        # own SO output is muted.
+        try:
+            self._log(self.so_result_summary(), terminal=True)
+        except Exception as e:
+            self._log(f'[Warning] SO summary failed: {e}')
+
+    def so_result_summary(self):
+        """One-line SO result summary for the log: peak |resultant| joint reaction
+        (contact) force at hip / knee / ankle, in body-weights when body_mass is
+        known (else N). Best-effort, reads the SO JRA output on disk."""
+        import numpy as _np, re as _re
+        jpath = self.jra if os.path.isabs(self.jra) else os.path.join(self.path, self.jra)
+        d = _u.load_any_data_file(jpath)
+        if d is None:
+            return "[SO result] JRA not found — no summary"
+        bm = None
+        try:
+            bm = float(getattr(self, "body_mass", None))
+        except Exception:
+            bm = None
+        bw = bm * 9.81 if bm else None
+        cols = [c for c in d.columns if str(c).lower() != "time"]
+        # group force columns (…fx/…fy/…fz) by their joint-reaction prefix
+        groups = {}
+        for c in cols:
+            m = _re.search(r"(.*?)_?f([xyz])$", str(c).lower())
+            if m:
+                groups.setdefault(m.group(1), {})[m.group(2)] = c
+        parts = []
+        for jname in ("hip", "knee", "ankle"):
+            keys = [k for k in groups if jname in k]
+            if not keys:
+                continue
+            g = groups[sorted(keys, key=len)[0]]        # shortest/most-direct match
+            comps = [d[g[a]].astype(float).to_numpy() for a in ("x", "y", "z") if a in g]
+            if len(comps) < 2:
+                continue
+            peak = float(_np.nanmax(_np.sqrt(sum(v ** 2 for v in comps))))
+            parts.append(f"{jname} {peak/bw:.1f} BW" if bw else f"{jname} {peak:.0f} N")
+        return "[SO result] peak JCF: " + (", ".join(parts) if parts else "n/a")
+
         # End-of-analysis validation for this trial (muscle lengths + literature).
         # Opt-out via settings.BatchSettings.enable_trial_validation = False.
         if getattr(_u.settings.BatchSettings, 'enable_trial_validation', True):
@@ -3292,7 +3091,16 @@ class Analyse:
         if os.path.exists(self.jra_ceinms) and not self.replace:
             self._log(f'JRA CEINMS output already exists: {self.jra_ceinms} and replace is set to False.')
             return
-        
+
+        # ALWAYS ensure the CEINMS forces file carries the SO reserve/residual/GRF
+        # columns before JRA — the JointReaction needs the FULL actuator set to
+        # balance, else the contact force blows up ~100x. Idempotent (only adds
+        # columns that are missing), so it's safe even if execution already did it.
+        try:
+            self.add_so_columns_to_ceinms_results()
+        except Exception as e:
+            self._log(f'[Warning] could not add SO residual columns before CEINMS JRA: {e}', terminal=True)
+
         try:
             _u.openSim.run_jra(osim_modelPath=self.model_dir,
                      ik_output=self.ik,
@@ -3347,6 +3155,25 @@ class Analyse:
                         for sd, _, _ in _sides}
         except Exception as e:
             self._log(f'[Warning] JRA_COLUMNS unavailable ({e}); skipping JRA comparison.'); return
+
+        # Self-heal: if a joint's configured columns aren't in the JRA output
+        # (e.g. a model names its knee reaction differently than JRA_COLUMNS
+        # expects — walker_knee vs Lerner_knee), find the actual reaction columns
+        # by joint keyword + side + f{x,y,z} from the data itself.
+        _data_cols = set(so.columns if so is not None else []) | set(ce.columns if ce is not None else [])
+        def _find_cols(joint, sd):
+            hit = [c for c in _data_cols
+                   if joint in c.lower() and c.lower().endswith(("fx", "fy", "fz"))
+                   and f"_{sd}_" in c.lower()]
+            hit.sort(key=lambda c: {"fx": 0, "fy": 1, "fz": 2}.get(c.lower()[-2:], 9))
+            return hit[:3]
+        for sd, _, _ in _sides:
+            for j in list(jcols_by[sd].keys()):
+                if not all(c in _data_cols for c in jcols_by[sd][j]):
+                    alt = _find_cols(j, sd)
+                    if len(alt) == 3:
+                        jcols_by[sd][j] = alt
+
         _ref = jcols_by[_sides[0][0]]
         joints = [j for j in _ref
                   if any((so is not None and c in so.columns) or
@@ -3411,7 +3238,9 @@ class Analyse:
         ncols = 4
         fig, axg = plt.subplots(nrows, ncols, figsize=(ncols * 5.4, nrows * 3.8),
                                 squeeze=False)
-        fig.suptitle(title, fontsize=18)
+        _legtxt = ("both legs (R solid, L dashed)" if len(_sides) > 1
+                   else ("left leg" if _sides[0][0] == "l" else "right leg"))
+        fig.suptitle(f"{title}  —  {_legtxt}", fontsize=18)
         for r in range(nrows):
             for c in range(ncols):
                 axg[r][c].axis('off')
@@ -3666,15 +3495,29 @@ class Analyse:
         forces_type: 'so' for static optimization forces, 'ceinms' for CEINMS muscle forces (default is 'so')
         '''
 
-        if forces_type == 'so':
-            muscle_forces = _u.load_any_data_file(self.so_forces)
-        elif forces_type == 'ceinms':
-            muscle_forces = _u.load_any_data_file(self.jra_forces_ceinms)
+        # so_forces / jra_forces_ceinms are stored TRIAL-ROOT-relative, so anchor
+        # them to self.path — reading the bare relative path fails (-> None ->
+        # len(None)) whenever cwd isn't the trial root (e.g. right after CEINMS
+        # execution, which chdirs into the ceinms/ output dir).
+        _forces_rel = self.so_forces if forces_type == 'so' else self.jra_forces_ceinms
+        _forces_abs = _forces_rel if os.path.isabs(_forces_rel) else os.path.join(self.path, _forces_rel)
+        muscle_forces = _u.load_any_data_file(_forces_abs)
+        if muscle_forces is None:
+            raise FileNotFoundError(
+                f"[calculate_muscle_moments] {forces_type} muscle forces not readable: "
+                f"{_forces_abs} (CEINMS/SO produced no output, or path is wrong).")
 
         dofNames = _u.settings.BatchSettings.dof_list
-        
+
         for dof_name in dofNames:
-            moment_arms = _u.load_any_data_file(os.path.join(self.path,self.ma, f"_MuscleAnalysis_MomentArm_{dof_name}.sto"))
+            _ma_path = os.path.join(self.path, self.ma, f"_MuscleAnalysis_MomentArm_{dof_name}.sto")
+            # A DOF the model doesn't have (e.g. knee_adduction on a 1-DOF-knee
+            # model) produces no moment-arm file — skip it instead of crashing.
+            if not os.path.exists(_ma_path):
+                continue
+            moment_arms = _u.load_any_data_file(_ma_path)
+            if moment_arms is None:
+                continue
 
             # Multiply force x moment arm for the REAL muscles only — i.e. force
             # columns that also exist in the moment-arm file. Reserve actuators,
@@ -5317,7 +5160,7 @@ class Analyse:
 
             self._log(f'EMG timestamps: n={n}, dt={actual_dt:.6f}s '
                       f'(configured {expected_dt:.6f}s at {emg_sampling_freq} Hz), '
-                      f'time {tvals[0]:.4f}..{tvals[-1]:.4f}s', terminal=True)
+                      f'time {tvals[0]:.4f}..{tvals[-1]:.4f}s', terminal=False)
 
             # Only reconstruct timestamps that are ACTUALLY broken — i.e. not a sane,
             # strictly increasing series (dt<=0, non-finite, or duplicated times, the
@@ -5371,7 +5214,7 @@ class Analyse:
 
         self._log(f"CEINMS excitations: selected '{excitations}' "
                   f"(exists={os.path.exists(os.path.join(self.path, excitations))}), "
-                  f"time_range={self.time_range}", terminal=True)
+                  f"time_range={self.time_range}", terminal=False)
 
         # Fix EMG timestamps if the C3D export produced wrong time values
         excitations = self._fix_emg_timestamps(excitations)
@@ -5408,7 +5251,7 @@ class Analyse:
         else:
             input_time_range = self.time_range
         self._log(f"[CEINMS] input startStopTime capped to {input_time_range} "
-                  f"(intersection of excitations/length/ik/id)", terminal=True)
+                  f"(intersection of excitations/length/ik/id)", terminal=False)
 
         try:
             _abs = lambda rel: os.path.join(self.path, rel)  # trial-relative -> absolute
@@ -5419,7 +5262,8 @@ class Analyse:
                                      externalLoadsFile=_abs(self.setup_grf),
                                      startStopTime=input_time_range,
                                      output_path=_abs(self.ceinms_input_data))
-            self._log(f'[Success] CEINMS input data created: {os.path.abspath(self.ceinms_input_data)}', terminal=True)
+            self._log(f'    [created inputs]  {os.path.abspath(self.ceinms_input_data)}, '
+                      f'time_range [{input_time_range[0]:.3f}, {input_time_range[1]:.3f}]', terminal=True)
         except Exception as e:
             self._log(f'[Error] Failed to create CEINMS input data: {e}', terminal=True)
     
@@ -5446,7 +5290,7 @@ class Analyse:
         import traceback as _tb
         os.chdir(self.path)
         _abs_eg = os.path.abspath(self.ceinms_excitation_generator)
-        self._log(f'CEINMS excitation generator path: {_abs_eg} (exists={os.path.exists(_abs_eg)})', terminal=True)
+        self._log(f'CEINMS excitation generator path: {_abs_eg} (exists={os.path.exists(_abs_eg)})', terminal=False)
         if os.path.exists(_abs_eg) and not self.replace:
             self._log(f'CEINMS excitation generator already exists: {_abs_eg}', terminal=True)
             return
@@ -5671,13 +5515,15 @@ class Analyse:
         # "[CEINMS-cal <session>]" (calibration), distinct from execution.
         self._log_tag = f"CEINMS-cal {os.path.basename(self.parentdir)}"
 
-        # -- Prerequisites --
-        self._log("CEINMS calibration: building prerequisites...")
+        # -- Prerequisites (steps 1-4 of the CEINMS pipeline) --
+        self._log("[CEINMS 1/6] create model — uncalibrated subject XML from the OpenSim model", terminal=True)
         self.create_ceinms_model()
         if not os.path.exists(self.ceinms_uncalibrated_model):
             self._log("[Error] CEINMS calibration aborted: uncalibrated model could not be created.", terminal=True)
             return
+        self._log("[CEINMS 2/6] create excitation generator — EMG -> muscle mapping", terminal=True)
         self.create_excitation_generator()
+        self._log("[CEINMS 3/6] create inputData XML for all calibration trials in the session", terminal=True)
         self.create_ceinms_input_data()
 
         # Also build CEINMS input data for every OTHER configured calibration
@@ -5733,12 +5579,12 @@ class Analyse:
             self._log("[Warning] No CEINMS input data found — calibrating with current trial only.")
             calib_trials = [self.trial]
 
-        self._log(f"CEINMS calibration trials: {calib_trials}")
+        self._log(f"[CEINMS 4/6] create calibration setup + cfg (trials={calib_trials})", terminal=True)
         self.create_ceinms_calibration_cfg(calibration_trial_names=calib_trials)
         self.create_ceinms_calibration_setup()
 
         _out_txt = os.path.join(_cal_dir, "output", "out.txt")
-        self._log(f"CEINMS calibration starting — solver output -> {_out_txt}", terminal=True)
+        self._log(f"[CEINMS 5/6] run calibration (session level) — solver output -> {_out_txt}", terminal=True)
         self._log(f"   watch live:  tail -f \"{_out_txt}\"", terminal=True)
 
         # -- Run calibration --
@@ -5811,9 +5657,33 @@ class Analyse:
     def run_ceinms_exe(self):
         os.chdir(self.path)
         self.load_settings(settingsXML=self.settingsXML)
+        # Tag execution logs distinctly from calibration ("CEINMS-exe <trial>"
+        # vs "CEINMS-cal <session>"). Set AFTER load_settings so it isn't reset.
+        self._log_tag = f"CEINMS-exe {self.trial}"
 
-        # Ensure per-trial prerequisites exist
-        self.create_ceinms_input_data()
+        # inputData.xml is built once in the CEINMS SETUP stage (create_ceinms_input_data
+        # for every trial); only build it here if this trial doesn't have it yet.
+        try:
+            _inp = os.path.join(self.path, self._layout_paths()['ceinms_input_data'])
+        except Exception:
+            _inp = os.path.join(self.path, "ceinms", "inputData.xml")
+        if not os.path.exists(_inp):
+            self.create_ceinms_input_data()
+        else:
+            self._log("inputData.xml already present (from CEINMS setup) — reusing", terminal=True)
+
+        # Log the analysis window + input files (clickable absolute paths).
+        try:
+            _tr = self.get_time_range()
+        except Exception:
+            _tr = None
+        self._log(
+            f"CEINMS execution — time_range={_tr}\n"
+            f"   inputData    : {os.path.abspath(_inp)}\n"
+            f"   calib model  : {os.path.abspath(os.path.join(self.path, self.ceinms_calibrated_model)) if not os.path.isabs(str(self.ceinms_calibrated_model)) else self.ceinms_calibrated_model}\n"
+            f"   EMG (excit.) : {os.path.abspath(os.path.join(self.path, self.emg_filtered_normalised)) if not os.path.isabs(str(self.emg_filtered_normalised)) else self.emg_filtered_normalised}",
+            terminal=True)
+
         if not os.path.exists(self.ceinms_exe_cfg) or self.replace:
             self.create_ceinms_exe_cfg()
         if not os.path.exists(self.ceinms_exe_setup) or self.replace:
@@ -6015,29 +5885,37 @@ class Analyse:
             self._log(f'Saved best CEINMS parameters to {best_params_csv}')
 
     def add_so_columns_to_ceinms_results(self):
-
+        """Append the SO force file's NON-muscle columns (pelvis residuals
+        FX..MZ, coordinate reserves, GRF) to the CEINMS MuscleForces file, so the
+        JointReaction `forces_file` has the FULL actuator set. Without the
+        residual/reserve actuators the JRA can't balance the dynamics and dumps the
+        imbalance into the hip (blowing the contact force up ~100x). Reads the SO
+        force file explicitly (self.so_forces) — NOT self.jra_forces, which on a
+        CEINMS-loaded trial resolves to the CEINMS forces (=> nothing to add)."""
+        def _abs(p):
+            return p if os.path.isabs(p) else os.path.join(self.path, p)
         try:
-            so_forces = _u.load_any_data_file(self.jra_forces)
-            ceinms_forces = _u.load_any_data_file(self.jra_forces_ceinms)
+            so_forces = _u.load_any_data_file(_abs(self.so_forces))
+            ceinms_forces = _u.load_any_data_file(_abs(self.jra_forces_ceinms))
         except Exception as e:
-            self._log(f'[Error] loading SO or CEINMS forces for adding columns: {e}')
+            self._log(f'[Error] loading SO or CEINMS forces for adding columns: {e}', terminal=True)
+            return
+        if so_forces is None or ceinms_forces is None:
+            self._log(f'[Error] SO ({_abs(self.so_forces)}) or CEINMS forces not readable; '
+                      f'JRA residual/reserve columns NOT added (JCF will be wrong).', terminal=True)
             return
 
-        # Find columns in SO forces that are not in CEINMS forces
-        missing_columns = [col for col in so_forces.columns if col not in ceinms_forces.columns]
-
-        # Create new dataframe starting with CEINMS forces
-        updated_forces = ceinms_forces.copy()
-
-        # Add missing columns from SO forces
+        # Non-muscle SO columns missing from the CEINMS forces (residuals/reserves/GRF).
+        missing_columns = [c for c in so_forces.columns
+                           if c != 'time' and c not in ceinms_forces.columns]
+        n = min(len(so_forces), len(ceinms_forces))
+        updated_forces = ceinms_forces.iloc[:n].copy()
         for col in missing_columns:
-            updated_forces[col] = so_forces[col]
+            updated_forces[col] = so_forces[col].to_numpy()[:n]
 
-        # Save to new .sto file
-        _u.write_sto_file(updated_forces, self.jra_forces_ceinms)
-        self._log(f'[Success] Added SO columns to CEINMS forces for trial: {self.trial}')
-        print(f"Updated forces saved to: {self.jra_forces_ceinms}")
-        print(f"Added {len(missing_columns)} columns from SO forces")
+        _u.write_sto_file(updated_forces, _abs(self.jra_forces_ceinms))
+        self._log(f'[Success] added {len(missing_columns)} SO reserve/residual/GRF columns '
+                  f'to CEINMS forces (for balanced JRA)', terminal=True)
 
     def plot_ceinms_execution_comparison(self):
         """CEINMS-vs-SO muscle results in the SO_results.png layout.

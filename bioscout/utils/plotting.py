@@ -91,7 +91,7 @@ def mmfn(fig: plt.Figure, n_rows: int, n_cols: int):
 
 def plot_mean_error_shade(ax: plt.Axes, df_list: list, xcol: str, ycol: str, color: str, label: str = ''):
     '''Plot mean and error shade for a list of dataframes.'''
-    from bioscout.utils import get_mean_across_trial_dfs  # lazy: avoids circular import
+    from bioscout.utils.shared import get_mean_across_trial_dfs  # lazy: avoids circular import
     df_mean = get_mean_across_trial_dfs(df_list, mode='mean')
     df_error = get_mean_across_trial_dfs(df_list, mode='stdev')
 

@@ -64,8 +64,24 @@ def filter_emg(*args, **kwargs):
     return _resolve_utils().filter_emg_file(*args, **kwargs)
 
 
-def osimTools(*args, **kwargs):
-    return _resolve_utils().osimTools(*args, **kwargs)
+def _create_opensim_storage(time, data, column_names):
+    """Build an OpenSim Storage from ``time`` (SimTK::Vector), ``data``
+    (SimTK::Matrix) and ``column_names`` (list[str]). Inlined here from the former
+    ``utils.osimTools`` — the only method this module ever used."""
+    labels = opensim.ArrayStr()
+    for element in ['time'] + list(column_names):
+        labels.append(element)
+    sto = opensim.Storage()
+    sto.setColumnLabels(labels)
+    for i in range(data.nrow()):
+        row = opensim.ArrayDouble()
+        for j in range(data.ncol()):
+            value = data.getElt(i, j)
+            if np.isnan(value):
+                value = 0
+            row.append(value)
+        sto.append(time[i], row)
+    return sto
 
 
 def _crop_trc_file_text_based(filepath, nan_threshold=0.5):
@@ -464,26 +480,53 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_d
         print(f"Error: Could not open or read the C3D file. {e}")
         return 1
 
-    # Rates and frames
-    marker_rate = float(reader.header.frame_rate)
+    # Rates and frames. Read point and analog rates from the C3D PARAMETERS, not
+    # header.frame_rate (which on some files reports the analog rate, e.g. 2000,
+    # not the 200 Hz point rate — that mislabelling is what compressed EMG time).
+    def _rate(*names):
+        for n in names:
+            v = getattr(reader, n, None)
+            try:
+                v = float(v() if callable(v) else v)
+            except Exception:
+                v = None
+            if v and v > 0:
+                return v
+        return None
+    marker_rate = _rate('point_rate') or float(reader.header.frame_rate)
+    analog_rate = _rate('analog_rate', 'analog_sample_rate')
     first_frame = int(reader.header.first_frame)
     num_frames = int(reader.frame_count)
 
     # Labels
     analog_labels = [str(l or "").strip() for l in reader.analog_labels]
 
-    # Create time vector
     initial_time = first_frame / marker_rate
-    final_time = (first_frame + num_frames - 1) / marker_rate
-    time = np.linspace(initial_time, final_time, num_frames)
 
-    # Collect all analog frames into a list first (much faster than row-by-row loc assignment)
-    # Suppress the 'No point data found' warning that fires for EMG-only C3D files
+    # Collect ALL analog sub-frames (analog is sampled faster than markers). The
+    # old code took only sub-frame [0], downsampling EMG to the marker rate.
     rows = []
+    apf = None
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', message='No point data found', category=UserWarning)
         for frame_no, points, analog in reader.read_frames():
-            rows.append([analog[i][0] for i in range(len(analog_labels))])
+            a = np.asarray(analog)
+            if apf is None:
+                apf = a.shape[1] if a.ndim == 2 else 1
+            for s in range(apf):
+                rows.append([(a[i][s] if a.ndim == 2 else a[i]) for i in range(len(analog_labels))])
+
+    apf = apf or 1
+    # Effective sample rate of the collected rows = point_rate * rows-per-frame.
+    # Correct whether the reader returned every analog sub-frame (apf>1) or just
+    # one sample per marker frame (apf==1). The C3D ANALOG:RATE param is only
+    # informational here (and header.frame_rate is unreliable on these files).
+    eff_rate = marker_rate * apf
+    time = initial_time + np.arange(len(rows)) / eff_rate
+    print(f"point rate {marker_rate:.0f} Hz | {apf} analog sub-frames/frame | "
+          f"effective {eff_rate:.0f} Hz | {len(rows)} samples -> {len(rows)/eff_rate:.2f} s"
+          + (f" | C3D ANALOG:RATE={analog_rate:.0f}" if analog_rate else ""))
+    analog_rate = eff_rate
 
     # replace . and spaces in labels with underscores
     analog_labels = [re.sub(r'[.\s]', '_', lbl) for lbl in analog_labels]
@@ -534,9 +577,22 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_d
         # filtering fails (e.g. non-physiological 'Voltage_*' channels), and
         # report the real reason instead of silently failing.
         try:
-            fs = 1 / (analog_df['time'].iloc[1] - analog_df['time'].iloc[0])
-            highcut_bp = fs/2 * 0.9
-            filter_emg(emg_path=emg_mot_path, highcut_bp=highcut_bp, lowcut_bp=20, lowcut_lp=6, order_bp=4, order_lp=4)
+            fs = float(analog_rate)   # true C3D analog rate (not assumed/derived)
+            # EMG envelope filter params (configurable via settings.BatchSettings).
+            # Lower envelope low-pass -> smoother linear envelope (4 Hz suits
+            # locomotion; raise for fast/ballistic tasks).
+            try:
+                import settings as _sm; _bs = _sm.BatchSettings
+            except Exception:
+                _bs = None
+            _lp   = float(getattr(_bs, 'emg_envelope_lowpass_hz', 4.0))
+            _lo   = float(getattr(_bs, 'emg_bandpass_low_hz', 20.0))
+            _obp  = int(getattr(_bs, 'emg_bandpass_order', 4))
+            _olp  = int(getattr(_bs, 'emg_envelope_order', 4))
+            _hi   = getattr(_bs, 'emg_bandpass_high_hz', None)
+            highcut_bp = float(_hi) if _hi else fs/2 * 0.9
+            filter_emg(emg_path=emg_mot_path, highcut_bp=highcut_bp, lowcut_bp=_lo,
+                       lowcut_lp=_lp, order_bp=_obp, order_lp=_olp)
         except Exception as _fe:
             print(f"Warning: EMG filtering skipped ({type(_fe).__name__}: {_fe}); raw emg.mot kept.")
     else:
@@ -724,8 +780,7 @@ def export_grf(c3d_filepath, output_dir=None):
 
     # replace f,p,m for ground_force_v, ground_force_p, ground_torque
     labels = transform_labels(list(forces_table.getColumnLabels()))
-    osim_tools = osimTools()
-    force_sto = osim_tools._create_opensim_storage(time, forces_table.getMatrix(), labels)
+    force_sto = _create_opensim_storage(time, forces_table.getMatrix(), labels)
     force_sto.setName('grf')
     output_dir = output_dir or os.path.dirname(c3d_filepath)
     grf_file = os.path.join(output_dir, 'grf.mot')
@@ -1051,10 +1106,22 @@ def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
                 except Exception as e:
                     print(f"[export_session] {t}: load emg_filtered failed — {e}")
         if dfs:
-            chans = sorted({c for df in dfs.values()
-                            for c in df.columns if c.lower() != 'time'})
+            # Use ONLY the linear-envelope columns (the low-passed signal); write
+            # them out under the base channel name (strip '_envelope') so CEINMS
+            # excitations and the QC plot use the SMOOTH envelope, not the raw /
+            # rectified signal. Fall back to raw channels only if no envelope
+            # columns exist (unfiltered EMG).
+            _env_cols = sorted({c for df in dfs.values()
+                                for c in df.columns if c.endswith('_envelope')})
+            if _env_cols:
+                use_cols = _env_cols
+                _base = lambda c: c[:-len('_envelope')]
+            else:
+                use_cols = sorted({c for df in dfs.values()
+                                   for c in df.columns if c.lower() != 'time'})
+                _base = lambda c: c
             session_max = {}
-            for c in chans:
+            for c in use_cols:
                 vals = []
                 for df in dfs.values():
                     if c in df.columns:
@@ -1063,12 +1130,12 @@ def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
                 session_max[c] = m if m > 1e-9 else 1.0
             for t, df in dfs.items():
                 out = df[['time']].copy() if 'time' in df.columns else pd.DataFrame()
-                for c in chans:                       # canonical sorted order
+                for c in use_cols:                    # canonical sorted order
                     if c in df.columns:
-                        out[c] = (pd.to_numeric(df[c], errors='coerce') / session_max[c]).clip(0.0, 1.0)
+                        out[_base(c)] = (pd.to_numeric(df[c], errors='coerce') / session_max[c]).clip(0.0, 1.0)
                 _en.write_sto_file(out, os.path.join(out_dir, t, "emg_filtered_normalised.mot"))
-            print(f"[export_session] normalised EMG across {len(dfs)} trials "
-                  f"(canonical sorted columns).")
+            print(f"[export_session] normalised EMG envelopes across {len(dfs)} trials "
+                  f"({len(use_cols)} channels, canonical sorted).")
 
     # QC figures need the normalised EMG + GRF.xml, so build them AFTER
     # session normalisation, reusing the established Analyse plot methods.

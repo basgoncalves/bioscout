@@ -62,7 +62,11 @@ def main(argv=None):
         print("[warn] no project settings.py found near the trial; "
               "using bundled template defaults")
 
-    from bioscout.utils.analysis import Analyse, Session
+    from bioscout.utils.analysis import Analyse
+
+    # session-level verbs (normalise_emg / calibrate / prepare_ceinms / run ...)
+    # live on Iteration (the runnable unit); get_session() returns one.
+    from bioscout.utils.session import Iteration as Session
     t = Analyse(trial)
 
     # Lazily-built Session for the trial's parent folder, so session-scoped verbs

@@ -56,3 +56,11 @@ __all__ = [
 ]
 
 __version__ = "0.2.0"
+
+# Quiet OpenSim's [info]/[warning] spam (missing display geometry, etc.) for every
+# muscle_inspect entry point, honoring settings.BatchSettings.opensim_log_level.
+try:
+    from bioscout.utils.shared import quiet_opensim as _quiet_opensim
+    _quiet_opensim()
+except Exception:
+    pass

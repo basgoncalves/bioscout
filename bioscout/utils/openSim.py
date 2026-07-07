@@ -66,6 +66,93 @@ except ImportError as e:
 import utils
 import exportC3D  # Lazy import below to avoid circular dependency
 
+def _quiet_osim():
+    """Apply the configured OpenSim log level (settings.BatchSettings.
+    opensim_log_level, e.g. "off"/"error"). Uses the Level_* ENUM — proven to work
+    on the installed build — and reads the flag from the LOADED project settings
+    (bioscout.utils.settings) first, falling back to this module's ``settings``.
+    OpenSim's tools reset the logger to 'info' when they run, so this is re-applied
+    before each tool via the ``_quiet_console`` decorator."""
+    try:
+        _lvl = None
+        try:
+            from bioscout import utils as _u
+            _bs = getattr(getattr(_u, "settings", None), "BatchSettings", None)
+            _lvl = getattr(_bs, "opensim_log_level", None)
+        except Exception:
+            _lvl = None
+        if not _lvl:
+            _lvl = getattr(getattr(settings, "BatchSettings", None), "opensim_log_level", None)
+        if not _lvl:
+            return
+        _enum = {"off": osim.Logger.Level_Off, "critical": osim.Logger.Level_Critical,
+                 "error": osim.Logger.Level_Error, "warn": osim.Logger.Level_Warn,
+                 "warning": osim.Logger.Level_Warn, "info": osim.Logger.Level_Info,
+                 "debug": osim.Logger.Level_Debug, "trace": osim.Logger.Level_Trace
+                 }.get(str(_lvl).strip().lower())
+        if _enum is not None:
+            osim.Logger.setLevel(_enum)
+        else:
+            osim.Logger.setLevelString(str(_lvl).strip().lower())
+    except Exception:
+        pass
+
+
+import contextlib as _contextlib
+import functools as _functools
+
+
+@_contextlib.contextmanager
+def _osim_quiet_ctx():
+    """Apply the configured OpenSim log level around an OpenSim tool. Tools RESET
+    the logger to 'info' as they run, so we re-apply it BEFORE and AFTER. When the
+    level is 'off', ALSO redirect C-level stdout (fd 1) to devnull for the duration
+    — that swallows OpenSim's Model::printBasicInfo() block ("MODEL: ... coordinates
+    ...") which is written to std::cout and bypasses the logger. stderr stays open
+    (errors still surface); the Python log-file tee is unaffected."""
+    _quiet_osim()
+    _off = False
+    try:
+        _bs = getattr(getattr(settings, "BatchSettings", None), "opensim_log_level", None)
+        _off = str(_bs).strip().lower() == "off"
+    except Exception:
+        _off = False
+    if not _off:
+        try:
+            yield
+        finally:
+            _quiet_osim()
+        return
+    import sys as _sys
+    try:
+        _sys.stdout.flush()
+    except Exception:
+        pass
+    _saved = os.dup(1)
+    _devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(_devnull, 1)
+        yield
+    finally:
+        try:
+            _sys.stdout.flush()
+        except Exception:
+            pass
+        os.dup2(_saved, 1)
+        os.close(_devnull)
+        os.close(_saved)
+        _quiet_osim()
+
+
+def _quiet_console(fn):
+    """Decorator: run an OpenSim tool wrapper inside :func:`_osim_quiet_ctx`."""
+    @_functools.wraps(fn)
+    def _w(*a, **k):
+        with _osim_quiet_ctx():
+            return fn(*a, **k)
+    return _w
+
+
 def terminal_warnings(mode='off'):
     """Set OpenSim terminal warnings on or off."""
     if mode == 'off':
@@ -178,19 +265,18 @@ def increase_isometric_force(osim_modelPath=None, muscleList='all', factor: floa
         for muscle in model.getMuscles():
             muscleList.append(muscle.getName())
     
+    _n = 0
     for muscle_name in muscleList:
         muscle = model.getMuscles().get(muscle_name)
         if muscle:
-            current_f0 = muscle.getMaxIsometricForce()
-            new_f0 = current_f0 * factor
-            muscle.setMaxIsometricForce(new_f0)
-            print(f"Updated {muscle_name} max isometric force from {current_f0} N to {new_f0} N.")
+            muscle.setMaxIsometricForce(muscle.getMaxIsometricForce() * factor)
+            _n += 1
         else:
             print(f"Muscle '{muscle_name}' not found in the model.")
 
-    model.printToXML(osim_modelPath.replace('.osim', f'_increased_{factor:.2f}.osim'))
-
-    print(f"Updated model saved to: {osim_modelPath.replace('.osim', f'_increased_{factor:.2f}.osim')}")
+    _out = osim_modelPath.replace('.osim', f'_increased_{factor:.2f}.osim')
+    model.printToXML(_out)
+    print(f"[scale] increased isometric force x{factor:.2f} on {_n} muscles -> {os.path.basename(_out)}")
 
 def lock_model_coordinates(osim_modelPath=None, coordinates_to_lock: list = None, save_path=None, unlock=False):
     """
@@ -2656,6 +2742,34 @@ def scale_model_from_xml(setup_xml_path, generic_model_path, static_trc_path, sc
 
     return scale_tool
 
+def _sanitize_markerset_xml(src_path, skip_names, out_dir):
+    """Write a copy of an OpenSim marker-set XML with markers removed that would
+    crash ScaleTool's MarkerPlacer: those named in ``skip_names`` and any marker
+    parented to ground (``<socket_parent_frame>`` referencing ground). Returns the
+    sanitized file path, or None if nothing was removed."""
+    import re
+    txt = open(src_path, errors="replace").read()
+    skipU = {str(s).upper() for s in (skip_names or set())}
+    removed = []
+    def _filt(m):
+        name, body = m.group(1), m.group(2)
+        pf = re.search(r'<socket_parent_frame>([^<]+)', body)
+        frame = (pf.group(1) if pf else "").strip().lower()
+        if name.upper() in skipU or frame.endswith("ground"):
+            removed.append(name)
+            return ""
+        return m.group(0)
+    new = re.sub(r'<Marker name="([^"]+)">(.*?)</Marker>\s*', _filt, txt, flags=re.S)
+    if not removed:
+        return None
+    out = os.path.join(out_dir,
+                       os.path.splitext(os.path.basename(src_path))[0] + "_scaleready.xml")
+    with open(out, "w") as f:
+        f.write(new)
+    print(f"[scale] dropped unplaceable markers from marker set: {removed} -> {os.path.basename(out)}")
+    return out
+
+
 def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, scale_setup_output_dir=None, mass=None, time_range=None, marker_set_file=None, linear_scaling=True, marker_placer=False):
     """
     Scale an OpenSim model using the ScaleTool based on static marker data from a TRC file.
@@ -2679,6 +2793,19 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         scale_setup_output_dir: Directory where to save scale_setup.xml (defaults to scaled_model directory)
     """
     import shutil as _shutil
+    # Apply the configured OpenSim log level right here (lowercase — OpenSim
+    # ignores "Error") so ScaleTool's geometry [warning] spam is quiet.
+    try:
+        _lvl = getattr(getattr(settings, "BatchSettings", None), "opensim_log_level", None)
+        if _lvl:
+            osim.Logger.setLevelString(str(_lvl).lower())
+    except Exception:
+        pass
+    # Self-heal a corrupt generic: some TPS/warping tools pad the .osim with
+    # trailing NUL bytes after </OpenSimDocument>. OpenSim loads it but ScaleTool's
+    # MarkerPlacer then segfaults / throws "string too long". Strip the padding
+    # (in place, with a .nulbak backup) so scaling works.
+    generic_opensim_model_path = _strip_trailing_nulls(generic_opensim_model_path)
     # Neither stage requested → nothing for the ScaleTool to do; pass the model
     # through unchanged so downstream steps still find scaled_model_path.
     if not linear_scaling and not marker_placer:
@@ -2691,6 +2818,44 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     model = osim.Model(generic_opensim_model_path)
     state = model.initSystem()
     subject_mass = mass if mass is not None else model.getTotalMass(state)
+
+    # MarkerPlacer runs an internal IK that SEGFAULTS on markers with no valid
+    # placement — markers in BatchSettings.markers_to_skip and any marker rigidly
+    # attached to ground (belt markers BL/BR). Strip them from a sanitized copy of
+    # BOTH the model and the marker-set file, and scale from those, leaving the
+    # user's originals untouched.
+    try:
+        from bioscout.utils import settings as _settings
+        _skip = {str(s).upper() for s in
+                 getattr(getattr(_settings, "BatchSettings", None), "markers_to_skip", []) or []}
+    except Exception:
+        _skip = set()
+    _outdir = scale_setup_output_dir or os.path.dirname(scaled_model_path) or "."
+    os.makedirs(_outdir, exist_ok=True)
+    generic_for_scaling = generic_opensim_model_path
+    marker_set_for_scaling = marker_set_file
+    _msd = model.updMarkerSet()
+    _drop = []
+    for _i in range(_msd.getSize()):
+        _mk = _msd.get(_i)
+        try:
+            _fr = _mk.getParentFrame().getName().lower()
+        except Exception:
+            _fr = ""
+        if _mk.getName().upper() in _skip or _fr == "ground":
+            _drop.append((_i, _mk.getName()))
+    if _drop:
+        for _i, _ in sorted(_drop, reverse=True):
+            _msd.remove(_i)
+        model.finalizeConnections()
+        generic_for_scaling = os.path.join(
+            _outdir, os.path.splitext(os.path.basename(generic_opensim_model_path))[0] + "_scaleready.osim")
+        model.printToXML(generic_for_scaling)
+        print(f"[scale] dropped unplaceable markers from model: {[n for _, n in _drop]}")
+    if marker_set_file and os.path.exists(marker_set_file):
+        _san = _sanitize_markerset_xml(marker_set_file, _skip, _outdir)
+        if _san:
+            marker_set_for_scaling = _san
 
     # Resolve time range from TRC if not provided
     storage = osim.Storage(static_trc_path)
@@ -2705,9 +2870,9 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
 
     # GenericModelMaker — sets the unscaled model (and optionally a marker set)
     gmm = scaleTool.getGenericModelMaker()
-    gmm.setModelFileName(generic_opensim_model_path)
-    if marker_set_file:
-        gmm.setMarkerSetFileName(marker_set_file)
+    gmm.setModelFileName(generic_for_scaling)
+    if marker_set_for_scaling:
+        gmm.setMarkerSetFileName(marker_set_for_scaling)
 
     # Determine where to save scale setup XML
     if scale_setup_output_dir is None:
@@ -2739,7 +2904,24 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         )
 
     print(f"[scale] linear_scaling={bool(linear_scaling)}, marker_placer={bool(marker_placer)}")
-    scaleTool.run()
+    try:
+        scaleTool.run()
+    except Exception as e:
+        if not marker_placer:
+            raise
+        # ScaleTool's MarkerPlacer can segfault / bad_alloc on complex models
+        # (e.g. the MRI Lerner-knee model). Fall back: produce the base model with
+        # MarkerPlacer OFF (dimensional scaling only, or copy-through), then
+        # register the markers via a normal IK pass.
+        print(f"[scale] ScaleTool MarkerPlacer failed ({e}); falling back to "
+              f"standalone IK-based marker registration.")
+        markerPlacer.setApply(False)
+        if linear_scaling:
+            scaleTool.run()                       # dimensional scaling only
+        elif os.path.abspath(generic_for_scaling) != os.path.abspath(scaled_model_path):
+            _shutil.copyfile(generic_for_scaling, scaled_model_path)
+        place_markers_via_ik(scaled_model_path, static_trc_path, scaled_model_path,
+                             marker_set_file=marker_set_for_scaling, time_range=(t0, t1))
     print(f"Scaled model saved to: {scaled_model_path}")
     
 # --- Inverse Kinematics ---
@@ -2837,8 +3019,8 @@ def create_setup_IK(osim_modelPath=None, marker_trc=None,
     ikTool.printToXML(saveXMLPath)
     print(f"Inverse Kinematics setup saved to {os.path.abspath(saveXMLPath)}")
 
+@_quiet_console
 def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
-
     print(f"DEBUG: run_ik() called with osim_modelPath={osim_modelPath}, setup_xml={setup_xml}, resultsDir={resultsDir}")
     utils.print_to_log(f"DEBUG: run_ik() called with osim_modelPath={osim_modelPath}, setup_xml={setup_xml}, resultsDir={resultsDir}")
 
@@ -3176,7 +3358,181 @@ def normalise_muscle(muscle_forces_path, osim_modelPath):
     print(f"Normalized muscle forces saved to {muscle_forces_path.replace('.sto','_normalised.sto')}")
 
 # --- Joint Reaction Analysis ---
-def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath, 
+def _strip_trailing_nulls(osim_path):
+    """If an .osim (or any XML) file is padded with NUL bytes after its closing
+    tag (a corruption some TPS/warping tools produce that segfaults ScaleTool),
+    truncate the padding in place — backing up the original as ``<file>.nulbak``.
+    Returns the (now clean) path. No-op if the file has no NULs."""
+    import shutil as _shutil
+    try:
+        with open(osim_path, "rb") as f:
+            b = f.read()
+        if b.count(0) == 0:
+            return osim_path
+        end = b.rfind(b"</OpenSimDocument>")
+        if end < 0:
+            end = b.rfind(b">")                    # generic XML fallback
+        if end < 0:
+            return osim_path
+        cut = end + (len(b"</OpenSimDocument>") if b[end:end + 18] == b"</OpenSimDocument>" else 1)
+        if b[cut:cut + 2] == b"\r\n":
+            cut += 2
+        elif b[cut:cut + 1] == b"\n":
+            cut += 1
+        clean = b[:cut]
+        if clean.count(0):                          # still dirty -> leave it alone
+            return osim_path
+        if not os.path.exists(osim_path + ".nulbak"):
+            _shutil.copy2(osim_path, osim_path + ".nulbak")
+        with open(osim_path, "wb") as f:
+            f.write(clean)
+        print(f"[scale] stripped {b.count(0)} trailing NUL bytes from "
+              f"{os.path.basename(osim_path)} (backup: {os.path.basename(osim_path)}.nulbak)")
+    except Exception:
+        pass
+    return osim_path
+
+
+def place_markers_via_ik(model_path, static_trc, out_model_path,
+                         marker_set_file=None, time_range=None):
+    """Register a model's markers to the subject's STATIC pose WITHOUT ScaleTool's
+    MarkerPlacer (which segfaults / throws bad_alloc on some complex models, e.g.
+    the MRI/Lerner-knee model). Standard MarkerPlacer algorithm, done by hand:
+
+      1. run a normal IK on the static trial (this path works where MarkerPlacer
+         fails),
+      2. move the model to the MEAN static pose,
+      3. relocate each model marker to the averaged experimental marker position,
+         expressed in that marker's parent frame.
+
+    Writes the registered model to ``out_model_path``. Best-effort; on failure the
+    base model is left as-is (markers un-registered)."""
+    import numpy as _np
+    _quiet_osim()
+    model = osim.Model(model_path)
+    if marker_set_file and os.path.exists(marker_set_file):
+        try:
+            model.updateMarkerSet(osim.MarkerSet(model, marker_set_file))
+        except Exception:
+            pass
+    state = model.initSystem()
+
+    md = osim.MarkerData(static_trc)
+    try:
+        md.convertToUnits(osim.Units(osim.Units.Meters))     # -> metres to match the model
+    except Exception:
+        pass
+    t0 = md.getStartFrameTime() if time_range is None else float(time_range[0])
+    t1 = md.getLastFrameTime() if time_range is None else float(time_range[1])
+
+    # 1) IK on the static trial
+    _mot = os.path.splitext(out_model_path)[0] + "_static_ik.mot"
+    ik = osim.InverseKinematicsTool()
+    ik.setModel(model)
+    ik.setMarkerDataFileName(static_trc)
+    ik.setStartTime(t0)
+    ik.setEndTime(t1)
+    ik.setOutputMotionFileName(_mot)
+    with _osim_quiet_ctx():
+        ik.run()
+
+    # 2) mean static pose
+    sto = osim.Storage(_mot)
+    try:
+        if sto.isInDegrees():
+            model.getSimbodyEngine().convertDegreesToRadians(sto)
+    except Exception:
+        pass
+    cs = model.getCoordinateSet()
+    for i in range(cs.getSize()):
+        c = cs.get(i)
+        arr = osim.ArrayDouble()
+        try:
+            sto.getDataColumn(c.getName(), arr)
+            vals = [arr.getitem(k) for k in range(arr.getSize())]
+        except Exception:
+            vals = []
+        if vals:
+            try:
+                c.setValue(state, float(_np.mean(vals)), False)
+            except Exception:
+                pass
+    model.assemble(state)
+    model.realizePosition(state)
+
+    # 3) relocate markers to the averaged experimental positions
+    ground = model.getGround()
+    ms = model.updMarkerSet()
+    nfr = md.getNumFrames()
+    moved = 0
+    for i in range(ms.getSize()):
+        mk = ms.get(i)
+        try:
+            idx = md.getMarkerIndex(mk.getName())
+        except Exception:
+            idx = -1
+        if idx < 0:
+            continue
+        acc = _np.zeros(3); n = 0
+        for f in range(nfr):
+            v = md.getFrame(f).getMarker(idx)
+            x, y, z = v.get(0), v.get(1), v.get(2)
+            if x == x:                                       # skip NaN
+                acc += (x, y, z); n += 1
+        if n == 0:
+            continue
+        p = acc / n
+        try:
+            pF = ground.findStationLocationInAnotherFrame(
+                state, osim.Vec3(float(p[0]), float(p[1]), float(p[2])), mk.getParentFrame())
+            mk.set_location(pF)
+            moved += 1
+        except Exception:
+            pass
+    model.finalizeConnections()
+    model.printToXML(out_model_path)
+    print(f"[scale] IK-based marker registration placed {moved}/{ms.getSize()} markers "
+          f"-> {os.path.basename(out_model_path)}")
+    return out_model_path
+
+
+def relativise_setup_xml(xml_path):
+    """Rewrite absolute filesystem paths in an OpenSim/CEINMS setup XML to paths
+    RELATIVE to the setup file's own directory, so the setup is portable (OpenSim
+    resolves relative paths against the setup dir). Only rewrites values that look
+    like absolute paths (drive-letter, UNC, or POSIX-absolute); everything else is
+    left untouched. Best-effort — no-op on parse failure."""
+    import xml.etree.ElementTree as _ET
+    try:
+        xml_path = os.path.abspath(xml_path)
+        base = os.path.dirname(xml_path)
+        tree = _ET.parse(xml_path)
+        root = tree.getroot()
+    except Exception:
+        return
+    def _is_abs(t):
+        return len(t) > 2 and (t[1:3] in (":\\", ":/") or t.startswith(("/", "\\\\")))
+    changed = False
+    for el in root.iter():
+        t = (el.text or "").strip()
+        if not t or " " in t and not _is_abs(t):
+            continue
+        # a value may be a space-separated LIST of paths (e.g. force set files)
+        parts = t.split()
+        if parts and all(_is_abs(p) for p in parts):
+            try:
+                el.text = " ".join(os.path.relpath(p, base).replace("/", "\\") for p in parts)
+                changed = True
+            except Exception:
+                pass
+    if changed:
+        try:
+            tree.write(xml_path)
+        except Exception:
+            pass
+
+
+def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath,
                          results_directory, actuators=None):
     """Creates and configures an OpenSim AnalyzeTool object.
 
@@ -3405,6 +3761,7 @@ def create_setup_ID(osim_modelPath=None, ik_output=None, grf_xml=None,
 
     print(f"Inverse Dynamics setup saved to {os.path.abspath(saveXMLPath)}")
 
+@_quiet_console
 def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
          setupXmlPath=None):
     """
@@ -3528,9 +3885,9 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
 
+@_quiet_console
 def run_ma(osim_modelPath=None, ik_output=None,
          grf_xml=None, results_dir=None, coordinates=None):
-
     if osim_modelPath is None:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
     if ik_output is None:
@@ -3585,7 +3942,8 @@ def run_ma(osim_modelPath=None, ik_output=None,
             coordinates = []
         if not coordinates:
             coordinates = ['hip_flexion', 'hip_adduction', 'hip_rotation',
-                           'knee_angle', 'ankle_angle', 'subtalar_angle']
+                           'knee_angle', 'knee_adduction', 'ankle_angle',
+                           'subtalar_angle']
     try:
         cs = model.getCoordinateSet()
         model_names = {cs.get(i).getName() for i in range(cs.getSize())}
@@ -3650,9 +4008,9 @@ def run_ma(osim_modelPath=None, ik_output=None,
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
 
+@_quiet_console
 def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
            setup_xml=None, actuators=None, resultsDir=None):
-
     if not osim_modelPath:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
 
@@ -3757,10 +4115,10 @@ def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
 
-def run_jra(osim_modelPath=None, ik_output=None, 
-         grf_xml=None, setup_xml=None, actuators=None, 
+@_quiet_console
+def run_jra(osim_modelPath=None, ik_output=None,
+         grf_xml=None, setup_xml=None, actuators=None,
          muscle_force_path=None, saveFileName=None):
-    
     if not osim_modelPath:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
     if not ik_output:
@@ -3772,8 +4130,12 @@ def run_jra(osim_modelPath=None, ik_output=None,
     if not muscle_force_path:
         muscle_force_path = input("Enter the path to the muscle forces file (.sto): ").strip('"')
     
-    setup_xml_parent = os.path.dirname(os.path.abspath(ik_output))
-    
+    # Results + intermediate output belong next to the JRA SETUP file
+    # (joint_contact_forces/), not next to the coordinates file
+    # (external_biomechanics/). Derive from setup_xml, falling back to ik_output.
+    setup_xml_parent = os.path.dirname(os.path.abspath(setup_xml)) if setup_xml \
+        else os.path.dirname(os.path.abspath(ik_output))
+
     # start model
     osimModel = osim.Model(osim_modelPath)
     
@@ -3818,8 +4180,10 @@ def run_jra(osim_modelPath=None, ik_output=None,
     analyzeTool_JR.getAnalysisSet().cloneAndAppend(jr)
     osimModel.addAnalysis(jr)
 
-    # save setup file and run
+    # save setup file, rewrite its file paths RELATIVE to the setup's own dir
+    # (portable), then reload so OpenSim resolves them against that dir.
     analyzeTool_JR.printToXML(setup_xml)
+    relativise_setup_xml(setup_xml)
     analyzeTool_JR = osim.AnalyzeTool(setup_xml)
     # JRA's AnalyzeTool reloads the model from the setup XML, so the looser
     # assembly accuracy set elsewhere is lost -> the coupled (walker/Lerner) knee

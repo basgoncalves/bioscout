@@ -456,10 +456,14 @@ def create_input_data(MAFolder=None, excitationsFile=None, motionFile=None,
     excitations_elem = ET.SubElement(root, "excitationsFile")
     excitations_elem.text = _rel(excitationsFile)
 
-    # Add moment arms files
+    # Add moment arms files. A DOF the model doesn't have (e.g. knee_adduction on
+    # a 1-DOF-knee model) produces no moment-arm file — skip it so inputData only
+    # references files CEINMS can actually read.
     moment_arms = ET.SubElement(root, "momentArmsFiles")
     for dof in settings.BatchSettings.dof_list:
         dof_path = os.path.join(MAFolder, f'_MuscleAnalysis_MomentArm_{dof}.sto')
+        if not os.path.exists(dof_path):
+            continue
         dof_elem = ET.SubElement(moment_arms, "momentArmsFile")
         dof_elem.set("dofName", dof)
         dof_elem.text = _rel(dof_path)

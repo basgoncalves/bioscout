@@ -149,6 +149,93 @@ LOG_DISCLAIMER = (
 # (ensure_logging, called from Project/Analyse) never opens a second log.
 _LOG_STARTED = False
 _LOG_HANDLE = None
+_LOG_START = None       # run start time (time.time()) for the completion banner
+_LOG_NAME = "run"
+_OSIM_SINK = None       # per-run OpenSim native-output sidecar, folded in at exit
+_LOG_FINISHED = False   # guard: _log_finish must run its body only once
+
+
+def _strip_printbasicinfo(txt):
+    """Drop OpenSim ``Model::printBasicInfo()`` dumps from native-output text.
+
+    printBasicInfo writes a fixed ``MODEL: … / coordinates: N / … / misc
+    modelcomponents: N`` block through OpenSim's ``[cout]`` logger channel, which
+    the file sink captures even when the console fd-redirect suppresses it. These
+    blocks are pure noise, so strip the ``[cout]`` header line plus the whole
+    block. Genuine [warning]/[error] lines are left untouched."""
+    try:
+        _pat = re.compile(
+            r"^[^\n]*\[cout\][^\n]*\n\s*MODEL:.*?misc modelcomponents:\s*\d+[^\n]*\n?",
+            re.DOTALL | re.MULTILINE,
+        )
+        return _pat.sub("", txt)
+    except Exception:
+        return txt
+
+
+def _log_finish():
+    """atexit hook: fold OpenSim's native (C++) output into the run log and write
+    the completion banner (time finished + duration) at the very end.
+
+    Idempotent — if ``start_logging`` was called more than once, ``_log_finish``
+    is registered more than once too; the ``_LOG_FINISHED`` guard makes only the
+    first invocation write, so the banner never double-prints."""
+    global _LOG_FINISHED
+    f = _LOG_HANDLE
+    if not f or _LOG_FINISHED:
+        return
+    _LOG_FINISHED = True
+    try:
+        # Flush + close OpenSim's file sink FIRST so the sidecar is complete and
+        # unlocked, then fold it into the main log and remove it — so a finished
+        # run leaves exactly ONE complete log.
+        if _OSIM_SINK:
+            try:
+                import opensim as _osim
+                _osim.Logger.removeFileSink()
+            except Exception:
+                pass
+        if _OSIM_SINK and os.path.exists(_OSIM_SINK):
+            try:
+                with open(_OSIM_SINK, encoding="utf-8", errors="replace") as _o:
+                    _txt = _o.read()
+                _txt = _strip_printbasicinfo(_txt)   # drop printBasicInfo noise
+                if _txt.strip():
+                    f.write(f"\n{'-' * 72}\n--- OpenSim native output ---\n{_txt}\n")
+                os.remove(_OSIM_SINK)          # folded in — drop the sidecar
+            except Exception:
+                pass
+        dur = time.time() - (_LOG_START or time.time())
+        h, rem = divmod(int(dur), 3600)
+        m, s = divmod(rem, 60)
+        f.write(f"\n{'=' * 72}\n"
+                f"=== {_LOG_NAME} — completed {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"
+                f"   (duration {h:d}h {m:02d}m {s:02d}s)\n"
+                f"{'=' * 72}\n")
+        f.flush()
+    except Exception:
+        pass
+
+
+def quiet_opensim(level=None):
+    """Raise OpenSim's log level to quiet its C++ [info]/[warning] spam (missing
+    display geometry, etc.). ``level`` defaults to
+    ``settings.BatchSettings.opensim_log_level`` (e.g. "Error"). No-op if no level
+    is configured or OpenSim isn't importable. Call this from any entry point that
+    loads OpenSim models outside the logging pipeline (e.g. muscle_inspect)."""
+    try:
+        if level is None:
+            from bioscout import utils as _u
+            _bs = getattr(getattr(_u, "settings", None), "BatchSettings", None)
+            level = getattr(_bs, "opensim_log_level", None)
+        if not level:
+            return
+        import opensim as _osim
+        # OpenSim expects LOWERCASE level strings ('off','error','warning','info',
+        # ...) — 'Error' is silently ignored, so normalise here.
+        _osim.Logger.setLevelString(str(level).lower())
+    except Exception:
+        pass
 
 
 def ensure_logging(name="bioscout", log_dir=None):
@@ -195,10 +282,30 @@ def start_logging(name="run", log_dir=None, filename=None, append=False):
             f"{LOG_DISCLAIMER}\n"
             f"{'=' * 72}\n")
     f.flush()
-    global _LOG_STARTED, _LOG_HANDLE
+    global _LOG_STARTED, _LOG_HANDLE, _LOG_START, _LOG_NAME, _OSIM_SINK, _LOG_FINISHED
     _LOG_STARTED, _LOG_HANDLE = True, f   # mark started so auto-logging won't re-open
+    _LOG_FINISHED = False                 # fresh run — allow the finish hook to write
+    _LOG_START, _LOG_NAME = time.time(), name
     sys.stdout = _Tee(sys.__stdout__, f)
     sys.stderr = _Tee(sys.__stderr__, f)
+    # OpenSim's C++ [info]/[warning] lines are fd-level, so the Python tee above
+    # misses them. Send them to a per-run sidecar in the TEMP dir (its own handle
+    # — no conflict with this log's), folded into THIS log at exit. Keeping the
+    # sidecar out of logs/ means the run folder only ever shows the single
+    # bioscout_*.log, even if Windows hasn't released the sink handle in time for
+    # the delete (the leftover, if any, stays invisibly in temp).
+    import tempfile as _tempfile
+    _stem = os.path.splitext(os.path.basename(path))[0]
+    _OSIM_SINK = os.path.join(_tempfile.gettempdir(),
+                              f"{_stem}_osim_{os.getpid()}.log")
+    try:
+        import opensim as _osim
+        _osim.Logger.addFileSink(_OSIM_SINK)
+        quiet_opensim()          # honor settings.BatchSettings.opensim_log_level
+    except Exception:
+        _OSIM_SINK = None
+    import atexit as _atexit
+    _atexit.register(_log_finish)
     print(f"[bioscout] logging '{name}' -> {path}")
     return f
 
@@ -211,6 +318,30 @@ def trial_type(trial_name, pattern=DEFAULT_TRIAL_TYPE_PATTERN):
     """
     m = re.match(pattern, str(trial_name))
     return m.group(1) if m else str(trial_name)
+
+
+def get_mean_across_trial_dfs(df_list, mode='mean') -> pd.DataFrame:
+    """Reduce a list of per-trial DataFrames across trials, aligned by row index.
+
+    ``mode`` = 'mean' | 'median' | 'stdev'. Each input is one trial; the result
+    is a single DataFrame of the per-row reduction (drops the internal trial id).
+    """
+    processed_dfs = []
+    for i, df in enumerate(df_list):
+        temp_df = df.copy()
+        temp_df['trial_id'] = i
+        temp_df['sample_index'] = range(len(temp_df))
+        processed_dfs.append(temp_df)
+    combined_df = pd.concat(processed_dfs, axis=0)
+    if mode == 'mean':
+        result_df = combined_df.groupby('sample_index').mean().drop(columns=['trial_id'], errors='ignore')
+    elif mode == 'median':
+        result_df = combined_df.groupby('sample_index').median().drop(columns=['trial_id'], errors='ignore')
+    elif mode == 'stdev':
+        result_df = combined_df.groupby('sample_index').std().drop(columns=['trial_id'], errors='ignore')
+    else:
+        raise ValueError("Invalid mode. Choose from 'mean', 'median', or 'stdev'.")
+    return result_df.reset_index(drop=True)
 
 
 def time_normalise_df(df, fs=''):
