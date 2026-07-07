@@ -5219,15 +5219,18 @@ class Analyse:
         # Fix EMG timestamps if the C3D export produced wrong time values
         excitations = self._fix_emg_timestamps(excitations)
 
-        # Cap startStopTime to the INTERSECTION of every CEINMS input file's own
-        # time span, so none of them can fail the strict is_contained() check in
-        # check_input_times (which produced "Input data 'muscleTendonLength' does
-        # not cover the CEINMS time range!" and aborted execution with no .sto).
-        # The MuscleAnalysis _Length.sto is run over the IK window and is usually
-        # NARROWER than the EMG span, so capping to EMG alone is not enough — the
-        # muscleTendonLength file was the one flagged.
+        # The session.yaml window (self.time_range) is authoritative: write it into
+        # inputData.xml VERBATIM wherever it already sits strictly INSIDE the data.
+        # We still measure the intersection of every CEINMS input file's own time
+        # span, but only pull an END inward (by epsilon) when the requested bound
+        # falls on/outside a data boundary — otherwise CEINMS's strict is_contained()
+        # in check_input_times aborts ("Input data 'muscleTendonLength' does not
+        # cover the CEINMS time range!" with no .sto). The MuscleAnalysis _Length.sto
+        # is run over the IK window and is usually the NARROWEST file, so it drives
+        # the clamp when it does happen.
         _tr = self.time_range if isinstance(self.time_range, (list, tuple)) else [0.0, 1e9]
-        _lo, _hi = float(_tr[0]), float(_tr[1])
+        _req_lo, _req_hi = float(_tr[0]), float(_tr[1])
+        _data_lo, _data_hi = -float('inf'), float('inf')
         _ma_len = os.path.join(self.path, self.ma, '_MuscleAnalysis_Length.sto')
         _cap_files = [os.path.join(self.path, excitations), _ma_len,
                       os.path.join(self.path, self.ik),
@@ -5239,19 +5242,27 @@ class Analyse:
                 _df = _u.load_any_data_file(_f)
                 if _df is not None and 'time' in _df.columns and len(_df) > 0:
                     _t = pd.to_numeric(_df['time'], errors='coerce')
-                    _lo = max(_lo, float(_t.iloc[0]))
-                    _hi = min(_hi, float(_t.iloc[-1]))
+                    _data_lo = max(_data_lo, float(_t.iloc[0]))
+                    _data_hi = min(_data_hi, float(_t.iloc[-1]))
             except Exception as _e:
                 self._log(f'[Warning] time-cap skipped {os.path.basename(_f)}: {_e}')
-        # Nudge the window strictly INSIDE every file (is_contained uses strict
-        # >/<, so exact-boundary equality on a coarser-sampled file still fails).
-        if _hi > _lo:
-            _eps = max(1e-4, 0.002 * (_hi - _lo))
-            input_time_range = [_lo + _eps, _hi - _eps]
+        # Start from the session.yaml window; clamp+nudge ONLY the ends that need it.
+        _lo, _hi = _req_lo, _req_hi
+        if math.isfinite(_data_lo) and math.isfinite(_data_hi) and _data_hi > _data_lo:
+            _eps = max(1e-4, 0.002 * (_data_hi - _data_lo))
+            if _req_lo <= _data_lo:          # bound sits on/below first sample
+                _lo = _data_lo + _eps
+            if _req_hi >= _data_hi:          # bound sits on/above last sample
+                _hi = _data_hi - _eps
+        input_time_range = [_lo, _hi] if _hi > _lo else list(self.time_range)
+        if [_lo, _hi] != [_req_lo, _req_hi]:
+            self._log(f"[CEINMS] session.yaml window [{_req_lo:.3f}, {_req_hi:.3f}] "
+                      f"exceeds available data [{_data_lo:.4f}, {_data_hi:.4f}]; "
+                      f"using {input_time_range} to satisfy CEINMS coverage check.",
+                      terminal=True)
         else:
-            input_time_range = self.time_range
-        self._log(f"[CEINMS] input startStopTime capped to {input_time_range} "
-                  f"(intersection of excitations/length/ik/id)", terminal=False)
+            self._log(f"[CEINMS] input startStopTime = {input_time_range} "
+                      f"(session.yaml window, within data span)", terminal=False)
 
         try:
             _abs = lambda rel: os.path.join(self.path, rel)  # trial-relative -> absolute
@@ -5542,13 +5553,24 @@ class Analyse:
             _tdir = os.path.join(self.parentdir, _entry)
             if not os.path.isdir(_tdir):
                 continue
-            if os.path.exists(os.path.join(_tdir, _input_rel)):
-                continue                                   # input data already present
+            if os.path.exists(os.path.join(_tdir, _input_rel)) and not self.replace:
+                continue                                   # input data already present (rebuilt when replace=True)
             if not os.path.exists(os.path.join(_tdir, _ma_rel)):
                 continue                                   # no muscle analysis — unusable for calib
             try:
                 _sib = _Trial(_tdir)
                 _sib._log_tag = self._log_tag
+                # Mirror the host trial's experimental-input binding so the sibling's
+                # EMG/GRF resolve to the shared experimental/<trial>/ folder (the
+                # session-normalised emg_filtered_normalised.mot + GRF.xml), NOT the
+                # per-trial inputs/ folder — which is empty in the session-centric
+                # layout and made inputData.xml point at a non-existent ..\inputs\emg.mot.
+                if getattr(self, "experimental_dir", None):
+                    _sib.experimental_dir = os.path.join(
+                        os.path.dirname(self.experimental_dir), _entry)
+                    if getattr(self, "_session_setup_dir", None):
+                        _sib._session_setup_dir = self._session_setup_dir
+                    _sib._apply_inputs_layout()
                 _sib.create_ceinms_input_data()
                 self._log(f"[Info] CEINMS: built input data for calibration trial '{_entry}'")
             except Exception as _e:
@@ -5667,7 +5689,7 @@ class Analyse:
             _inp = os.path.join(self.path, self._layout_paths()['ceinms_input_data'])
         except Exception:
             _inp = os.path.join(self.path, "ceinms", "inputData.xml")
-        if not os.path.exists(_inp):
+        if not os.path.exists(_inp) or self.replace:
             self.create_ceinms_input_data()
         else:
             self._log("inputData.xml already present (from CEINMS setup) — reusing", terminal=True)
