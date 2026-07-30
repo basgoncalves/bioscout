@@ -2,3 +2,4 @@ recursive-include bioscout/utils/ceinms *.exe *.dll *.txt
 recursive-include bioscout/config *.yaml *.xml
 recursive-include bioscout/setup_files *.xml *.txt
 recursive-include bioscout/models *.osim *.txt
+recursive-include bioscout/tps_personalise *.xml *.yaml *.md

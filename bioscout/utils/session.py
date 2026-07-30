@@ -121,7 +121,8 @@ class SessionSpec:
 
     @property
     def c3d_dir(self) -> Optional[str]:
-        return os.path.join(self.path, "c3dfiles") if self.path else None
+        from .session_layout import c3d_root
+        return c3d_root(self.path) if self.path else None
 
     @property
     def models_dir(self) -> Optional[str]:
@@ -367,6 +368,12 @@ Example ``session.yaml``::
     normalisation_trials: all            # or an explicit list
     emg_map:
       EMG_Channels_EMG01_vast_lat_l: [vaslat_l, vasmed_l, vasint_l]
+      # Keys are the EXPORTED column names of inputs/emg.mot -- the c3d's ANALOG
+      # labels with '.' and spaces replaced by '_'. A session captured with
+      # 'Voltage.EMG1_vast_lat_l' therefore uses 'Voltage_EMG1_vast_lat_l'.
+      # Since 2.4.1 this map is authoritative for the session's trials and
+      # overrides settings.BatchSettings.emg_muscle_mapping, so two sessions
+      # with different electrode sets can live in one project.
     ceinms: {alpha: 10, beta: 1, gamma: 1000}
     trials:
       Walking_02: {type: walking, time_range: [0.10, 1.91]}
@@ -431,8 +438,7 @@ def read_session_yaml(path) -> SessionSpec:
                 break
         else:
             path = os.path.join(path, "session.yaml")
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = load_session_yaml(path)
 
     spec = SessionSpec(
         subject=str(data.get("subject", "") or ""),
@@ -699,21 +705,28 @@ def _rm_empty_inputs(trial_path):
 # ---------------------------------------------------------------------------
 # path resolver
 # ---------------------------------------------------------------------------
-# Which experimental subfolder the runners read raw inputs from. Normally
-# "experimental"; a downsample run points this at e.g. "experimental_ds10".
-_EXP_SUBDIR = "experimental"
+# Folder names are resolved through `session_layout`, which understands both the
+# numbered layout (1_c3dfiles / 2_experimental / 3_iterations/<name>) and the
+# older flat one, preferring whatever exists on disk. Never join these names by
+# hand — that is what keeps the two layouts from drifting apart.
+from . import session_layout as _layout
+
+# Which experimental subfolder the runners read raw inputs from. Normally the
+# session's own (1_/2_-numbered or plain); a downsample run points this at e.g.
+# "experimental_ds10", which is then used verbatim.
+_EXP_SUBDIR = None
 
 def experimental_dir(session_dir, trial):
-    return os.path.join(session_dir, _EXP_SUBDIR, trial)
+    return os.path.join(_layout.experimental_root(session_dir, _EXP_SUBDIR), trial)
 
 def c3d_path(session_dir, trial):
-    return os.path.join(session_dir, "c3dfiles", f"{trial}.c3d")
+    return os.path.join(_layout.c3d_root(session_dir), f"{trial}.c3d")
 
 def iteration_dir(session_dir, iteration):
-    return os.path.join(session_dir, iteration)
+    return _layout.iteration_path(session_dir, iteration)
 
 def derived_trial_dir(session_dir, iteration, trial):
-    return os.path.join(session_dir, iteration, trial)
+    return os.path.join(_layout.iteration_path(session_dir, iteration), trial)
 
 # RAW input attribute -> filename in experimental/<trial>/. These are the
 # model-INDEPENDENT files; everything else an Analyse writes is derived output.
@@ -767,6 +780,74 @@ def resolve_session_model(name, session_dir, project_dir):
         if os.path.exists(cand):
             return cand
     return os.path.join(session_dir, name)
+
+
+try:                                     # available whenever pyyaml is
+    from yaml import SafeLoader as _yaml_SafeLoader, resolver as _yaml_resolver
+except Exception:                        # pyyaml optional -> _require_yaml() reports it
+    _yaml_SafeLoader, _yaml_resolver = object, None
+
+
+class _StrictLoader(_yaml_SafeLoader):
+    """SafeLoader that refuses duplicate mapping keys.
+
+    PyYAML's default silently keeps the LAST value for a repeated key. In a
+    session.yaml that means two iterations called `gpk` collapse into one with
+    no warning — the first block's generic model, colour and CEINMS settings
+    just vanish, and the run looks fine. This turns that into an error naming
+    the key and the line.
+    """
+
+
+def _no_duplicate_keys(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            mark = key_node.start_mark
+            raise ValueError(
+                f"duplicate key {key!r} in {mark.name} at line {mark.line + 1}. "
+                "YAML would silently keep only the last one — rename or merge "
+                "the entries."
+            )
+        mapping[key] = True
+    return _yaml_SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+_StrictLoader.add_constructor(
+    _yaml_resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys
+)
+
+
+def load_session_yaml(path):
+    """Parse a session.yaml, rejecting duplicate keys and colliding iterations.
+
+    Two failure modes YAML itself will not catch:
+      * a repeated key (two `gpk:` blocks) — silently last-wins;
+      * iteration names differing only by case (`GPK` and `gpk`) — distinct in
+        YAML but the same folder on Windows, so they overwrite each other's
+        results.
+    """
+    _require_yaml()
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.load(f, Loader=_StrictLoader) or {}
+    _check_iteration_names(data, path)
+    return data
+
+
+def _check_iteration_names(data, path):
+    names = list((data or {}).get("iterations") or {})
+    seen = {}
+    for n in names:
+        key = str(n).strip().lower()
+        if key in seen:
+            raise ValueError(
+                f"iterations {seen[key]!r} and {n!r} in {path} differ only by "
+                "case or whitespace — on Windows they are the same folder and "
+                "would overwrite each other. Give them distinct names."
+            )
+        seen[key] = n
+    return names
 
 
 def first_frames_range(exp_dir, frames):
@@ -904,7 +985,8 @@ def _decimate_trc(src, dst, factor):
 __all__ = ["summarise_session",
            "grf_events_cropped", "downsample_experimental",
            "bind_experimental", "experimental_dir", "iteration_dir",
-           "derived_trial_dir", "c3d_path", "resolve_generic", "resolve_session_model"]
+           "derived_trial_dir", "c3d_path", "resolve_generic", "resolve_session_model",
+           "load_session_yaml"]
 
 
 # =========================================================================
@@ -1161,8 +1243,7 @@ class Iteration:
             import yaml
         except Exception:
             return {}
-        with open(path, errors="replace") as f:
-            return yaml.safe_load(f) or {}
+        return load_session_yaml(path)
 
     @staticmethod
     def _resolve_setup_dir():
@@ -1182,7 +1263,7 @@ class Iteration:
     # -- navigation ---------------------------------------------------------
     @property
     def path(self):
-        return os.path.join(self.session_dir, self.iteration)
+        return _layout.iteration_path(self.session_dir, self.iteration)
 
     @property
     def label(self):
@@ -1334,6 +1415,12 @@ class Iteration:
             cfg["trial_type"] = str(meta["type"])
         if self._cfg.get("body_mass") is not None:
             cfg["body_mass"] = self._cfg["body_mass"]
+        # Channel -> muscles for THIS session's electrode set. Sessions captured
+        # months apart label and place channels differently, so the session file
+        # outranks the project-wide settings.BatchSettings.emg_muscle_mapping.
+        _em = self._cfg.get("emg_map", self._cfg.get("emg_muscle_mapping"))
+        if _em:
+            cfg["emg_map"] = {str(k): list(v) for k, v in dict(_em).items()}
         for k in ("alpha", "beta", "gamma"):
             if ce.get(k) is not None:
                 cfg[k] = ce[k]
@@ -1415,14 +1502,19 @@ class Iteration:
         squats = [t for t in here if "squat" in t.lower()]
         return squats or here
 
-    def ingest_c3d(self, source=None, dry_run=False):
+    def ingest_c3d(self, source=None, dry_run=False, trials=None):
         """Distribute loose ``*.c3d`` into per-trial ``<trial>/inputs/c3dfile.c3d``
-        under this iteration. ``source`` defaults to the session folder."""
+        under this iteration. ``source`` defaults to the session folder. ``trials``
+        (name or list) restricts distribution to those c3d (matched by file stem), so
+        only the selected trials' folders are touched; default: every loose ``*.c3d``."""
         import shutil
         src = source or self.session_dir
+        _tset = ({trials} if isinstance(trials, str) else set(trials)) if trials else None
         made = []
         for c in sorted(glob.glob(os.path.join(src, "*.c3d"))):
             stem = os.path.splitext(os.path.basename(c))[0]
+            if _tset is not None and stem not in _tset:
+                continue
             dst = os.path.join(self.path, stem, "inputs", "c3dfile.c3d")
             if os.path.exists(dst):
                 continue
@@ -1435,14 +1527,18 @@ class Iteration:
               f"{len(made)} c3d -> trial folders")
         return made
 
-    def run_emg_normalise(self, replace=None):
-        """Session-wide EMG normalisation: per-channel session-max (MVC-style),
-        writing each trial's inputs/emg_filtered_normalised.mot in [0, 1]."""
+    def run_emg_normalise(self, replace=None, write_trials=None):
+        """Session-wide EMG normalisation. The per-channel session-max (MVC-style)
+        reference is computed across ALL of the session's trials; then each written
+        trial's inputs/emg_filtered_normalised.mot is scaled into [0, 1]. ``write_trials``
+        (name or list) restricts which trials have their normalised file (re)written
+        and their ``replace`` flag touched — the MVC reference STILL spans every trial.
+        Default: write all."""
         from bioscout import utils as _u
+        _wset = ({write_trials} if isinstance(write_trials, str)
+                 else set(write_trials)) if write_trials else None
         envelopes = {}
         for t in self.trials:
-            if replace is not None:
-                t.update_trial_attribute("replace", replace)
             try:
                 env = t._emg_envelope()
             except Exception as e:
@@ -1470,6 +1566,10 @@ class Iteration:
         done = []
         chans_sorted = sorted(chans)      # canonical EMG order for CEINMS
         for t, env in envelopes.items():
+            if _wset is not None and os.path.basename(t.path) not in _wset:
+                continue                  # reference-only: feeds session-max, not (re)written
+            if replace is not None:
+                t.update_trial_attribute("replace", replace)
             out = env[['time']].copy()
             for c in chans_sorted:
                 if c in env:
@@ -1494,8 +1594,8 @@ class Iteration:
         return done
 
     # clean alias
-    def normalise_emg(self, replace=None):
-        return self.run_emg_normalise(replace=replace)
+    def normalise_emg(self, replace=None, write_trials=None):
+        return self.run_emg_normalise(replace=replace, write_trials=write_trials)
 
     def run_ceinms_calibration(self, replace=None, prefer_trial=None):
         """Calibrate CEINMS once for THIS session, driven off the first
@@ -1620,7 +1720,8 @@ class Iteration:
         it = (self._cfg.get("iterations") or {}).get(self.iteration) or {}
         generic = self._resolve_model_file(it.get("generic"))
         if not generic or not os.path.exists(generic):
-            print(f"[Session] {self.label}: generic model not found: {it.get('generic')!r}")
+            print(f"[Session] [ERROR] {self.label}: generic model not found: "
+                  f"{it.get('generic')!r} — nothing downstream can run.")
             return None
         trc = os.path.join(experimental_dir(self.session_dir, static_trial),
                            "marker_experimental.trc")
@@ -1630,7 +1731,13 @@ class Iteration:
             except Exception as e:
                 print(f"[Session] {self.label}: static export failed: {e}")
         if not os.path.exists(trc):
-            print(f"[Session] {self.label}: static TRC not found: {trc}")
+            print(f"[Session] [ERROR] {self.label}: static TRC not found: {trc}\n"
+                  f"[Session]         Export the static trial FIRST — it is usually "
+                  f"absent from the analysis trial list:\n"
+                  f"[Session]         Session.export(trials=['{static_trial}'] + TRIALS, "
+                  f"export_src=<abs 1_c3dfiles>)\n"
+                  f"[Session]         Without a scaled model, IK/MA/SO/CEINMS will all "
+                  f"fail for every trial.")
             return None
 
         markerset = self._resolve_model_file(self._cfg.get("markerset"))
@@ -1697,6 +1804,13 @@ class Iteration:
             src = produced if os.path.exists(produced) else base
             if os.path.abspath(src) != os.path.abspath(so_path):
                 shutil.copyfile(src, so_path)
+            # drop the raw increase_isometric_force byproduct — the SO model is so_path
+            if (os.path.exists(produced)
+                    and os.path.abspath(produced) != os.path.abspath(so_path)):
+                try:
+                    os.remove(produced)
+                except OSError:
+                    pass
         else:                                   # no boost: SO model == CEINMS/base
             so_path = ceinms_path if os.path.exists(ceinms_path) else base
             so_name = os.path.basename(so_path)
@@ -1706,11 +1820,48 @@ class Iteration:
         print(f"   SO (mvic x{mvic_factor:.2f}): {os.path.abspath(so_path)}")
         return so_path
 
+    def export_trials(self, trials=None, export_src=None, *,
+                      replace=False, normalise=True, log=print):
+        """Model-INDEPENDENT c3d export for this session's trials: ingest loose c3d ->
+        markers/GRF/EMG into the SHARED ``experimental/<trial>/`` folder, filter EMG,
+        then (``normalise``) run the session-wide EMG normalise. The raw inputs are
+        shared by every iteration, so this writes ONCE regardless of which iteration
+        anchors it — prefer :meth:`Session.export` over per-iteration ``run(export=True)``.
+        Returns the list of trials exported."""
+        names = ([trials] if isinstance(trials, str)
+                 else list(trials)) if trials else self._trial_names()
+        if export_src:
+            self.ingest_c3d(source=export_src, trials=names)
+        done = []
+        for tn in names:
+            try:
+                t = self.trial(tn)
+                t.export_c3d()
+                os.chdir(t.path)
+                tr = t.get_time_range()
+                if tr:
+                    t.time_range = tr
+                    t.update_trial_attribute('time_range', tr)
+                try:
+                    t.run_emg_filter()
+                except Exception as ee:
+                    log(f"  [export] EMG filter warn {tn}: {ee}")
+                done.append(tn)
+                log(f"  [export ok] {tn}")
+            except Exception as e:
+                log(f"  [export ERROR] {tn}: {e}")
+        if normalise:
+            try:
+                self.run_emg_normalise(replace=replace, write_trials=names)
+            except Exception as e:
+                log(f"  [emg normalise ERROR]: {e}")
+        return done
+
     def run(self, trials=None,
             export=False, export_src=None, *,
             do_scale=False,
             do_exbiomec=False,
-            do_muscle_analsysis=False,
+            do_muscle_analysis=False,
             do_so=False,
             do_ceinms=False,
             calibrate=False, calibration_trials=None,
@@ -1725,8 +1876,12 @@ class Iteration:
           export      : (re)build inputs from c3d + refresh window + filter EMG,
                         then session-wide EMG normalise. ``export_src`` first
                         distributes loose ``*.c3d`` into each trial's inputs/.
-          do_exbiomec : external biomechanics only (IK -> ID -> muscle analysis).
-          do_so       : SO stage (IK -> ID -> MA -> SO -> muscle moments -> JRA).
+          do_exbiomec : external biomechanics only (IK -> ID). Muscle Analysis
+                        is its own stage — see ``do_muscle_analysis``.
+          do_muscle_analysis : Muscle Analysis (muscle lengths + moment arms).
+                        Required by ``do_so``; when do_so runs without it, any
+                        missing MA output is filled in without overwriting.
+          do_so       : SO stage (SO -> muscle moments -> JRA), needs IK/ID/MA.
           do_ceinms   : CEINMS calibration (once) + per-trial execution -> JRA.
 
         ``replace`` overwrites existing outputs. ``trials`` defaults to all trials.
@@ -1736,6 +1891,13 @@ class Iteration:
         keyword arguments are ignored (forward-compat). Returns a dict of trials
         that completed each stage.
         """
+        # Back-compat: this parameter was misspelled `do_muscle_analsysis` until
+        # 2.0.1. Because unknown kwargs land in **_ignored, callers passing the
+        # *correct* spelling were silently ignored — the flag never did anything.
+        # Accept the old spelling explicitly so both work and neither is dropped.
+        if "do_muscle_analsysis" in _ignored:
+            do_muscle_analysis = _ignored.pop("do_muscle_analsysis")
+
         if skip_done is None:
             skip_done = not replace
         if do_scale:
@@ -1756,9 +1918,11 @@ class Iteration:
             pass
         names = ([trials] if isinstance(trials, str)
                  else list(trials)) if trials else self._trial_names()
-        res = {"export": [], "exbiomec": [], "so": [], "ceinms": [], "skipped": []}
+        res = {"export": [], "exbiomec": [], "muscle_analysis": [], "so": [],
+               "ceinms": [], "skipped": []}
         log(f"=== {self.label}  trials={names}  export={export} exbiomec={do_exbiomec} "
-            f"so={do_so} ceinms={do_ceinms} replace={replace} ===")
+            f"ma={do_muscle_analysis} so={do_so} ceinms={do_ceinms} "
+            f"replace={replace} ===")
 
         # -- Preflight: drop "ghost" trials with no raw experimental inputs. The
         # marker TRC is the fundamental input every stage (IK/ID/MA/SO/CEINMS)
@@ -1796,33 +1960,30 @@ class Iteration:
 
         if export:
             _stage("C3D export -> EMG filter -> session EMG normalise", trials=names)
-            if export_src:
-                self.ingest_c3d(source=export_src)
-            for tn in names:
-                try:
-                    t = self.trial(tn)
-                    t.export_c3d()
-                    os.chdir(t.path)
-                    tr = t.get_time_range()
-                    if tr:
-                        t.time_range = tr
-                        t.update_trial_attribute('time_range', tr)
-                    try:
-                        t.run_emg_filter()
-                    except Exception as ee:
-                        log(f"  [export] EMG filter warn {tn}: {ee}")
-                    res["export"].append(tn)
-                    log(f"  [export ok] {tn}")
-                except Exception as e:
-                    log(f"  [export ERROR] {tn}: {e}")
+            res["export"] = self.export_trials(names, export_src=export_src,
+                                               replace=replace, log=log)
+
+        def _close_figs():
+            """Drop every pyplot figure created by the last trial.
+
+            pyplot keeps a global registry, so a figure that is savefig'd but
+            never closed is retained for the life of the process. Ten plotting
+            helpers in analysis/openSim/ceinms savefig without closing, and a
+            full 6-iteration run writes ~1600 figures — measured at ~22 MB of
+            retained memory each, i.e. gigabytes, which is what makes a long run
+            crawl. Closing at the trial boundary bounds it regardless of which
+            helper leaked. Figures stay usable after close; nothing in the batch
+            path reads them back.
+            """
             try:
-                self.run_emg_normalise(replace=replace)
-            except Exception as e:
-                log(f"  [emg normalise ERROR]: {e}")
+                import matplotlib.pyplot as _plt
+                _plt.close("all")
+            except Exception:
+                pass
 
         def _exbio(t, force=None):
             # ``force`` overrides ``replace``: prerequisite runs (before SO/CEINMS)
-            # pass force=False so IK/ID/MA are only computed when MISSING and are
+            # pass force=False so IK/ID are only computed when MISSING and are
             # reused otherwise — ``replace`` overwrites only the requested stage.
             from bioscout.utils.analysis import Analyse
             _r = replace if force is None else force
@@ -1875,32 +2036,34 @@ class Iteration:
                 f"grf={_b('setup_grf')}  time_range={tr}")
 
         if do_exbiomec:
-            _stage("External biomechanics (IK -> ID -> Muscle Analysis)",
+            _stage("External biomechanics (IK -> ID)",
                    trials=names,
                    model=_itc.get("so_model") or _itc.get("ceinms_model") or "scaled.osim")
             for tn in names:
                 try:
-                    log(f"  [exbiomec] {tn} — running (IK -> ID -> MA) ...")
+                    log(f"  [exbiomec] {tn} — running (IK -> ID) ...")
                     _t = self.trial(tn)
                     _log_inputs(tn, _t, "exbiomec")
                     _exbio(_t)
                     res["exbiomec"].append(tn)
                     log(f"  [exbiomec ok] {tn}")
+                    _close_figs()
                 except Exception as e:
                     log(f"  [exbiomec ERROR] {tn}: {e}")
 
-        if do_muscle_analsysis:
+        if do_muscle_analysis:
             _stage("Muscle Analysis",
                    trials=names,
                    model=_itc.get("so_model") or _itc.get("ceinms_model") or "scaled.osim")
             for tn in names:
                 try:
-                    log(f"  [MA] {tn} — running (IK -> ID -> MA) ...")
+                    log(f"  [MA] {tn} — running (Muscle Analysis) ...")
                     t = self.trial(tn)
                     _log_inputs(tn, t, "MA")
-                    t.run_ma()
-                    res["exbiomec"].append(tn)
+                    t.run_ma(replace=replace)
+                    res["muscle_analysis"].append(tn)
                     log(f"  [MA ok] {tn}")
+                    _close_figs()
                 except Exception as e:
                     log(f"  [MA ERROR] {tn}: {e}")
 
@@ -1913,12 +2076,17 @@ class Iteration:
                     t = self.trial(tn)
                     _log_inputs(tn, t, "SO")
                     if not do_exbiomec:
-                        _exbio(t, force=False)      # reuse existing IK/ID/MA; only fill gaps
+                        _exbio(t, force=False)      # reuse existing IK/ID; only fill gaps
+                    if not do_muscle_analysis:
+                        # SO's muscle moments need moment arms, and exbiomec no
+                        # longer produces them — fill the gap without overwriting.
+                        t.run_ma(replace=False)
                     t.run_so(replace=replace)
                     t.calculate_muscle_moments(forces_type="so")
                     t.run_jra(replace=replace)
                     res["so"].append(tn)
                     log(f"  [SO ok] {tn}")
+                    _close_figs()
                 except Exception as e:
                     log(f"  [SO ERROR] {tn}: {e}")
 
@@ -1934,11 +2102,17 @@ class Iteration:
                         try:
                             ct = self.trial(cn)
                             ma_len = os.path.join(ct.path, ct.ma, "_MuscleAnalysis_Length.sto")
-                            if not os.path.exists(ma_len):     # only compute if missing — reuse existing
-                                log(f"  [CEINMS prep] muscle analysis for calibration trial {cn}")
-                                ct.run_ik(replace=False)
-                                ct.run_id(replace=False)
-                                ct.run_ma(replace=False)
+                            # Recompute IK->ID->MA when MISSING or when replace. Never reuse
+                            # a stale IK/ID that was solved over a DIFFERENT window than MA:
+                            # the CEINMS inputData window then inherits the stale IK/ID span,
+                            # which has no muscle-length data, and calibration dies SILENTLY
+                            # (reads inputs, writes no subjectCalibrated.xml). Keep all three
+                            # consistent over the trial's current window.
+                            if replace or not os.path.exists(ma_len):
+                                log(f"  [CEINMS prep] IK->ID->MA for calibration trial {cn}")
+                                ct.run_ik(replace=replace)
+                                ct.run_id(replace=replace)
+                                ct.run_ma(replace=replace)
                         except Exception as e:
                             log(f"  [CEINMS prep ERROR] {cn}: {e}")
                     log(f"  [CEINMS] calibrating (trials={calibration_trials or cal}) — slow ...")
@@ -1964,6 +2138,7 @@ class Iteration:
                         t.run_jra_ceinms(replace=replace)
                         res["ceinms"].append(tn)
                         log(f"  [CEINMS ok] {tn}")
+                        _close_figs()
                     except Exception as e:
                         log(f"  [CEINMS ERROR] {tn}: {e}")
             except Exception as e:
@@ -2033,8 +2208,9 @@ class Session:
         _bootstrap_project(session_dir, os.path.basename(session_dir), project_dir, verbose)
         return cls(session_dir)
 
-    # session-level folders that are NOT model iterations
-    _NON_ITERATION_DIRS = {"experimental", "logs"}
+    # session-level folders that are NOT model iterations (shared inputs, raw c3d,
+    # outputs, logs) — never treated, anchored on, or run as a model.
+    _NON_ITERATION_DIRS = _layout.NON_ITERATION_DIRS
 
     @property
     def iterations(self):
@@ -2042,16 +2218,25 @@ class Session:
         with any ``session.yaml`` ``iterations`` keys — excluding shared dirs
         (``experimental``, ``logs``) and dotfiles. ``session.yaml`` need not list
         every iteration; the folders do."""
-        on_disk = {d for d in os.listdir(self.session_dir)
-                   if os.path.isdir(os.path.join(self.session_dir, d))
-                   and d not in self._NON_ITERATION_DIRS and not d.startswith(".")}
+        root = _layout.iterations_root(self.session_dir)
+        on_disk = {d for d in os.listdir(root)
+                   if os.path.isdir(os.path.join(root, d))
+                   and d not in self._NON_ITERATION_DIRS and not d.startswith(".")
+                   and "_backup_" not in d}
+        # A half-migrated session may still have iterations directly under the
+        # session folder; pick those up too rather than silently losing them.
+        if root != self.session_dir:
+            on_disk |= {d for d in os.listdir(self.session_dir)
+                        if os.path.isdir(os.path.join(self.session_dir, d))
+                        and d not in self._NON_ITERATION_DIRS
+                        and not d.startswith(".") and "_backup_" not in d}
         cfg = {it for it in (self._cfg.get("iterations") or {})
-               if os.path.isdir(os.path.join(self.session_dir, it))}
+               if os.path.isdir(_layout.iteration_path(self.session_dir, it))}
         return sorted(on_disk | cfg)
 
     def iteration(self, name):
         """Return the runnable :class:`Iteration` for model ``name``."""
-        if not os.path.isdir(os.path.join(self.session_dir, name)):
+        if not os.path.isdir(_layout.iteration_path(self.session_dir, name)):
             raise FileNotFoundError(
                 f"iteration {name!r} not found under {self.session_dir}. "
                 f"available: {self.iterations}")
@@ -2072,6 +2257,25 @@ class Session:
         for name in (iterations or self.iterations):
             out[name] = self.iteration(name).run(do_scale=do_scale, **kw)
         return out
+
+    def export(self, trials=None, export_src=None, *, replace=False, normalise=True):
+        """Session-level c3d export, done ONCE. The raw markers/GRF/EMG are model-
+        INDEPENDENT and shared by every iteration (they live in ``experimental/<trial>/``),
+        so exporting per-iteration just repeats identical work. This ingests loose c3d
+        -> markers/GRF/EMG -> filters EMG -> runs the session-wide EMG normalise, once.
+        Prefer this over per-iteration ``run(export=True)``::
+
+            s = Session.open(path)
+            s.export(trials=["Deadlift_35kg_01", "Deadlift_35kg_02"], export_src="c3dfiles")
+            for name in ("cateli", "gpk"):
+                s.iteration(name).run(trials=[...], do_ceinms=True, calibrate=False)
+        """
+        its = self.iterations
+        if not its:
+            print(f"[Session] {self.name}: no iterations to anchor the export.")
+            return []
+        return self.iteration(its[0]).export_trials(
+            trials=trials, export_src=export_src, replace=replace, normalise=normalise)
 
     def scale_model(self, iterations=None, **kw):
         """Convenience: scale EVERY iteration's model (scaling only, no analysis).
@@ -2115,7 +2319,7 @@ class Session:
                             ["hip_flexion_r", "knee_angle_r", "ankle_angle_r"]) if d.endswith("_" + leg) or d.startswith("pelvis")]
         joints = list(getattr(ss, "joints", None) or ["hip", "knee", "ankle"])
         iters = [m for m in (iterations or self.iterations)
-                 if os.path.isdir(os.path.join(self.session_dir, m))]
+                 if os.path.isdir(_layout.iteration_path(self.session_dir, m))]
         names = ([trials] if isinstance(trials, str) else list(trials)) if trials else self._trial_names()
         icfg = (self._cfg.get("iterations") or {})
         color = {m: (icfg.get(m, {}) or {}).get("color", None) for m in iters}
@@ -2131,7 +2335,7 @@ class Session:
             types.setdefault(re.sub(r"_\d+$", "", tn), []).append(tn)
 
         def _load(model, trial, rel):
-            p = os.path.join(self.session_dir, model, trial, rel)
+            p = os.path.join(_layout.iteration_path(self.session_dir, model), trial, rel)
             try:
                 return _u.load_any_data_file(p) if os.path.exists(p) else None
             except Exception:
@@ -2283,6 +2487,98 @@ class Session:
                 res = {"error": str(e)}
             results.setdefault(subj_name, {})[sess_name] = res
         return results
+
+    # -- prune legacy per-iteration inputs/ --------------------------------
+    #: Raw files that belong in the shared experimental folder, not per model.
+    _LEGACY_INPUT_FILES = {
+        "c3dfile.c3d", "marker_experimental.trc", "grf.mot", "GRF.xml",
+        "emg.mot", "analog.csv", "emg_filtered.mot",
+        "emg_filtered_normalised.mot",
+    }
+
+    def prune_legacy_inputs(self, iterations=None, trials=None, *,
+                            dry_run=True, archive_dir=None, verbose=True):
+        """Remove pre-YAML ``<iteration>/<trial>/inputs/`` folders.
+
+        Before the session-centric layout, every model iteration kept its own
+        copy of the raw inputs under ``<iteration>/<trial>/inputs/``. They are
+        now exported once into the shared experimental folder, so those copies
+        are dead weight — but nothing ever deleted them, so old sessions carry
+        hundreds of MB of duplicated c3d/trc/GRF/EMG per model.
+
+        This is the opposite of :meth:`reset`, which *keeps* ``inputs/`` and
+        deletes derived output. Use ``reset`` to re-run a trial from its raw
+        inputs; use this once, after migrating, to drop the raw inputs a
+        migrated session no longer reads.
+
+        **Safety.** A trial's ``inputs/`` is only removed when the shared
+        experimental folder for that trial actually exists and holds the marker
+        TRC — so this can never delete the last copy of something. Trials that
+        fail the check are reported and left alone. Note that a legacy
+        ``inputs/`` file is not necessarily byte-identical to the shared one
+        (it may be an earlier export), so this discards an older version rather
+        than a duplicate: pass ``archive_dir`` to move them aside instead of
+        deleting.
+
+        Defaults to ``dry_run=True`` — call it once to see the report, then
+        again with ``dry_run=False``.
+
+        Returns ``{"removed", "kept", "bytes", "skipped"}``.
+        """
+        import shutil
+        log = print if verbose else (lambda *a, **k: None)
+        it_scope = iterations if iterations is not None else self.iterations
+        it_scope = [it_scope] if isinstance(it_scope, str) else list(it_scope)
+        tfilter = ({trials} if isinstance(trials, str)
+                   else set(trials) if trials else None)
+        info = {"removed": [], "kept": [], "bytes": 0, "skipped": []}
+
+        for it in it_scope:
+            idir = _layout.iteration_path(self.session_dir, it)
+            if not os.path.isdir(idir):
+                continue
+            for trial in sorted(os.listdir(idir)):
+                if tfilter is not None and trial not in tfilter:
+                    continue
+                inp = os.path.join(idir, trial, "inputs")
+                if not os.path.isdir(inp):
+                    continue
+                rel = os.path.relpath(inp, self.session_dir)
+
+                # the shared copy must exist before we touch anything
+                shared = experimental_dir(self.session_dir, trial)
+                if os.listdir(inp) and not os.path.exists(
+                        os.path.join(shared, _RAW_ATTR_FILES["markers"])):
+                    info["skipped"].append(rel)
+                    log(f"[prune] SKIP {rel}: no shared export at "
+                        f"{os.path.relpath(shared, self.session_dir)} — this may "
+                        f"be the only copy")
+                    continue
+
+                size = sum(os.path.getsize(os.path.join(inp, f))
+                           for f in os.listdir(inp)
+                           if os.path.isfile(os.path.join(inp, f)))
+                info["bytes"] += size
+                info["removed"].append(rel)
+                mb = size / 1e6
+                if dry_run:
+                    log(f"[prune] would remove {rel} ({mb:.1f} MB)")
+                    continue
+                if archive_dir:
+                    dst = os.path.join(archive_dir, rel)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.move(inp, dst)
+                    log(f"[prune] archived {rel} ({mb:.1f} MB)")
+                else:
+                    shutil.rmtree(inp, ignore_errors=True)
+                    log(f"[prune] removed {rel} ({mb:.1f} MB)")
+
+        log(f"[prune] {'DRY-RUN ' if dry_run else ''}{self.name}: "
+            f"{len(info['removed'])} inputs/ folder(s) "
+            f"{'to free' if dry_run else 'freed'} {info['bytes'] / 1e6:.0f} MB"
+            + (f"; {len(info['skipped'])} skipped (no shared export)"
+               if info["skipped"] else ""))
+        return info
 
     # -- reset (strip a session back to inputs-only) ----------------------
     _TRIAL_KEEP = {"inputs", "trial_settings.xml",

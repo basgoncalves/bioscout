@@ -2237,7 +2237,7 @@ def compare_marker_locations(marker_experimental_path=None, marker_virtual_path=
 def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
                         right_foot_markers=None, left_foot_markers=None,
                         right_foot_body='calcn_r', left_foot_body='calcn_l',
-                        vert_force_threshold=10.0):
+                        vert_force_threshold=10.0, max_cop_foot_dist_mm=None):
     """
     Detect force plates from a GRF .mot file and assign each to left/right foot.
 
@@ -2468,6 +2468,13 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
         return (float(np.mean(xs)) if xs else None,
                 float(np.mean(zs)) if zs else None)
 
+    # A plate whose CoP sits farther than this (mm) from BOTH foot-marker centroids
+    # is not acting on a foot (e.g. a loaded barbell resting on a plate during a
+    # deadlift) and is dropped so it never enters GRF.xml. None/0 disables the check.
+    if max_cop_foot_dist_mm is None:
+        max_cop_foot_dist_mm = getattr(getattr(settings, 'BatchSettings', None),
+                                       'grf_max_cop_foot_dist_mm', 300.0)
+
     plate_to_body = {}
     print("  Assignment (temporal CoP<->foot distance, horizontal plane):")
     for pnum in sorted(valid.keys(), key=int):
@@ -2476,10 +2483,17 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
         pxc = find_col(ids['point_id'] + 'x')
         pzc = find_col(ids['point_id'] + 'z')
         active = np.abs(fy) > vert_force_threshold
-        if pxc is None or pzc is None or not active.any():
+        if not active.any():
+            # Empty/unused plate (never loaded above threshold) — EXCLUDE entirely.
+            # Do NOT parity-assign it to a foot: an ExternalForce with ~0 N and an
+            # undefined CoP (M/Fz -> 0/0) pollutes ID/JRA with a phantom load.
+            print(f"    Plate {pnum}: no active frames (|Fy| <= {vert_force_threshold:.0f} N) "
+                  f"— EXCLUDED (empty plate)")
+            continue
+        if pxc is None or pzc is None:
             body = right_foot_body if int(pnum) % 2 == 1 else left_foot_body
             plate_to_body[pnum] = body
-            print(f"    Plate {pnum}: incomplete data -> fallback {body}")
+            print(f"    Plate {pnum}: active but no CoP columns -> parity fallback {body}")
             continue
         px = pd.to_numeric(grf_df[pxc], errors='coerce').values
         pz = pd.to_numeric(grf_df[pzc], errors='coerce').values
@@ -2500,6 +2514,14 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
             body = right_foot_body if int(pnum) % 2 == 1 else left_foot_body
         else:
             body = right_foot_body if dR <= dL else left_foot_body
+        # Reject plates whose CoP is too far from BOTH foot centroids — not on a
+        # foot (e.g. a loaded barbell on the plate). Excluded from GRF.xml.
+        _dmin = min([d for d in (dR, dL) if np.isfinite(d)], default=np.inf)
+        if max_cop_foot_dist_mm and np.isfinite(_dmin) and _dmin > float(max_cop_foot_dist_mm):
+            print(f"    Plate {pnum}: CoP=({cx:.0f},{cz:.0f})  dR={dR:.0f}  dL={dL:.0f}  "
+                  f"-> nearest foot {_dmin:.0f} mm > {float(max_cop_foot_dist_mm):.0f} mm "
+                  f"threshold — NOT on a foot; EXCLUDED")
+            continue
         side = 'R' if body == right_foot_body else 'L'
         plate_to_body[pnum] = body
         print(f"    Plate {pnum}: CoP=({cx:.0f},{cz:.0f})  dR={dR:.0f}  dL={dL:.0f}  ->  {side} ({body})")
@@ -2512,6 +2534,7 @@ def create_grf_xml(grf_mot_path=None, output_xml_path=None,
                    right_foot_markers=None, left_foot_markers=None,
                    right_foot_body='calcn_r', left_foot_body='calcn_l',
                    vert_force_threshold=10.0,
+                   max_cop_foot_dist_mm=None,
                    filter_cutoff=6,
                    datafile=None):
     """
@@ -2616,6 +2639,7 @@ def create_grf_xml(grf_mot_path=None, output_xml_path=None,
         right_foot_body=right_foot_body,
         left_foot_body=left_foot_body,
         vert_force_threshold=vert_force_threshold,
+        max_cop_foot_dist_mm=max_cop_foot_dist_mm,
     )
 
     # ------------------------------------------------------------------ #
@@ -2832,6 +2856,12 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         _skip = set()
     _outdir = scale_setup_output_dir or os.path.dirname(scaled_model_path) or "."
     os.makedirs(_outdir, exist_ok=True)
+    # Throwaway scaling intermediates (sanitized model/markerset, ScaleTool's
+    # scale_setup.xml, the static-IK marker-registration .mot) live in a private
+    # _temp_scaling/ subfolder that is removed on success — so they never clutter the
+    # iteration folder. (Kept only if scaling raises, for debugging.)
+    _tmp = os.path.join(_outdir, "_temp_scaling")
+    os.makedirs(_tmp, exist_ok=True)
     generic_for_scaling = generic_opensim_model_path
     marker_set_for_scaling = marker_set_file
     _msd = model.updMarkerSet()
@@ -2849,11 +2879,11 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
             _msd.remove(_i)
         model.finalizeConnections()
         generic_for_scaling = os.path.join(
-            _outdir, os.path.splitext(os.path.basename(generic_opensim_model_path))[0] + "_scaleready.osim")
+            _tmp, os.path.splitext(os.path.basename(generic_opensim_model_path))[0] + "_scaleready.osim")
         model.printToXML(generic_for_scaling)
         print(f"[scale] dropped unplaceable markers from model: {[n for _, n in _drop]}")
     if marker_set_file and os.path.exists(marker_set_file):
-        _san = _sanitize_markerset_xml(marker_set_file, _skip, _outdir)
+        _san = _sanitize_markerset_xml(marker_set_file, _skip, _tmp)
         if _san:
             marker_set_for_scaling = _san
 
@@ -2886,42 +2916,35 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     modelScaler.setTimeRange(osim_time_range)
     modelScaler.setOutputModelFileName(scaled_model_path)
     modelScaler.setOutputScaleFileName(
-        os.path.join(scale_setup_output_dir, 'scale_setup.xml')
+        os.path.join(_tmp, 'scale_setup.xml')
     )
 
     # MarkerPlacer (place model markers onto static-trial markers) — toggled by
     # ``marker_placer``. Off by default (memory-heavy with 100+ markers). When
     # linear_scaling is off but this is on, it operates on the (unscaled) model —
     # the MRI case — and writes the final model to scaled_model_path.
+    # MarkerPlacer: NEVER use ScaleTool's own C++ MarkerPlacer stage — its internal
+    # IK throws a HARD SIGSEGV (uncatchable in Python, so a try/except cannot recover)
+    # on some complex models (Catelli high-hip-flexion, MRI Lerner-knee). Instead
+    # ScaleTool does DIMENSIONAL SCALING ONLY, then markers are registered by a
+    # standalone IK pass (place_markers_via_ik) — the same MarkerPlacer algorithm,
+    # done by hand, which is numerically equivalent, validates markers first, and is
+    # crash-safe.
     markerPlacer = scaleTool.getMarkerPlacer()
-    markerPlacer.setApply(bool(marker_placer))
-    if marker_placer:
-        markerPlacer.setMarkerFileName(static_trc_path)
-        markerPlacer.setTimeRange(osim_time_range)
-        markerPlacer.setOutputModelFileName(scaled_model_path)
-        markerPlacer.setOutputMarkerFileName(
-            os.path.join(scale_setup_output_dir, 'static_output.trc')
-        )
+    markerPlacer.setApply(False)
 
-    print(f"[scale] linear_scaling={bool(linear_scaling)}, marker_placer={bool(marker_placer)}")
-    try:
-        scaleTool.run()
-    except Exception as e:
-        if not marker_placer:
-            raise
-        # ScaleTool's MarkerPlacer can segfault / bad_alloc on complex models
-        # (e.g. the MRI Lerner-knee model). Fall back: produce the base model with
-        # MarkerPlacer OFF (dimensional scaling only, or copy-through), then
-        # register the markers via a normal IK pass.
-        print(f"[scale] ScaleTool MarkerPlacer failed ({e}); falling back to "
-              f"standalone IK-based marker registration.")
-        markerPlacer.setApply(False)
-        if linear_scaling:
-            scaleTool.run()                       # dimensional scaling only
-        elif os.path.abspath(generic_for_scaling) != os.path.abspath(scaled_model_path):
-            _shutil.copyfile(generic_for_scaling, scaled_model_path)
+    print(f"[scale] linear_scaling={bool(linear_scaling)}, marker_placer={bool(marker_placer)} "
+          f"(marker placement via standalone IK, not ScaleTool MarkerPlacer)")
+    if linear_scaling:
+        scaleTool.run()                           # dimensional scaling only -> scaled_model_path
+    elif os.path.abspath(generic_for_scaling) != os.path.abspath(scaled_model_path):
+        _shutil.copyfile(generic_for_scaling, scaled_model_path)   # keep geometry (MRI/TPS case)
+    if marker_placer:
         place_markers_via_ik(scaled_model_path, static_trc_path, scaled_model_path,
-                             marker_set_file=marker_set_for_scaling, time_range=(t0, t1))
+                             marker_set_file=marker_set_for_scaling, time_range=(t0, t1),
+                             work_dir=_tmp)
+    # scaling succeeded — drop the throwaway intermediates.
+    _shutil.rmtree(_tmp, ignore_errors=True)
     print(f"Scaled model saved to: {scaled_model_path}")
     
 # --- Inverse Kinematics ---
@@ -3394,7 +3417,7 @@ def _strip_trailing_nulls(osim_path):
 
 
 def place_markers_via_ik(model_path, static_trc, out_model_path,
-                         marker_set_file=None, time_range=None):
+                         marker_set_file=None, time_range=None, work_dir=None):
     """Register a model's markers to the subject's STATIC pose WITHOUT ScaleTool's
     MarkerPlacer (which segfaults / throws bad_alloc on some complex models, e.g.
     the MRI/Lerner-knee model). Standard MarkerPlacer algorithm, done by hand:
@@ -3426,7 +3449,8 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
     t1 = md.getLastFrameTime() if time_range is None else float(time_range[1])
 
     # 1) IK on the static trial
-    _mot = os.path.splitext(out_model_path)[0] + "_static_ik.mot"
+    _mot = (os.path.join(work_dir, os.path.splitext(os.path.basename(out_model_path))[0] + "_static_ik.mot")
+            if work_dir else os.path.splitext(out_model_path)[0] + "_static_ik.mot")
     ik = osim.InverseKinematicsTool()
     ik.setModel(model)
     ik.setMarkerDataFileName(static_trc)

@@ -547,6 +547,14 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_d
     analog_df = pd.DataFrame(rows, columns=analog_labels)
     analog_df.insert(0, 'time', time)
 
+    # DO NOT "fix" this to keep the c3d's absolute clock. `initial_time` above is
+    # first_frame/marker_rate, but OpenSim's C3DFileAdapter emits a RELATIVE time
+    # column, so export_markers' .trc and export_grf's grf.mot both already start
+    # at ~0 regardless of first_frame. Verified on Athlete_03 Squat_BW_01, whose
+    # c3d first_frame is 166 (= 0.83 s) yet whose marker_experimental.trc row 1 is
+    # Time 0.00000 and whose grf.mot row 1 is time 0.0. Zeroing the EMG here is
+    # what KEEPS the three in step; not zeroing it would offset EMG from
+    # kinematics by first_frame/rate (0.83 s on that trial).
     if reset_time:
         analog_df['time'] = analog_df['time'] - analog_df['time'].iloc[0]
 
@@ -565,6 +573,12 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_d
             if label.lower().__contains__(emg_str.lower()):
                 emg_indices.append(i)
                 print(f"Found EMG channel: '{label}' at index {i}")
+                # ONE index per channel. A label like 'Voltage_EMG1_vast_lat_l'
+                # matches several patterns in emg_string_list ('EMG' AND
+                # 'Voltage'); without this break the same column was appended
+                # once per match, so emg.mot got duplicated columns and
+                # write_mot's label selection returned a 2-D frame.
+                break
 
     emg_mot_path = os.path.join(output_dir, "emg.mot")
 
@@ -1041,8 +1055,8 @@ def _qc_figures(tdir):
         print(f"[export_session] {trial}: GRF figure warn — {e}")
 
 
-def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
-                   out_dirname="experimental", normalise=True):
+def export_session(session_dir, emg_string_list=None, c3d_dirname=None,
+                   out_dirname=None, normalise=True):
     """Export EVERY c3d of a session-centric session into per-trial folders.
 
     New layout (model-INDEPENDENT data, produced ONCE and shared by all model
@@ -1058,6 +1072,16 @@ def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
     (time, EMG01..EMGnn) so CEINMS pairs the excitation generator with each
     trial's excitations consistently. Returns the list of exported trial names.
     """
+    from .session_layout import c3d_root, experimental_root
+
+    # Default to whatever this session already uses — `1_c3dfiles`/`2_experimental`
+    # on a numbered session, the plain names on an older one. An explicit
+    # dirname still wins (that is how a downsample run redirects the output).
+    if c3d_dirname is None:
+        c3d_dirname = os.path.basename(c3d_root(session_dir))
+    if out_dirname is None:
+        out_dirname = os.path.basename(experimental_root(session_dir))
+
     import glob
     import numpy as np
     import pandas as pd
@@ -1092,7 +1116,8 @@ def export_session(session_dir, emg_string_list=None, c3d_dirname="c3dfiles",
                 right_foot_markers=getattr(_bs, "right_foot_markers", None),
                 left_foot_markers=getattr(_bs, "left_foot_markers", None),
                 right_foot_body="calcn_r", left_foot_body="calcn_l",
-                vert_force_threshold=10.0, filter_cutoff=6, datafile=None)
+                vert_force_threshold=10.0, filter_cutoff=6, datafile=None,
+                max_cop_foot_dist_mm=getattr(_bs, "grf_max_cop_foot_dist_mm", 300.0))
         except Exception as e:
             print(f"[export_session] {trial}: GRF.xml build warn — {type(e).__name__}: {e}")
 

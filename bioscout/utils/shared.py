@@ -68,6 +68,14 @@ def print_to_log(message, terminal=None, trial=None):
 _KEEP_MINIMAL = re.compile(
     r"(\[ERROR\]|\bERROR\b|Error:|Traceback|Exception|FAILED|\[Warning\]|"
     r"\[Success\]|\[skip\]|\[ok\]|\[pipeline\]|\[plan |\bstarting\b|\bsaved:|\[run_sessions\]|\[scale|\[CEINMS|"
+    # Maintenance commands the user invoked ON PURPOSE. Their whole output is
+    # the answer, so dropping it in "minimal" makes the command look like it
+    # did nothing at all — which is exactly how prune/reset reports vanished.
+    r"\[prune\]|\[reset\]|\[settings\]|\[tps\]|\[ma\]|"
+    # [Session]/[Iteration] carry scale_model's and export_trials' verdicts —
+    # including "static TRC not found", the one line that explains a whole run
+    # of IK/MA/SO/CEINMS failures. [export is per-trial export progress.
+    r"\[Session\]|\[Iteration\]|\[export|"
     r"\[bioscout\]|^BioScout |PIPELINE DONE|SESSIONS DONE|CEINMS-ONLY DONE|"
     r"^\s*={3,}|^\s*-{3,}\s)")
 # Progress-only markers dropped further in "quiet".
@@ -98,6 +106,7 @@ class _Tee:
     def __init__(self, *streams):
         self.streams = streams
         self._buf = ""
+        self._in_tb = False        # inside a Python traceback block (keep every line)
 
     def _emit(self, text):
         for s in self.streams:
@@ -127,6 +136,19 @@ class _Tee:
         self._buf += data
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
+            # Keep the WHOLE Python traceback (header + indented body + final error
+            # line), not just the "Traceback" header — otherwise the actual error is
+            # dropped in minimal/quiet mode and crashes are undiagnosable.
+            if "Traceback (most recent call last)" in line:
+                self._in_tb = True
+            if self._in_tb:
+                self._emit(self._stamp(line) + "\n")
+                # The block ends at the first NON-indented, non-empty line that is
+                # not the header — the exception message (e.g. "ValueError: ...").
+                if line.strip() and not line[:1].isspace() \
+                        and "Traceback (most recent call last)" not in line:
+                    self._in_tb = False
+                continue
             if _keep_line(line, level):
                 self._emit(self._stamp(line) + "\n")
 

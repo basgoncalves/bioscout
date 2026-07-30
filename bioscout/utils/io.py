@@ -140,21 +140,25 @@ def load_sto(path=None, output=0):
         print(f"Error: Could not read the file at {path}. Please check the path and try again.")
         return None
 
-    # read the file into a pandas DataFrame, skipping the header
+    # read the file into a pandas DataFrame, skipping the header. Search downward for
+    # the row holding the 'time' column. A wrong-guess header row can raise MORE than
+    # just ParserError (many-column files — e.g. a 33-col deadlift emg.mot with extra
+    # force-plate/analog channels — raise other pandas errors), so catch ANY read
+    # error and advance; otherwise a perfectly valid file is wrongly rejected as None.
+    # low_memory=False avoids mixed-type column inference on large multi-column files.
     try:
         columns = []
         offset = -3
         while 'time' not in columns:
-            try:    
-                data = pd.read_csv(path, sep=r'\s+', header=i+offset)
+            try:
+                data = pd.read_csv(path, sep=r'\s+', header=i+offset, low_memory=False)
                 columns = data.columns
-                offset += 1
-                if offset > 100:
-                    print(f"Error: Could not find 'time' column in the file {path}. Please check the file format.")
-                    return None
-            except pd.errors.ParserError:
-                offset += 1
-                
+            except Exception:
+                pass
+            offset += 1
+            if offset > 100:
+                print(f"Error: Could not find 'time' column in the file {path}. Please check the file format.")
+                return None
     except Exception as e:
         print(f"Error: Could not read the file at {path}. Please check the file format and try again.")
         print(f"Details: {e}")

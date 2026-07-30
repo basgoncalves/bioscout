@@ -23,6 +23,32 @@ except (ImportError, ValueError):
 '''
 This module contains functions for normalising EMG data, including filtering, rectification, lowpass filtering (envelope detection), and time normalisation. It also includes functions for loading and writing .sto files, as well as plotting EMG results.
 '''
+CANONICAL_EMG_PREFIX = 'EMG_Channels_EMG'
+
+
+def emg_prefix_for(columns):
+    """Prefix to hand ``filter_emg`` for these column names.
+
+    Returns ``CANONICAL_EMG_PREFIX`` when the file uses the Vicon
+    'EMG Channels.EMG01_...' naming, else '' (= every non-time column is an EMG
+    channel). Different capture sessions label the same signals differently
+    ('Voltage.EMG1_vast_lat_l' -> 'Voltage_EMG1_vast_lat_l' after export), so
+    the prefix must be detected, never assumed.
+    """
+    cols = [] if columns is None else [str(c) for c in columns]
+    return CANONICAL_EMG_PREFIX if any(
+        c.startswith(CANONICAL_EMG_PREFIX) for c in cols) else ''
+
+
+def emg_channel_columns(columns):
+    """The raw EMG channel columns among ``columns`` (no time, no derived)."""
+    pre = emg_prefix_for(columns)
+    cols = [] if columns is None else [str(c) for c in columns]
+    return [c for c in cols
+            if c.startswith(pre) and c.lower() != 'time'
+            and not c.endswith(('_rectified', '_bandpass', '_envelope'))]
+
+
 def filter_emg(data, highcut_bp=95, lowcut_bp=20, order_bp=4, lowcut_lp=6, order_lp=4, emg_prefix='EMG_Channels_EMG', sampling_freq=None):
     """
     Apply bandpass filter, rectify, and lowpass filter to EMG signals.
@@ -53,7 +79,10 @@ def filter_emg(data, highcut_bp=95, lowcut_bp=20, order_bp=4, lowcut_lp=6, order
     print(f"EMG Sampling Frequency: {sampling_freq:.1f} Hz")
 
     # List of EMG signal columns (excluding 'time' and any previously rectified/filtered columns)
-    emg_cols = [col for col in data.columns if col.startswith(emg_prefix) and not col.endswith(('_rectified', '_bandpass', '_envelope'))]
+    emg_cols = [col for col in data.columns
+                if col.startswith(emg_prefix)
+                and col.lower() != 'time'
+                and not col.endswith(('_rectified', '_bandpass', '_envelope'))]
 
     # --- 1. Bandpass Filter ---
     nyquist = 0.5 * sampling_freq

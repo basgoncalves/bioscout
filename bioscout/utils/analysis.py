@@ -330,9 +330,9 @@ class Subject:
         t = Trial(trial_path)
         if configure:
             try:
-                _parts = os.path.normpath(trial_path).split(os.sep)
+                _, _sess = subject_session_for_trial(trial_path)
                 t.subject = self.name
-                t.session = _parts[-2] if len(_parts) >= 2 else self.session
+                t.session = _sess or self.session
                 model = self.model_for(force_type)
                 if model:
                     t.update_model(model)
@@ -1147,6 +1147,33 @@ def _canonical_trial_type(s):
 # ===========================================================================
 # Analyse - per-trial OpenSim/CEINMS pipeline (moved here from utils/analyse.py).
 # ===========================================================================
+def subject_session_for_trial(trial_path):
+    """``(subject, session)`` for a trial folder, in either session layout.
+
+    Trial folders sit at::
+
+        <subject>/<session>/<iteration>/<trial>                  (flat)
+        <subject>/<session>/3_iterations/<iteration>/<trial>     (numbered)
+
+    Several call sites used to read these by fixed position (``parts[-3]``,
+    ``parts[-2]``), which picked up ``<session>/<iteration>`` in the flat
+    layout and ``3_iterations/<iteration>`` in the numbered one — wrong in
+    both, and the reason empty ``models/25_03_31/`` and ``models/3_iterations/``
+    folders appeared. Walk the structure instead.
+
+    Returns ``(None, None)`` when the path is too shallow to interpret.
+    """
+    from bioscout.utils.session_layout import ITERATIONS_DIRS
+
+    iteration_dir = os.path.dirname(os.path.normpath(trial_path))
+    parent = os.path.dirname(iteration_dir)
+    session_dir = (os.path.dirname(parent)
+                   if os.path.basename(parent) in ITERATIONS_DIRS else parent)
+    session = os.path.basename(session_dir)
+    subject = os.path.basename(os.path.dirname(session_dir))
+    return (subject or None), (session or None)
+
+
 class Analyse:
     '''
     Contains paths from the user settings and functions to implement in the OpenSim/Ceinms analysis
@@ -1221,6 +1248,35 @@ class Analyse:
         'ceinms_calibration_setup', 'ceinms_excitation_generator', 'ceinms_calibration_dir',
     )
 
+    def _legacy_model_dir(self):
+        """``MODELS_DIR/<subject>/<session>`` for the pre-YAML layout, or None.
+
+        Older projects kept each subject's scaled models under
+        ``models/<subject>/<session>/``; session-centric projects keep them in
+        the iteration folder instead. This used to be derived by slicing fixed
+        positions off the trial path::
+
+            os.path.join(MODELS_DIR, *normpath(self.path).split(os.sep)[-3:-1])
+
+        which silently produced whatever happened to sit two and three levels
+        up. In the flat layout that was ``<session>/<iteration>`` (already the
+        wrong pair — the convention is subject/session, so it created
+        ``models/<session>/``); with the numbered layout the trial sits one
+        level deeper and it became ``models/3_iterations/<iteration>/``.
+
+        Now the session folder is located structurally, and the directory is
+        only created when the project actually uses this convention — i.e.
+        ``models/<subject>/`` already exists. A session-centric project gets
+        None and nothing is created.
+        """
+        subject, session = subject_session_for_trial(self.path)
+        if not session or not subject:
+            return None
+        subject_dir = os.path.join(str(_u.MODELS_DIR), subject)
+        if not os.path.isdir(subject_dir):
+            return None                 # not this project's convention
+        return os.path.join(subject_dir, session)
+
     def __init__(self, trialPath=None):
 
         if trialPath is None:
@@ -1247,8 +1303,8 @@ class Analyse:
             self._log(f"Trial path not found: {trialPath}")
             os.makedirs(trialPath)
             self._reset_settings_xml()
-            model_dir = os.path.join(_u.MODELS_DIR, *os.path.normpath(self.path).split(os.sep)[-3:-1])
-            if not os.path.exists(model_dir):
+            model_dir = self._legacy_model_dir()
+            if model_dir and not os.path.exists(model_dir):
                 os.makedirs(model_dir)
                 self._log(f"Created model directory: {model_dir}")
             return
@@ -1276,10 +1332,12 @@ class Analyse:
             os.remove(self.settingsXML)
             self._log(f"Existing settings XML deleted: {self.settingsXML}")
         
-        path_parts = os.path.normpath(self.path).split(os.sep)
-        self.subject = path_parts[-3]
-        self.session = path_parts[-2]
-        self.trial = path_parts[-1]
+        # Layout-aware: fixed positions gave <session>/<iteration> on the flat
+        # layout and 3_iterations/<iteration> on the numbered one.
+        _subj, _sess = subject_session_for_trial(self.path)
+        self.subject = _subj
+        self.session = _sess
+        self.trial = os.path.basename(os.path.normpath(self.path))
 
         self.parentdir = os.path.dirname(self.path)
 
@@ -1724,10 +1782,9 @@ class Analyse:
         keep the configured model if present, else fall back to the base scaled
         model."""
         try:
-            parts = os.path.normpath(self.path).split(os.sep)
-            if len(parts) < 3:
+            subject, session = subject_session_for_trial(self.path)
+            if not subject or not session:
                 return
-            subject, session = parts[-3], parts[-2]
             models_dir = os.path.join(_u.MODELS_DIR, subject, session)
             avail = ([f for f in os.listdir(models_dir) if f.lower().endswith('.osim')]
                      if os.path.isdir(models_dir) else [])
@@ -1850,12 +1907,15 @@ class Analyse:
 
         try:
             if os.path.exists(self.c3d):
-                c3d_data = _u.load_any_data_file(self.c3d)
-                time_col = c3d_data['time']
-                time_vals = time_col.values.flatten().astype(float)
-                self.time_range = [float(time_vals.min()), float(time_vals.max())]
-                return self.time_range
-        except:
+                # Use the robust OpenSim C3D reader (exportC3D) for the time range.
+                # io.load_c3d's `c3d` library fails on some c3d (large analog blocks),
+                # printing a spurious "Could not read ...inputs\c3dfile.c3d" during export.
+                import exportC3D
+                _tr = exportC3D.get_time_range_from_c3d(os.path.abspath(self.c3d))
+                if _tr and len(_tr) == 2:
+                    self.time_range = [float(_tr[0]), float(_tr[1])]
+                    return self.time_range
+        except Exception:
             pass
     
     def get_trial_type(self):
@@ -2262,6 +2322,32 @@ class Analyse:
             self._log(f'Saved GRF events figure: {out}')
         return fig, ax
 
+    def inspect_moment_arms(self, dofs=None, side=None, out_dir=None, **kw):
+        """Standalone QC of the model's moment arms over THIS trial's MOTION: plots
+        each spanning muscle's moment arm vs its joint-angle coordinate over the
+        recorded pose trajectory and flags wrap discontinuities. Reads the
+        MuscleAnalysis output (run :meth:`run_ma` first) + the IK joint angles — no
+        OpenSim, no literature. This is the motion-driven counterpart to the
+        ``muscle_inspect`` model validation (which sweeps each coordinate over its
+        full ROM). Saves ``moment_arm_motion_check.png`` next to the IK, and returns
+        ``{"figure", "flagged", "dofs"}``.
+
+            it.trial('Deadlift_35kg_01').inspect_moment_arms()
+        """
+        from bioscout.muscle_inspect.moment_arm_motion import inspect_moment_arms_over_motion
+        ma_dir = os.path.join(self.path, self.ma)
+        ik = os.path.join(self.path, self.ik)
+        if not os.path.isdir(ma_dir):
+            self._log(f"[inspect_moment_arms] no muscle_analysis/ at {ma_dir} — run run_ma first.",
+                      terminal=True)
+            return None
+        if side is None:
+            _s = str(getattr(self, 'side', 'r') or 'r').lower()
+            side = '_l' if _s.startswith('l') else '_r'
+        out_dir = out_dir or os.path.join(self.path, os.path.dirname(self.ik) or "")
+        return inspect_moment_arms_over_motion(ma_dir, ik, out_dir=out_dir,
+                                               dofs=dofs, side=side, **kw)
+
     def recrop_to_events(self, redetect=False):
         """Re-derive the analysis window (start/end time) from the trial's events
         and persist it — WITHOUT re-exporting the raw inputs.
@@ -2655,7 +2741,15 @@ class Analyse:
             # so they land at the root — unchanged behaviour.)
             create_folder = False
 
-        full_range = exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list, create_folder=create_folder)
+        # Session-centric layout: the raw, model-independent inputs (markers/GRF/EMG)
+        # live ONCE under <session>/experimental/<trial>/ (self.experimental_dir) and
+        # are shared by every iteration — NOT next to the c3d. IK/ID/MA/CEINMS READ
+        # from experimental/, so export must WRITE there too (otherwise the inputs land
+        # in inputs/ and every downstream stage fails "file not found"). Falls back to
+        # next-to-the-c3d when experimental_dir is unset (flat/legacy layout).
+        _exp_out = getattr(self, "experimental_dir", None)
+        full_range = exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list,
+                                    create_folder=create_folder, output_dir=_exp_out)
 
         # --- Auto gait/task events from the vertical GRF ------------------------
         # Detect foot contacts/offs (needs the plate->foot map in GRF.xml — create
@@ -2710,13 +2804,24 @@ class Analyse:
             self.time_range = [float(t0), float(t1)]
         self._to_xml()
 
-        # Drop a GRF + events QC figure for gait trials.
+        # Drop a per-foot vertical-GRF QC figure for EVERY trial: gait trials also get
+        # foot-contact/toe-off markers; non-gait (deadlift/squat/jump) just show the
+        # force profile (feet never leave the plates). Build GRF.xml first if the export
+        # hasn't — the plate->foot map is needed for the plot AND for ID/CEINMS anyway,
+        # and it applies the CoP-distance guard (drops e.g. a barbell resting on a plate).
         _ng = len([e for e in events if e['name'] not in ('Start', 'End')])
-        if _is_gait and _ng:
-            try:
-                self.plot_grf_events()
-            except Exception as _e:
-                self._log(f'[export] grf events plot skipped: {_e}')
+        try:
+            if not os.path.exists(self.setup_grf) and os.path.exists(self.grf_mot):
+                self._get_openSim().create_grf_xml(
+                    grf_mot_path=self.grf_mot, output_xml_path=self.setup_grf,
+                    marker_trc_path=self.markers,
+                    right_foot_markers=getattr(_u.settings.BatchSettings, 'right_foot_markers', None),
+                    left_foot_markers=getattr(_u.settings.BatchSettings, 'left_foot_markers', None),
+                    right_foot_body='calcn_r', left_foot_body='calcn_l',
+                    vert_force_threshold=10.0, filter_cutoff=6, datafile=None)
+            self.plot_grf_events()
+        except Exception as _e:
+            self._log(f'[export] grf plot skipped: {_e}')
         try:
             print(f"[{self.trial}] Analysis window: {self.start_time} – {self.end_time} s "
                   f"({_ng} gait events)")
@@ -3363,11 +3468,11 @@ class Analyse:
 
             # Auto-detect prefix — use the longest common prefix of EMG columns,
             # falling back to empty string (filters all non-time columns)
-            prefix = 'EMG_Channels_EMG'
-            if not any(c.startswith(prefix) for c in emg_cols):
-                prefix = ''   # let filter_emg handle whatever names are present
+            prefix = _u.emg_normalise.emg_prefix_for(emg_cols)
 
-            filtered = _u.emg_normalise.filter_emg(data, emg_prefix=prefix, sampling_freq=fs)
+            _lp = float(getattr(_u.settings.BatchSettings, 'emg_envelope_lowpass_hz', 6.0))
+            filtered = _u.emg_normalise.filter_emg(data, emg_prefix=prefix,
+                                                   lowcut_lp=_lp, sampling_freq=fs)
             env_cols = [c for c in filtered.columns if c.endswith('_envelope')]
             if not env_cols:
                 self._log("[Warning] filter_emg produced no envelope columns — check EMG prefix")
@@ -3393,7 +3498,11 @@ class Analyse:
 
         Bandpass -> full-wave rectify -> low-pass (via emg_normalise.filter_emg),
         returning a DataFrame with ``time`` + one non-negative envelope column per
-        ``EMG_Channels_EMG*`` channel (base-named, e.g. ``EMG_Channels_EMG09_gast_med_l``).
+        raw EMG channel, base-named (e.g. ``EMG_Channels_EMG09_gast_med_l``, or
+        ``Voltage_EMG9_gast_med_l`` on a session that labels its channels that
+        way). The naming convention is DETECTED (emg_normalise.emg_prefix_for),
+        never assumed -- assuming it silently returned None and left CEINMS with
+        no excitations.
         Always reads the RAW emg.mot so it never compounds a previously
         normalised/filtered file. Returns ``None`` if no EMG is available.
         """
@@ -3410,7 +3519,7 @@ class Analyse:
         data = _u.load_any_data_file(raw)
         if data is None or 'time' not in data.columns:
             return None
-        emg_cols = [c for c in data.columns if c.startswith('EMG_Channels_EMG')]
+        emg_cols = _u.emg_normalise.emg_channel_columns(data.columns)
         if not emg_cols:
             return None
         data = data.copy()
@@ -3421,8 +3530,10 @@ class Analyse:
             fs = 1.0 / ((t[-1] - t[0]) / (n - 1))
         else:
             fs = getattr(_u.settings.BatchSettings, 'emg_sampling_freq', None) or 1000.0
-        filtered = _u.emg_normalise.filter_emg(data, emg_prefix='EMG_Channels_EMG',
-                                               sampling_freq=fs)
+        _lp = float(getattr(_u.settings.BatchSettings, 'emg_envelope_lowpass_hz', 6.0))
+        _pre = _u.emg_normalise.emg_prefix_for(data.columns)
+        filtered = _u.emg_normalise.filter_emg(data, emg_prefix=_pre,
+                                               lowcut_lp=_lp, sampling_freq=fs)
         out = filtered[['time']].copy()
         for col in [c for c in filtered.columns if c.endswith('_envelope')]:
             base = col[:-len('_envelope')]
@@ -3509,6 +3620,13 @@ class Analyse:
 
         dofNames = _u.settings.BatchSettings.dof_list
 
+        # Bound before the loop: every DOF can `continue` (no moment-arm file at
+        # all when Muscle Analysis never ran for this trial), and `return
+        # muscle_moments` below would then raise UnboundLocalError -- which reads
+        # like a bug in this function instead of "MA is missing".
+        muscle_moments = None
+        _done = []
+
         for dof_name in dofNames:
             _ma_path = os.path.join(self.path, self.ma, f"_MuscleAnalysis_MomentArm_{dof_name}.sto")
             # A DOF the model doesn't have (e.g. knee_adduction on a 1-DOF-knee
@@ -3535,8 +3653,15 @@ class Analyse:
             # save muscle moments to a new file
             moments_file_path = os.path.join(self.path, self.ma, f"_MuscleMoments_{dof_name}_{forces_type}.sto")
             _u.write_sto_file(muscle_moments, moments_file_path)
+            _done.append(dof_name)
             print(f"Muscle moments saved to: {os.path.abspath(moments_file_path)}")
 
+        if not _done:
+            raise FileNotFoundError(
+                f"[calculate_muscle_moments] no moment-arm files under "
+                f"{os.path.join(self.path, self.ma)} -- Muscle Analysis has not run "
+                f"for this trial, so muscle moments cannot be computed. Re-run with "
+                f"do_muscle_analysis=True (settings.py: DO_MA).")
         return muscle_moments
 
     #--- Valid
@@ -4257,6 +4382,14 @@ class Analyse:
                                  'kinematics_moments.png')
         fig.savefig(save_path, dpi=140)
         print(f"    kinematics+moments summary saved: {save_path}", flush=True)
+        # Drop it from pyplot's global registry. This runs once per trial per
+        # iteration; at ~22 MB retained per figure an unclosed one costs about
+        # a gigabyte per 48 trials, which is what makes long runs crawl. The
+        # returned Figure stays usable -- close() only unregisters it.
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
         return fig, axes
 
     def plot_so(self):
@@ -4359,12 +4492,24 @@ class Analyse:
             self._log(f'[Warning] SO muscle-groups plot failed: {_e}')
         return fig, axg
 
-    def _emg_reverse_map(self):
-        """{model_muscle: emg_channel} from CEINMSSettings.emg_muscle_mapping."""
+    def emg_channel_map(self):
+        """{emg_channel: [model_muscles]} for this trial.
+
+        session.yaml's ``emg_map`` (injected as ``self.emg_map`` by
+        Session._apply_session_config) wins, then CEINMSSettings, then
+        BatchSettings. The session must win: two sessions of the same study can
+        have different electrode sets and channel names.
+        """
+        own = getattr(self, 'emg_map', None)
+        if own:
+            return dict(own)
         cs = getattr(_u.settings, 'CEINMSSettings', None) or _u.settings.BatchSettings
-        mapping = (getattr(cs, 'emg_muscle_mapping', None)
-                   or getattr(_u.settings.BatchSettings, 'emg_muscle_mapping', {}) or {})
-        return {mu: ch for ch, mus in mapping.items() for mu in mus}
+        return dict((getattr(cs, 'emg_muscle_mapping', None)
+                     or getattr(_u.settings.BatchSettings, 'emg_muscle_mapping', {}) or {}))
+
+    def _emg_reverse_map(self):
+        """{model_muscle: emg_channel} from :meth:`emg_channel_map`."""
+        return {mu: ch for ch, mus in self.emg_channel_map().items() for mu in mus}
 
     def _plot_muscle_groups(self, sources, emg_df, out_path, title):
         """Per muscle-GROUP panel (settings.BatchSettings.MUSCLE_GROUPS).
@@ -5309,7 +5454,8 @@ class Analyse:
         try:
             _u.ceinms.create_excitation_generator(osim_model_path=self.model_dir,
                                                emg_path=self.ceinms_excitations,
-                                               save_path=self.ceinms_excitation_generator
+                                               save_path=self.ceinms_excitation_generator,
+                                               mapping=self.emg_channel_map()
             )
             self._log(f'[Success] CEINMS excitation generator created: {_abs_eg}', terminal=True)
         except Exception as e:
@@ -5796,9 +5942,7 @@ class Analyse:
         except Exception:
             so, ts = None, None
 
-        cs = getattr(_u.settings, 'CEINMSSettings', None) or _u.settings.BatchSettings
-        mapping = getattr(cs, 'emg_muscle_mapping', None) \
-            or getattr(_u.settings.BatchSettings, 'emg_muscle_mapping', {})
+        mapping = self.emg_channel_map()
         chans = [c for c in mapping if c in emg.columns]
         if not chans:
             self._log('[plot_ceinms_emg_activations] no mapped EMG channels found.')
@@ -5826,7 +5970,9 @@ class Analyse:
                     a.plot(ts, y, color=_c_so, lw=0.6, alpha=0.3, zorder=1)
                 if sos:
                     a.plot(ts, np.mean(sos, axis=0), color=_c_so, lw=2.0, zorder=3)
-            label = re.sub(r'^EMG_Channels_EMG\d+_', '', str(ch))
+            # 'EMG_Channels_EMG09_gast_med_l' and 'Voltage_EMG9_gast_med_l'
+            # both -> 'gast_med_l'
+            label = re.sub(r'^.*?EMG_?\d+_', '', str(ch))
             a.set_title(label, fontsize=8, pad=11)
             a.text(0.5, 1.005, f"({len(muses)} muscles)", transform=a.transAxes,
                    ha='center', va='bottom', fontsize=6.3, color='0.35')

@@ -104,7 +104,25 @@ def _run_all(rest):
     print(f"[all] done -> {out}")
 
 
-_INLINE = {"fibre": _run_fibre, "strength": _run_strength, "all": _run_all}
+def _run_motion(rest):
+    """Moment-arm QC over the trial MOTION (moment arm vs joint angle, flags wrap
+    discontinuities). Uses an existing muscle_analysis/ folder + IK — no OpenSim."""
+    from . import moment_arm_motion as M
+    p = argparse.ArgumentParser(prog="muscle_inspect motion")
+    p.add_argument("--ma", required=True, help="muscle_analysis/ folder with _MuscleAnalysis_MomentArm_*.sto")
+    p.add_argument("--ik", required=True, help="IK joint_angles.mot (supplies the joint-angle x-axis)")
+    p.add_argument("--out", default=None, help="output dir (default: alongside --ma)")
+    p.add_argument("--side", default="_r")
+    p.add_argument("--min-ma-mm", type=float, default=3.0, help="only muscles with peak |MA| above this (mm)")
+    p.add_argument("--min-jump-mm", type=float, default=1.0, help="discontinuity sensitivity (mm)")
+    a = p.parse_args(rest)
+    r = M.inspect_moment_arms_over_motion(a.ma, a.ik, out_dir=a.out, side=a.side,
+                                          min_ma_mm=a.min_ma_mm, min_jump_mm=a.min_jump_mm)
+    print(f"moment-arm motion check -> {r['figure']}  ({len(r['flagged'])} discontinuit(ies) flagged)")
+
+
+_INLINE = {"fibre": _run_fibre, "strength": _run_strength, "all": _run_all,
+           "motion": _run_motion}
 
 
 def main():

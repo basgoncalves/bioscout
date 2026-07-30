@@ -205,7 +205,8 @@ def create_ceinms_model(osimModelPath=None, outputCEINMSModelPath=None, DOFs: li
 
     print(f"CEINMS subject file created: {outputCEINMSModelPath}")
 
-def create_excitation_generator(osim_model_path=None, emg_path=None, save_path=None):
+def create_excitation_generator(osim_model_path=None, emg_path=None, save_path=None,
+                                mapping=None):
     """
     Create an excitation mapping from OpenSim model muscles to EMG data.
     
@@ -248,9 +249,26 @@ def create_excitation_generator(osim_model_path=None, emg_path=None, save_path=N
     input_signals.text = ' '.join(emg_labels)
 
     # Add mapping element
-    mapping = ET.SubElement(root, 'mapping')
-    mapping_dict = settings.BatchSettings.emg_muscle_mapping
-    
+    mapping_el = ET.SubElement(root, 'mapping')
+    mapping_dict = dict(mapping) if mapping else dict(settings.BatchSettings.emg_muscle_mapping)
+    # A channel named in the map but ABSENT from the excitations file has no
+    # inputSignal, and CEINMS aborts on the name/order mismatch. Drop those here
+    # rather than writing an unsatisfiable generator.
+    _present = set(emg_labels)
+    _missing = [ch for ch in mapping_dict if ch not in _present]
+    if _missing:
+        print("create_excitation_generator: dropping "
+              f"{len(_missing)} mapped channel(s) not present in "
+              f"{os.path.basename(str(emg_path))}: {', '.join(sorted(_missing))}")
+        mapping_dict = {k: v for k, v in mapping_dict.items() if k in _present}
+    if not mapping_dict:
+        raise ValueError(
+            "no EMG channel in the muscle map matches a column in "
+            f"{emg_path}. Columns are {emg_labels[:6]}... -- fix session.yaml's "
+            "emg_map (or settings.BatchSettings.emg_muscle_mapping) to use the "
+            "exported column names.")
+    mapping = mapping_el
+
     for muscle in muscleList:
         used = False
         for emg_input, items in mapping_dict.items(): 

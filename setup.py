@@ -50,26 +50,31 @@ setup(
     extras_require={
         "recording": ["opencv-python", "mediapipe"],
     },
+    # Duplicate keys here are silently dropped by Python (the last one wins),
+    # so this stays a single de-duplicated block.
     package_data={
         'bioscout': [
             '*.yaml', '*.xml', '*.json', '*.txt', '*.bat',
             '*.jpg', '*.png',
         ],
         'bioscout.config': ['*.yaml', '*.xml'],
-        'bioscout.utils': [
-            '*.jpg', '*.png',
-            'ceinms/*.exe', 'ceinms/*.dll', 'ceinms/*.txt',
-        ],
-        'bioscout.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
-        'bioscout.tests': ['*.xml'],
-        'bioscout.models': ['*.osim'],
-        'bioscout.setup_files': ['*.xml', '*.txt'],
         'bioscout.models': ['*.osim', '*.txt'],
+        'bioscout.setup_files': ['*.xml', '*.txt'],
+        'bioscout.tests': ['*.xml'],
+        # The bone-landmark template is the source side of every TPS warp;
+        # without it a wheel install fails at the first personalise call.
+        'bioscout.tps_personalise': ['data/*.xml', 'data/*.yaml', '*.md'],
+        'bioscout.change_moment_arms': ['*.md'],
+        'bioscout.utils': ['*.jpg', '*.png'],
+        'bioscout.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
     },
     entry_points={
         'console_scripts': [
             'bioscout-gui=bioscout:launch_gui',
             'bioscout=bioscout.__main__:main',
+            'tps-personalise=bioscout.tps_personalise.cli:main',
+            'change-moment-arms=bioscout.change_moment_arms.cli:run',
+            'tps-landmarks=bioscout.tps_personalise.landmarks_cli:main',
         ],
     },
     python_requires='>=3.8',

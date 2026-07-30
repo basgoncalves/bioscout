@@ -99,6 +99,41 @@ parser.add_argument('--reset-raw', dest='reset_raw', action='store_true',
                     help="With --reset: also prune inside inputs/ down to just the raw "
                          "C3D (c3dfile.c3d) + trial_settings.xml. Derived markers/GRF/EMG "
                          "are regenerated on the next --export run.")
+parser.add_argument('--change-moment-arms', '--change_moment_arms', '--ma',
+                    dest='change_moment_arms', nargs='?', const='', default=None,
+                    metavar='PROJECT_PATH',
+                    help="Adjust a muscle's moment arm, interactively: lists the muscles "
+                         "that span a coordinate, grows the wrap surface standing in for "
+                         "muscle bulk until the moment arm shifts by the mm you ask for, "
+                         "then re-checks for discontinuities.")
+parser.add_argument('--compare-models', '--compare_models', dest='compare_models',
+                    nargs='+', default=None, metavar='FOLDER_OR_OSIM',
+                    help="Compare the DIMENSIONS and SEGMENT MASSES of several .osim "
+                         "models — segment lengths from each joint's parent-frame offset, "
+                         "per-body mass and mass fraction, mesh scale factors and "
+                         "left/right asymmetry, with the spread across models. Pass a "
+                         "folder or the .osim paths. Reads the XML only, so it needs no "
+                         "OpenSim and never modifies a model. Use -o to write .xlsx/.csv "
+                         "and --scale-setups to add the ScaleTool intent behind each.")
+parser.add_argument('--scale-setups', '--scale_setups', dest='scale_setups',
+                    nargs='+', default=None, metavar='LABEL=SETUP.xml',
+                    help="With --compare-models: ScaleTool setup XMLs to report the "
+                         "scaling INTENT (preserve_mass_distribution, scaling_order, "
+                         "manual ScaleSet overrides) that explains the differences.")
+parser.add_argument('-o', '--out', dest='out', type=str, default=None, metavar='FILE',
+                    help="With --compare-models: write the tables to .xlsx (one sheet "
+                         "each) or .csv (one file per table).")
+parser.add_argument('--figures', dest='figures', nargs='?', const=True, default=None,
+                    metavar='DIR',
+                    help="With --compare-models: also render the figures as .png and "
+                         ".pdf — segment dimensions, segment mass, a mesh-scale "
+                         "heatmap and left/right asymmetry. Defaults to the folder of "
+                         "-o (or the models' own folder); pass DIR to choose.")
+parser.add_argument('--tps', nargs='?', const='', default=None, metavar='PROJECT_PATH',
+                    help="Build a TPS/MRI-personalised model, interactively: asks which "
+                         "session, which model to warp and which 3D Slicer landmark file, "
+                         "with discovered defaults. Optionally pass a project path "
+                         "(defaults to the current folder).")
 parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SETTINGS_OR_PROJECT',
                     help="Build kinematics/kinetics summaries. Optionally pass a settings.py "
                          "or project path; defaults to ./settings.py then the package settings.")
@@ -1373,6 +1408,166 @@ def run_subject_mode() -> int:
         print(f"[run_subject] log written: {logpath}", flush=True)
 
 
+def run_tps_mode(project_path=None) -> int:
+    """Interactive `bioscout --tps`: build a TPS/MRI-personalised model.
+
+    A guided prompt rather than a config file, because this is a once-per-subject
+    operation whose inputs (which session, which model, which landmark file) are
+    exactly the things a user cannot remember the spelling of. Every prompt
+    offers a discovered default in [brackets] — pressing Enter accepts it, so
+    the common case is all-Enter.
+
+    Nothing is written until the summary is confirmed.
+    """
+    import glob
+    import os
+
+    def ask(prompt, default=None, choices=None):
+        """One prompt. Returns the answer, or the default on empty input."""
+        while True:
+            suffix = f" [{default}]" if default is not None else ""
+            try:
+                ans = input(f"  {prompt}{suffix}: ").strip().strip('"').strip("'")
+            except (EOFError, KeyboardInterrupt):
+                print("\n[tps] cancelled.")
+                raise SystemExit(1)
+            if not ans and default is not None:
+                ans = str(default)
+            if not ans:
+                print("      (required)")
+                continue
+            if choices and ans not in choices:
+                print(f"      pick one of: {', '.join(choices)}")
+                continue
+            return ans
+
+    def pick(prompt, options, default=None):
+        """Numbered menu. Accepts the number or the value itself."""
+        if not options:
+            return ask(prompt, default)
+        print(f"  {prompt}:")
+        for i, o in enumerate(options, 1):
+            print(f"      {i}. {o}")
+        default = default if default in options else options[0]
+        while True:
+            ans = ask("     choice (number or name)", default)
+            if ans in options:
+                return ans
+            if ans.isdigit() and 1 <= int(ans) <= len(options):
+                return options[int(ans) - 1]
+            print("      not a valid choice")
+
+    print()
+    print("=" * 68)
+    print("  bioscout --tps   TPS personalisation of a model from MRI geometry")
+    print("=" * 68)
+    print("  Warps a generic OpenSim model onto a subject's segmented MRI bone")
+    print("  landmarks. Enter accepts the [default] shown for each question.")
+    print()
+
+    project = os.path.abspath(project_path or os.getcwd())
+    print(f"  project: {project}")
+
+    # --- session -------------------------------------------------------
+    hits = sorted(glob.glob(os.path.join(project, "simulations", "*", "*", "session.yaml")))
+    if not hits:
+        print(f"\n[tps] no simulations/<subject>/<session>/session.yaml under {project}")
+        print("[tps] run this from your project root, or pass --project <path>.")
+        return 1
+    sessions = [os.path.relpath(os.path.dirname(h), project) for h in hits]
+    session_rel = pick("session", sessions)
+    session_dir = os.path.join(project, session_rel)
+    print()
+
+    # --- iteration -----------------------------------------------------
+    from bioscout.utils.session import load_session_yaml
+    cfg = load_session_yaml(os.path.join(session_dir, "session.yaml"))
+    iterations = sorted(cfg.get("iterations") or {})
+    # A "*_mri" iteration NAMES the file this step produces; the model to warp
+    # is its non-MRI sibling. Offer the sources, not the outputs.
+    sources = [i for i in iterations if not i.endswith("_mri")] or iterations
+    print("  Which model should be warped onto the MRI?")
+    print("  (pick the GENERIC iteration — its *_mri sibling names the output)")
+    iteration = pick("iteration", sources)
+    print()
+
+    # --- landmarks -----------------------------------------------------
+    subject = os.path.basename(os.path.dirname(session_dir))
+    cands = []
+    for pat in (os.path.join(project, "mri", subject, "*.mrk.json"),
+                os.path.join(project, "mri", "*.mrk.json"),
+                os.path.join(session_dir, "*.mrk.json")):
+        cands += sorted(glob.glob(pat))
+    if cands:
+        landmarks = pick("MRI landmark file (3D Slicer .mrk.json)",
+                         [os.path.relpath(c, project) for c in cands])
+        landmarks = os.path.join(project, landmarks)
+    else:
+        print("  No .mrk.json found under mri/ — enter the path.")
+        landmarks = ask("MRI landmark file (3D Slicer .mrk.json)")
+    if not os.path.isfile(landmarks):
+        print(f"\n[tps] landmark file not found: {landmarks}")
+        return 1
+    print()
+
+    # --- options -------------------------------------------------------
+    print("  Options (Enter for the default unless you know otherwise):")
+    alpha = ask("TPS regularisation alpha", "0.002")
+    units = ask("landmark units -> metres (0.001 = mm)", "0.001")
+    strict = ask("fail if the bone-landmark template does not match this model?",
+                 "yes", choices=["yes", "no"])
+    print("  Inspecting sweeps the moment arms of the warped model, saves the")
+    print("  plots, and writes a wrap-corrected *_modWO.osim next to it as an")
+    print("  extra to compare against. Needs opensim; takes a few minutes.")
+    inspect = ask("inspect the model afterwards?", "yes", choices=["yes", "no"])
+    print()
+
+    # --- confirm -------------------------------------------------------
+    from bioscout.tps_personalise.bioscout_adapter import default_template
+    print("-" * 68)
+    print(f"  session    : {session_rel}")
+    print(f"  warp model : {iteration}")
+    print(f"  landmarks  : {os.path.relpath(landmarks, project)}")
+    print(f"  template   : {default_template().name}  (bundled)")
+    print(f"  alpha      : {alpha}     units->m: {units}     strict: {strict}")
+    print(f"  inspect    : {inspect}")
+    print("-" * 68)
+    if ask("proceed?", "yes", choices=["yes", "no"]) != "yes":
+        print("[tps] cancelled — nothing written.")
+        return 0
+    print()
+
+    from bioscout.tps_personalise import personalise_iteration
+    try:
+        result = personalise_iteration(
+            session_dir, iteration,
+            mri_landmarks=landmarks,
+            tps_alpha=float(alpha),
+            landmark_units_to_metres=float(units),
+            check_template_frames=(strict == "yes"),
+            inspect=(inspect == "yes"),
+        )
+    except Exception as exc:
+        print(f"\n[tps] FAILED: {type(exc).__name__}: {exc}")
+        return 1
+
+    written = [f for f in result.written_files if str(f).endswith(".osim")]
+    print()
+    print(f"[tps] done — {len(result.transforms)} bodies warped, "
+          f"{len(result.matched_markers)} landmarks matched")
+    for f in written:
+        print(f"[tps] wrote {f}")
+    if result.unmatched_mri:
+        print(f"[tps] {len(result.unmatched_mri)} MRI landmark(s) had no match in "
+              f"the template (ignored): {', '.join(result.unmatched_mri[:6])}"
+              + (" ..." if len(result.unmatched_mri) > 6 else ""))
+    rep = getattr(result, "inspection", None)
+    if rep and not rep.get("ok"):
+        print(f"[tps] NOTE: the moment-arm check did not run — {rep['reason']}")
+    print("[tps] next: run the pipeline for the matching *_mri iteration.")
+    return 0
+
+
 def main() -> int:
     if args.install:
         from utils.dependency_installer import install_missing
@@ -1417,6 +1612,25 @@ def main() -> int:
         return run_load_report_mode(args.load_report)
     if args.init is not None:
         return run_init_mode(args.init)
+    if args.change_moment_arms is not None:
+        from bioscout.change_moment_arms.cli import run as _run_ma
+        return _run_ma(args.change_moment_arms or args.project or os.getcwd())
+    if args.compare_models is not None:
+        from bioscout.utils.model_report import compare_models as _cmp
+        _setups = None
+        if args.scale_setups:
+            _setups = {}
+            for _item in args.scale_setups:
+                _lab, _sep, _p = _item.partition('=')
+                if _sep:
+                    _setups[_lab] = _p
+                else:   # bare path -> label from the filename stem's first token
+                    _setups[os.path.basename(_lab).split('_')[0]] = _lab
+        _models = args.compare_models[0] if len(args.compare_models) == 1 else args.compare_models
+        _cmp(_models, out=args.out, setups=_setups, figures=args.figures)
+        return 0
+    if args.tps is not None:
+        return run_tps_mode(args.tps or args.project or os.getcwd())
     if args.summary is not None:
         import bioscout
         _sum_project = args.summary or args.project or os.getcwd()

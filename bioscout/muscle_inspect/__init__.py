@@ -34,8 +34,12 @@ from .paths import (
     resolve_literature_csv,
 )
 from . import literature_jcf
+from . import moment_arm_motion
+from .moment_arm_motion import inspect_moment_arms_over_motion
 
 __all__ = [
+    "moment_arm_motion",
+    "inspect_moment_arms_over_motion",
     "euler_xyz_to_rotation_matrix",
     "project_point_outside_cylinder",
     "radial_distance",

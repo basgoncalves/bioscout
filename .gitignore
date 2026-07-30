@@ -8,8 +8,10 @@ __pycache__/
 *.so
 *.egg
 *.egg-info/
-tests/
-test_env/
+# Anchored: a bare "tests/" also matched bioscout/tests/, which left the
+# whole test suite untracked.
+/tests/
+/test_env/
 build/
 example_data/
 torch_cpu.dll
@@ -65,3 +67,17 @@ _*.txt
 
 # local pre-refactor backups (do not commit)
 bioscout_bak_*/
+
+# Local scratch that must never reach a branch: staging archives used to ship
+# code between machines, one-shot patch scripts, and the quarantine folder
+# (device_bash cannot delete, so files are moved to _to_delete/ instead).
+_to_delete/
+__scratch*/
+_*.zip
+_*.tgz
+_*.tar.gz
+_template_runner.py
+_tps_cli_mode.py
+_to_delete_*.py
+_bashwrite_probe.txt
+ziLDWRaE

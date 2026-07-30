@@ -39,19 +39,25 @@ simulations/<subject>/<session>/
   ../results/<session>/comparison/     # cross-model JCF figures
 ```
 
-Run it (see `bioscout.utils.session_layout` and `REFACTOR_PLAN_YAML.md`):
+Run it with the `Session` / `Iteration` API (`bioscout.utils.session`):
 
 ```python
-from bioscout.utils import exportC3D, session_layout as sl
-S = "simulations/Athlete_03/25_03_31"
-exportC3D.export_session(S)                                   # c3dfiles -> experimental/
-sl.import_models(S, "models", {...})                         # reuse existing scaled models
-sl.run_session(project_dir=".", session_path=S, do_so=True, do_ceinms=True, replace=True)
-sl.summarise_session(project_dir=".", session_path=S)        # cross-model comparison plots
+from bioscout import Session
+s  = Session.open("simulations/Athlete_03/25_03_31")   # reads session.yaml
+it = s.iteration("gpk_mri")                             # one runnable model iteration
+it.scale_model(muscle_opt=False)                       # generic -> scaled (+ MVIC for SO)
+it.run(trials=["Squat_BW_01", "Walking_02"],
+       do_exbiomec=True, do_so=True, do_ceinms=True, calibrate=True, replace=True)
+s.run(do_so=True, do_ceinms=True)                      # every iteration in the session
+s.summarise()                                          # cross-model comparison plots
+
+# whole project — every simulations/<subject>/<session>/session.yaml:
+Session.batch_sessions(".", do_so=True, do_ceinms=True)
 ```
 
-`run_session(smoke=True)` no-ops figures/validation for a fast "does it run?" sweep;
-`frames=N` caps the simulation window (a "ghost run") while inputs stay full length.
+`session.yaml` is the single source of truth for per-trial config (time windows,
+sides, CEINMS α/β/γ, model names). `s.reset()` / `Session.reset_project()` strip a
+session back to inputs-only (timestamped backup) — pass `dry_run=True` to preview.
 
 ---
 
@@ -60,9 +66,8 @@ sl.summarise_session(project_dir=".", session_path=S)        # cross-model compa
 - **Full OpenSim pipeline** — C3D → IK → ID → Muscle Analysis → Static Optimisation → muscle moments → Joint Reaction Analysis, per trial.
 - **EMG-informed muscle forces** — CEINMS calibration (once per session) and execution (per trial), compared against static optimisation and measured EMG.
 - **Joint contact forces** — SO vs CEINMS joint reaction forces, normalised to body weight, with **literature validation bands** overlaid (hip, knee) and gait-event marks.
-- **Model checking** — an independent `moment_arm_inspection` module to sweep moment arms, flag discontinuities, and validate model moment arms against the literature.
-- **Batch processing** — run a whole subject/session from one `settings.py` with a single command; idempotent (resumes) unless you force a rebuild.
-- **Notebook tester** — `bioscout/notebook.ipynb` exercises each pipeline stage on one trial and regenerates any figure without re-solving.
+- **Model validation** — an independent `muscle_inspect` module sweeps moment arms, flags wrap discontinuities, and validates moment arms, fibre length/pennation, and joint strength against the literature (writes `muscle_inspect_<model>/`).
+- **Batch processing** — run one session or a whole project from `settings.py` or `Session.batch_sessions()`; idempotent (resumes) unless you force a rebuild.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
@@ -370,30 +375,28 @@ untouched. Because `inputs/` is preserved, a plain `--reset` already gives a
 clean recompute; add `--export` only when you also want inputs rebuilt from the
 C3D.
 
-**Python API** — the same batch entry point, plus the typed hierarchy:
+**Python API** — the session-centric hierarchy (`Session` → `Iteration` → trial):
 
 ```python
-import bioscout
-proj = bioscout.Project(r"/path/to/my_project")
+from bioscout import Session
 
-# whole subject/session
-bioscout.pipeline.run_subject(project_dir=proj.path, subject="Athlete_03_Cateli",
-                              sessions="25_03_31", do_so=True, do_ceinms=True)
+s  = Session.open("simulations/Athlete_03/25_03_31")
+it = s.iteration("gpk_mri")
 
-# reset first, then run (reset=True strips outputs to inputs-only, with a backup)
-bioscout.pipeline.run_subject(project_dir=proj.path, subject="Athlete_03_Cateli",
-                              sessions="25_03_31", trials="Walking_02",
-                              reset=True, export=True, replace=True)
+# whole iteration (all its trials); do_scale builds the scaled model first
+it.run(trials=["Walking_02", "Squat_BW_01"], do_scale=False,
+       do_so=True, do_ceinms=True, calibrate=True, replace=True)
 
-# reset only (no run) — scope with subjects=/session=/trials=; omit all for the whole tree
-bioscout.pipeline.reset_simulations(project_dir=proj.path, session="25_03_31",
-                                    trials="Walking_02")          # dry_run=True to preview
+# one trial, step by step (a trial is an Analyse object)
+t = it.trial("Walking_02")
+t.run_ik(); t.run_id(); t.run_ma(); t.run_so()
+t.calculate_muscle_moments(forces_type="so"); t.run_jra()
 
-# one trial, step by step (a Trial is an Analyse subclass)
-trial = proj.subject("Athlete_03_Cateli").get_session("25_03_31").trial("Walking_02")
-trial.run_ik(); trial.run_id(); trial.run_ma(); trial.run_so()
-trial.calculate_muscle_moments(forces_type="so")
-trial.run_jra()
+# every model iteration in the session, then cross-model comparison figures
+s.run(do_so=True, do_ceinms=True); s.summarise()
+
+# whole project — batch across every simulations/<subject>/<session>/session.yaml
+Session.batch_sessions(".", subjects="Athlete_03", do_so=True, do_ceinms=True)
 ```
 
 The per-trial stages are, in order:
@@ -403,11 +406,11 @@ IK → ID → Muscle Analysis → Static Optimisation → muscle moments → JRA
 EMG normalise → CEINMS calibrate (session) → CEINMS execute → muscle moments → JRA   (CEINMS branch)
 ```
 
-To clean a subject/session back to `inputs/` + `trial_settings.xml` (with a backup):
+To clean a session back to inputs-only (with a timestamped backup):
 
 ```python
-bioscout.pipeline.reset_simulations(project_dir=proj.path, subjects="Athlete_03_Cateli",
-                                    session="25_03_31", backup=True, dry_run=True)  # dry_run first!
+s.reset(dry_run=True)                                          # this session (dry_run first!)
+Session.reset_project(".", sessions="25_03_31", dry_run=True)  # whole project, scoped
 ```
 
 ---
@@ -438,21 +441,24 @@ python -m bioscout.utils.analyse ".../Walking_02" plot_kin_mom_summary plot_resi
 **Literature validation.** `plot_jra_comparison` overlays digitised literature
 contact-force bands on the resultant panels for gait-like trials — hip (Bergmann,
 Hoang, Giarmatzis) and knee (Richards) — mapped onto the trial's gait cycle. The
-overlay data lives in `bioscout.moment_arm_inspection.literature_jcf` and can be
-plotted on its own:
+overlay data lives in `bioscout.muscle_inspect.literature_jcf` and can be plotted
+on its own:
 
 ```python
-from bioscout.moment_arm_inspection import literature_jcf as ljcf
+from bioscout.muscle_inspect import literature_jcf as ljcf
 ljcf.plot_jcf_validation("hip_ref.png", entity="hip")
 ```
 
-**Model moment arms.** The independent `moment_arm_inspection` module sweeps a
-model's moment arms, flags discontinuities/wrap errors, and validates against
-literature moment-arm bands:
+**Model validation (`muscle_inspect`).** An independent module checks a model's
+geometry and properties against the literature, writing everything into
+`muscle_inspect_<model>/` next to the model. `all` runs the full battery — moment
+arms + fibre length/pennation + isometric & isokinetic strength (bundled
+literature auto-resolved, only `--model` required):
 
 ```bash
-python -m bioscout.moment_arm_inspection inspect  --model scaled.osim
-python -m bioscout.moment_arm_inspection validate --model scaled.osim
+python -m bioscout.muscle_inspect all      --model scaled_mvicx3.00.osim   # full validation
+python -m bioscout.muscle_inspect inspect  --model scaled.osim             # moment-arm sweep + wrap fix
+python -m bioscout.muscle_inspect validate --model scaled.osim             # moment arms vs literature
 ```
 
 **Trial type & events.** Each trial has a `trial_type` (`walking`, `running`,
@@ -468,13 +474,20 @@ use `recrop_to_events` (see "Re-cropping to edited gait events" above).
 
 ---
 
-## Notebook — testing the pipeline
+## Running a project — `settings.py`
 
-`bioscout/notebook.ipynb` is a scratchpad for exercising individual pipeline
-parts on one trial: setup → per-step SO branch → CEINMS branch → figure
-regeneration → trial-type/events → batch run → moment-arm & literature
-validation. Point `PROJECT_DIR` at a project, pick a subject/trial, and run cells
-selectively.
+The project's `settings.py` doubles as the runner: edit the CONFIG block at the
+bottom (which iterations, trials, and stages to run) and launch it directly. It
+opens the session and drives `Iteration.run` / `Session.summarise` for you:
+
+```bash
+conda activate bioscout_env
+python settings.py
+```
+
+Toggle `DO_SCALE` / `DO_EXBIOMEC` / `DO_SO` / `DO_CEINMS` / `DO_SUMMARY` and
+`REPLACE` there; per-trial config (time windows, sides, CEINMS α/β/γ, model names)
+lives in each session's `session.yaml`.
 
 ---
 

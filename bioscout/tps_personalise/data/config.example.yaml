@@ -1,0 +1,40 @@
+# Example standalone config for tps-personalise.
+# Paths are relative to this file's folder (project_root is auto-set to it).
+# Run with:  tps-personalise --config config.example.yaml
+
+subject:
+  id: "012"
+  mass_kg: 89.9        # was hard-coded as '89.9' in the old paths_setup.py
+  height_m: 1.80       # metres
+  age_years: 33
+  sex: "M"
+  dominant_leg: "right"
+
+# --- inputs ---
+generic_model: templates/GPK_generic.osim
+scaled_model: final_results/generic_scaled/scaled_model.osim
+mri_landmarks: mri/results/landmarks.mrk.json     # 3D Slicer .mrk.json
+bone_marker_template: templates/markers_and_bone_markers_in_bodies.xml
+geometry_dir: templates/Geometry                   # generic .vtp meshes
+
+# --- output ---
+output_dir: final_results/personalised
+personalised_model_name: personalised_model.osim
+
+# --- algorithm parameters (previously magic numbers in notebooks) ---
+tps_alpha: 0.002                 # TPS regularisation
+landmark_units_to_metres: 0.001  # MRI landmarks in mm -> model metres
+orient_slicer_json: true         # multiply Slicer position by orientation matrix
+
+# --- joint-centre wiring (optional) --------------------------------------
+# joint_name: [offset_frame_name, transformed_marker_name]. Defaults cover
+# back / hip_r,l / ankle_r,l. Override to match your model's joint names
+# (e.g. Lerner-knee models use Lerner_knee_* / fem_pat_* instead of
+# walker_knee_* / patellofemoral_*).
+# joint_centres:
+#   back:  [pelvis_offset, torso_origin_in_pelvis]
+#   hip_r: [pelvis_offset, femur_r_center_in_pelvis]
+#   hip_l: [pelvis_offset, femur_l_center_in_pelvis]
+# pin_joint_centres:
+#   ankle_r: [tibia_r_offset, talus_r_center_in_tibia]
+#   ankle_l: [tibia_l_offset, talus_l_center_in_tibia]

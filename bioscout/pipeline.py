@@ -883,13 +883,17 @@ def _quiet_opensim():
 
 
 def _c3d_for_trial(project_dir, spec, trial):
-    """Locate a trial's raw .c3d: <session>/c3dfiles/<trial>.c3d first, else
-    <project>/c3dfiles/<subject>/<session>/<trial>.c3d."""
+    """Locate a trial's raw .c3d: the session's own c3d folder first, else
+    <project>/<c3d dir>/<subject>/<session>/<trial>.c3d. Both the numbered
+    (`1_c3dfiles`) and plain (`c3dfiles`) names are accepted."""
+    from bioscout.utils.session_layout import C3D_DIRS, c3d_root
+
     cands = []
     if spec.path:
-        cands.append(os.path.join(spec.path, "c3dfiles", f"{trial}.c3d"))
-    cands.append(os.path.join(project_dir, "c3dfiles", spec.subject,
-                              spec.session, f"{trial}.c3d"))
+        cands.append(os.path.join(c3d_root(spec.path), f"{trial}.c3d"))
+    for name in C3D_DIRS:
+        cands.append(os.path.join(project_dir, name, spec.subject,
+                                  spec.session, f"{trial}.c3d"))
     return next((c for c in cands if os.path.isfile(c)), None)
 
 
