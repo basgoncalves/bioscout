@@ -1106,7 +1106,7 @@ def export_session(session_dir, emg_string_list=None, c3d_dirname=None,
         # the raw data (previously created lazily inside ID). Lives in experimental/.
         try:
             from bioscout import utils as _u
-            from bioscout.utils import openSim as _os
+            from bioscout.utils import get_openSim as _get_os; _os = _get_os()
             _bs = getattr(_u, "settings", None)
             _bs = getattr(_bs, "BatchSettings", None)
             _os.create_grf_xml(

@@ -300,8 +300,50 @@ except (ImportError, ValueError):
         sys.modules['openSim'] = _op_mod
         _op_spec.loader.exec_module(_op_mod)
         openSim = _op_mod
-    except Exception:
+    except Exception as _e:
         openSim = None
+        _openSim_import_error = _e
+
+
+def get_openSim():
+    """Return the openSim helper module, resolving it late if init could not.
+
+    ``openSim.py`` does a bare ``import utils`` (the legacy top-level copy of
+    this package), so ``from . import openSim`` at the bottom of this file runs
+    straight into a circular import and lands in the ``except`` above with
+    ``openSim = None``. Callers that then did ``from bioscout.utils import
+    openSim as _os`` got None -- and ``None.scale_model(...)`` is an
+    AttributeError that names neither the module nor the real cause.
+    ``bioscout/__main__.py`` has carried a hand-rolled workaround for exactly
+    this, which is why the CLI could scale a model and ``python settings.py``
+    could not.
+
+    By the time anything CALLS this, ``bioscout.utils`` is fully initialised and
+    the cycle resolves, so the plain import normally just works. Failing that,
+    an already-loaded copy under another name is used. If nothing works the
+    ORIGINAL exception is raised, not None.
+    """
+    global openSim
+    if openSim is not None:
+        return openSim
+    import importlib as _il
+    # "openSim" bare: the importlib fallback above registers it under that name.
+    for _name in ("bioscout.utils.openSim", "utils.openSim", "openSim"):
+        m = sys.modules.get(_name)
+        if m is not None:
+            openSim = m
+            return m
+    _last = globals().get("_openSim_import_error")
+    for _name in ("bioscout.utils.openSim", "utils.openSim"):
+        try:
+            openSim = _il.import_module(_name)
+            return openSim
+        except Exception as _e:
+            _last = _e
+    raise ImportError(
+        f"the openSim helper module could not be loaded: {_last!r}. "
+        f"Every OpenSim stage (scaling, IK, ID, MA, SO, JRA) needs it."
+    ) from (_last if isinstance(_last, BaseException) else None)
 
 # CEINMS helpers are bound at the BOTTOM of this file (after analysis/emg/plot
 # are loaded). Loading them here, mid-init, hit an import cycle (ceinms.py ->

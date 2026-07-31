@@ -2,6 +2,67 @@
 
 All notable changes to BioScout are documented here.
 
+## [2.0.0b6] — 2026-07-31
+
+### Fixed — `bioscout.utils.openSim` was None outside the CLI
+
+`openSim.py` does a bare `import utils` (the legacy top-level copy of the
+package), so the deferred `from . import openSim` at the bottom of
+`utils/__init__.py` hits a circular import, is swallowed by `except Exception`,
+and leaves `openSim = None`. Every caller doing
+`from bioscout.utils import openSim as _os` then got None, and the first use
+failed with `'NoneType' object has no attribute 'scale_model'` — naming neither
+the module nor the cause. `bioscout/__main__.py` has carried a hand-rolled
+workaround for this, which is why `bioscout --...` could scale a model and
+`python settings.py` could not.
+
+* **New** `bioscout.utils.get_openSim()` — resolves the module late (by which
+  point the cycle is gone), falls back to an already-loaded copy under another
+  name, and raises the ORIGINAL exception rather than handing back None.
+* Rewired the four call sites: `pipeline.py`, `exportC3D.py`, and both in
+  `session.py` (`Iteration.scale_model` and `Iteration.run`).
+
+## [2.0.0b5] — 2026-07-31
+
+### Fixed — every scaled model before this release was generic geometry
+
+`openSim.scale_model()` built its `osim.ScaleTool()` from scratch and called
+`ModelScaler.setApply(True)` **without ever populating a MeasurementSet**.
+OpenSim accepts an empty one in silence: with nothing to measure, every body
+keeps a scale factor of exactly 1.0 and the only thing `setSubjectMass()`
+changes is the total mass. The output was still written to `scaled.osim`, the
+logs said nothing, and IK, ID, MA, SO, CEINMS and JRA all ran on the generic
+skeleton. Segment lengths, mass distribution, moment arms, joint moments and
+contact forces from any earlier run are affected and must be recomputed.
+
+* **New** `bioscout.utils.scale_measurements`:
+  * `augment_static_trc()` — writes the joint centres a camera cannot see into
+    a scaling-only copy of the static TRC: hips by the Harrington (2007) pelvis
+    regression, knees and ankles as epicondyle/malleoli midpoints. This is what
+    makes the `*WK` markers in `markers_powerlifter.xml` usable — they sit on
+    body origins, so they are the joint centres in *every* model, which keeps
+    the femur and tibia factors independent of which generic is being scaled.
+  * `build_measurement_set()` — emits a Measurement only for marker pairs that
+    exist in BOTH the model marker set and the TRC, and only for bodies the
+    model actually has (Catelli has arms; GPK and Lernagopal have knee
+    sub-bodies). Everything dropped is printed, not skipped quietly.
+  * `verify_scaled()` — compares the result against its generic and says
+    plainly when no body changed size.
+  * `mass_from_static_grf()` — body mass from the static trial's vertical GRF.
+  * `set_total_mass()` — mass and inertia only, geometry untouched.
+* `scale_model()` now attaches that MeasurementSet, checks it actually landed
+  on the tool, verifies the output, and writes the applied factors to
+  `scale_factors.xml` in the iteration folder instead of a temp dir.
+* **MRI/TPS models were never given the subject's mass.** With
+  `linear_scaling: false` the model was copied through untouched, so it kept
+  the generic's 75.34 kg while every result was normalised by the real body
+  mass. Mass and inertia are now rescaled on their own.
+* `Iteration.scale_model()` prefers the mass measured by the force plates over
+  `session.yaml`'s typed-in `body_mass` (Athlete_03: 91.01 measured vs 89.9
+  typed). Opt out with `body_mass_from_grf: false`.
+* Joint centres are stripped from the marker set before marker registration —
+  they are regression estimates and must not pull real markers around in IK.
+
 ## [2.0.0b1 - 2.0.0b4] — 2026-07-31
 
 Beta series while the GUI restructure settles. The last digit moves on each

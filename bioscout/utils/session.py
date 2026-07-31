@@ -1716,7 +1716,7 @@ class Iteration:
             missing). Outputs land in this iteration's folder where the pipeline
             reads them."""
         import shutil
-        from bioscout.utils import openSim as _os
+        from bioscout.utils import get_openSim as _get_os; _os = _get_os()
         it = (self._cfg.get("iterations") or {}).get(self.iteration) or {}
         generic = self._resolve_model_file(it.get("generic"))
         if not generic or not os.path.exists(generic):
@@ -1751,6 +1751,24 @@ class Iteration:
         mvic_factor = float(_mvic if _mvic is not None else (it.get("mvic_factor", 1.0) or 1.0))
         if mass is None:
             mass = self._cfg.get("body_mass")
+            # The force plates measured this subject on this day. Prefer that over a
+            # typed-in body_mass, which drifts (Athlete_03: 89.9 typed vs 91.0
+            # measured) and silently biases every mass-normalised result. Opt out
+            # with `body_mass_from_grf: false` in session.yaml.
+            if self._cfg.get("body_mass_from_grf", True):
+                try:
+                    from bioscout.utils import scale_measurements as _sm
+                    _grf = os.path.join(experimental_dir(self.session_dir, static_trial),
+                                        "grf.mot")
+                    _m = _sm.mass_from_static_grf(_grf, verbose=False)
+                except Exception:
+                    _m = None
+                if _m:
+                    if mass and abs(_m - float(mass)) > 0.05:
+                        print(f"[Session] {self.label}: body mass from the static GRF is "
+                              f"{_m:.2f} kg; session.yaml says {float(mass):.2f} kg. "
+                              f"Using the measured value.")
+                    mass = _m
 
         os.makedirs(self.path, exist_ok=True)
         scaled = os.path.join(self.path, "scaled.osim")
@@ -1912,7 +1930,7 @@ class Iteration:
         # against the trial folder and fails.
         _cwd0 = os.getcwd()
         try:                                    # start (and keep) the run quiet
-            from bioscout.utils import openSim as _os
+            from bioscout.utils import get_openSim as _get_os; _os = _get_os()
             _os._quiet_osim()
         except Exception:
             pass

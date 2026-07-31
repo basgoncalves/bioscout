@@ -2817,6 +2817,7 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         scale_setup_output_dir: Directory where to save scale_setup.xml (defaults to scaled_model directory)
     """
     import shutil as _shutil
+    from bioscout.utils import scale_measurements as _sm
     # Apply the configured OpenSim log level right here (lowercase — OpenSim
     # ignores "Error") so ScaleTool's geometry [warning] spam is quiet.
     try:
@@ -2838,6 +2839,14 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
             _shutil.copyfile(generic_opensim_model_path, scaled_model_path)
         print(f"[scale] linear_scaling=False, marker_placer=False → copied model "
               f"unchanged to: {scaled_model_path}")
+        # "Unchanged" used to include the mass, so a model routed through this
+        # branch kept whatever total mass its source had while every downstream
+        # result was normalised by the subject's. Geometry still stays untouched.
+        if mass is not None:
+            try:
+                _sm.set_total_mass(scaled_model_path, mass)
+            except Exception as e:
+                print(f"[scale] [WARNING] mass-only rescale failed: {e}")
         return
     model = osim.Model(generic_opensim_model_path)
     state = model.initSystem()
@@ -2887,8 +2896,26 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         if _san:
             marker_set_for_scaling = _san
 
+    # --- joint centres -----------------------------------------------------
+    # ScaleTool measures DISTANCES BETWEEN MARKER PAIRS. The femur and tibia can
+    # only be measured hip-to-knee-to-ankle, and a motion capture system cannot
+    # see a joint centre — so the *WK virtual markers that markers_powerlifter.xml
+    # puts on the body origins exist in every model but in NO TRC. Compute them
+    # (Harrington hips, midpoint knees/ankles) into a scaling-only copy of the
+    # static TRC. The ORIGINAL TRC is left untouched and is what marker
+    # registration and every dynamic trial keep using.
+    trc_for_scaling = static_trc_path
+    if linear_scaling:
+        try:
+            trc_for_scaling = _sm.augment_static_trc(
+                static_trc_path,
+                os.path.join(_tmp, os.path.basename(static_trc_path).replace(".trc", "_jc.trc")))
+        except Exception as e:
+            print(f"[scale] [WARNING] could not add joint centres to the static TRC: {e}")
+            trc_for_scaling = static_trc_path
+
     # Resolve time range from TRC if not provided
-    storage = osim.Storage(static_trc_path)
+    storage = osim.Storage(trc_for_scaling)
     t0, t1 = (time_range[0], time_range[1]) if time_range else (storage.getFirstTime(), storage.getLastTime())
     osim_time_range = osim.ArrayDouble()
     osim_time_range.append(t0)
@@ -2910,14 +2937,57 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     os.makedirs(scale_setup_output_dir, exist_ok=True)
 
     # ModelScaler (dimensional scaling) — toggled by ``linear_scaling``.
+    #
+    # A default-constructed osim.ScaleTool() has an EMPTY MeasurementSet. OpenSim
+    # accepts that without complaint: setApply(True) then scales every body by
+    # 1.0 and only setSubjectMass() has any effect, so the output is generic
+    # geometry wearing the subject's mass — a "scaled" model that is not scaled.
+    # That silent failure is why this MeasurementSet is built and attached here,
+    # and why verify_scaled() checks the result afterwards.
     modelScaler = scaleTool.getModelScaler()
     modelScaler.setApply(bool(linear_scaling))
-    modelScaler.setMarkerFileName(static_trc_path)
+    if linear_scaling:
+        try:
+            _mset, _rep, _skip_m = _sm.build_measurement_set(
+                model, trc_for_scaling,
+                model_markers=_sm.markerset_file_names(marker_set_for_scaling))
+            if _mset.getSize() == 0:
+                print("[scale] [ERROR] MeasurementSet is EMPTY — ScaleTool would apply a "
+                      "scale factor of 1.0 to every body and return the generic model with "
+                      "the subject's mass. Check the marker names above.")
+            try:
+                modelScaler.setMeasurementSet(_mset)
+            except Exception:
+                pass
+            # getModelScaler()/getMeasurementSet() hand back C++ references through
+            # SWIG, but that is an assumption worth checking rather than trusting:
+            # if the set did not land, append into the tool's own set instead, and
+            # if THAT does not stick, say so instead of scaling by 1.0 in silence.
+            if modelScaler.getMeasurementSet().getSize() != _mset.getSize():
+                _tgt = modelScaler.getMeasurementSet()
+                for _i in range(_mset.getSize()):
+                    _tgt.cloneAndAppend(_mset.get(_i))
+            _n = modelScaler.getMeasurementSet().getSize()
+            if _n != _mset.getSize():
+                print(f"[scale] [ERROR] the ScaleTool kept {_n} of {_mset.getSize()} "
+                      f"measurements — scaling would be wrong or absent. Aborting is safer "
+                      f"than shipping a generic model named 'scaled'.")
+                raise RuntimeError("MeasurementSet did not attach to the ScaleTool")
+            try:
+                modelScaler.setScalingOrder(osim.ArrayStr("measurements", 1))
+            except Exception:
+                pass
+            print(f"[scale] ScaleTool holds {_n} measurements")
+        except Exception as e:
+            print(f"[scale] [ERROR] could not build the MeasurementSet: {e}")
+            raise
+    modelScaler.setMarkerFileName(trc_for_scaling)
     modelScaler.setTimeRange(osim_time_range)
     modelScaler.setOutputModelFileName(scaled_model_path)
-    modelScaler.setOutputScaleFileName(
-        os.path.join(_tmp, 'scale_setup.xml')
-    )
+    # Keep the computed scale factors OUT of the throwaway _temp_scaling folder:
+    # this file is the record of exactly what was applied to each body, and it is
+    # the first thing to read when a result looks wrong.
+    modelScaler.setOutputScaleFileName(os.path.join(_outdir, 'scale_factors.xml'))
 
     # MarkerPlacer (place model markers onto static-trial markers) — toggled by
     # ``marker_placer``. Off by default (memory-heavy with 100+ markers). When
@@ -2937,12 +3007,35 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
           f"(marker placement via standalone IK, not ScaleTool MarkerPlacer)")
     if linear_scaling:
         scaleTool.run()                           # dimensional scaling only -> scaled_model_path
-    elif os.path.abspath(generic_for_scaling) != os.path.abspath(scaled_model_path):
-        _shutil.copyfile(generic_for_scaling, scaled_model_path)   # keep geometry (MRI/TPS case)
+    else:
+        # MRI/TPS case: geometry is already personalised and must not be touched.
+        # But with ModelScaler off, NOTHING ever applies the subject's mass, so the
+        # model silently keeps the generic's — which is why the MRI variants were
+        # carrying 75.34 kg while every result was normalised by the real body mass.
+        # Copy the geometry through, then rescale mass and inertia alone.
+        if os.path.abspath(generic_for_scaling) != os.path.abspath(scaled_model_path):
+            _shutil.copyfile(generic_for_scaling, scaled_model_path)
+        if mass is not None:
+            try:
+                _sm.set_total_mass(scaled_model_path, mass)
+            except Exception as e:
+                print(f"[scale] [WARNING] mass-only rescale failed: {e}")
     if marker_placer:
+        # Register markers against the ORIGINAL TRC with the joint centres stripped
+        # from the marker set: they are regression estimates, not measurements, and
+        # must never pull the model's real markers around during the IK pass.
+        _ms_place = _sm.marker_placement_markerset(marker_set_for_scaling, _tmp)
         place_markers_via_ik(scaled_model_path, static_trc_path, scaled_model_path,
-                             marker_set_file=marker_set_for_scaling, time_range=(t0, t1),
+                             marker_set_file=_ms_place, time_range=(t0, t1),
                              work_dir=_tmp)
+    # Prove the model actually changed size. Without this the empty-MeasurementSet
+    # failure is invisible: the file exists, is named scaled.osim, and every
+    # downstream stage runs happily on generic geometry.
+    if linear_scaling:
+        try:
+            _sm.verify_scaled(generic_for_scaling, scaled_model_path)
+        except Exception as e:
+            print(f"[scale] [WARNING] post-scaling verification failed: {e}")
     # scaling succeeded — drop the throwaway intermediates.
     _shutil.rmtree(_tmp, ignore_errors=True)
     print(f"Scaled model saved to: {scaled_model_path}")

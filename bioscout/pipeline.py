@@ -550,7 +550,7 @@ def _run_scaling(subj, sdir, session, config, u, replace=True):
     ``{session: static_trial_name}`` map), else the Subject's ``static_trial``,
     else the first trial folder whose name starts with 'static'. Outputs go to
     ``models/<subject>/<session>/``. Returns the final model path, or None."""
-    from bioscout.utils import openSim as _os
+    from bioscout.utils import get_openSim as _get_os; _os = _get_os()
     import shutil
 
     generic = subj.generic_model_path()
