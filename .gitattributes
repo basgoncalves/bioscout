@@ -1,0 +1,21 @@
+# Line endings. Without this every file touched by a tool that writes LF (or
+# CRLF) came back as a whole-file diff — 1024 insertions and 1024 deletions on
+# a file nobody edited — which buries the real change and makes review of a
+# merge impossible. Normalise text to LF in the repository; git checks it out
+# with the platform's convention.
+* text=auto
+
+# Anything below is byte-exact and must never be touched.
+*.osim   text eol=lf
+*.xml    text eol=lf
+*.trc    text eol=lf
+*.mot    text eol=lf
+*.sto    text eol=lf
+*.c3d    binary
+*.exe    binary
+*.dll    binary
+*.png    binary
+*.jpg    binary
+*.stl    binary
+*.zip    binary
+*.whl    binary

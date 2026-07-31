@@ -79,5 +79,6 @@ _*.tar.gz
 _template_runner.py
 _tps_cli_mode.py
 _to_delete_*.py
+_patch_*.py
 _bashwrite_probe.txt
 ziLDWRaE

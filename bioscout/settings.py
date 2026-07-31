@@ -51,7 +51,7 @@ except Exception:
     def discover_sessions(*a, **k): return []
     def _trial_type(name, *a, **k): return name
 
-__version__ = "2.0.1"
+__version__ = "2.0.0b1"
 
 RUN_PIPELINE = True    # run the full pipeline (IK + ID + SO + MA + CEINMS) per trial
 RUN_SUMMARY  = True    # generate summary figures + metrics CSVs

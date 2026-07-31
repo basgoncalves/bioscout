@@ -46,15 +46,13 @@ from config.config_manager import ConfigManager
 from utils.logger import logger
 from gui.styles import theme
 from settings import UISettings
-from gui.widgets.c3d_export import C3DExportTab
 from gui.widgets.emg_normalization import EMGNormalizationTab
 from gui.widgets.model_scaling import ModelScalingTab
-from gui.widgets.analysis_control_session import AnalysisControlSessionTab
-from gui.widgets.batch_processor import BatchProcessorTab
 from gui.widgets.batch_c3d_export import BatchC3DExport
 from gui.widgets.results_viewer import ResultsViewerTab
+from gui.widgets.trial_analysis import TrialAnalysisTab
+from gui.widgets.emg_analysis_tab import EMGAnalysisTab
 from gui.widgets.training_tracking import TrainingTrackingTab
-from gui.widgets.logs import LogsTab
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
 from gui.widgets.configuration import ConfigurationTab
 from gui.widgets.console_terminal import ResizablePanelSplitter
@@ -107,7 +105,13 @@ class MainWindow(ctk.CTk):
 
         super().__init__()
 
-        self.title("BioScout")
+        try:
+            from bioscout import __version__ as _bs_ver
+        except Exception:
+            _bs_ver = "?"
+        # The version belongs in the title bar: every screenshot of a bug
+        # then carries the build it came from.
+        self.title(f"BioScout  v{_bs_ver}")
         # Set window / taskbar icon
         try:
             from PIL import Image as _PILImg
@@ -337,7 +341,8 @@ class MainWindow(ctk.CTk):
         """Create left sidebar with navigation."""
         sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
         sidebar.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        sidebar.grid_rowconfigure(10, weight=1)
+        # The stretchy row is chosen after the nav is built, below —
+        # a fixed index here became a nav button as tabs were added.
 
         # Logo + title at top of sidebar
         try:
@@ -357,24 +362,34 @@ class MainWindow(ctk.CTk):
         title_label.grid(row=0, column=0, padx=20, pady=(16, 8), sticky="ew")
 
         self.nav_buttons = {}
+        # Pipeline order — the same order as the runner block in settings.py:
+        # capture -> export -> EMG -> scale -> IK/ID -> MA -> SO -> CEINMS ->
+        # results. The old order was the order the tabs were written in, which
+        # mixed scopes (Session, Batch, Results) with single tools (C3D Export,
+        # Model Scaling) and told you nothing about what depends on what.
         _all_tabs = [
-            ("Recording", 1),
-            ("Video Analysis", 2),
-            ("Session Analysis", 3),
-            ("C3D Export", 4),
-            ("Batch C3D", 5),
-            ("EMG Normalization", 6),
-            ("Model Scaling", 7),
-            ("CEINMS Calibration", 8),
-            ("Batch", 9),
-            ("Results", 10),
-            ("Training Tracking", 11),
-            ("Settings", 12),
-            ("Logs", 13)
+            ("Recording",          None),
+            ("Video Analysis",     None),
+            ("Trial Analysis",     None),
+            ("C3D Export",       None),
+            ("EMG Normalization",  None),
+            ("EMG Analysis",       None),
+            ("Model Scaling",      None),
+            ("CEINMS Calibration", None),
+            ("Results",            None),
+            ("Training Tracking",  None),
+            ("Settings",           None),
         ]
-        tabs = [(name, row) for name, row in _all_tabs
+        tabs = [(name, i + 1) for i, (name, _r) in enumerate(_all_tabs)
                 if (name != "Recording" or RecordingTab is not None)
                 and (name != "Video Analysis" or VideoAnalysisTab is not None)]
+        # Rows are numbered here rather than in the list above: hard-coded row
+        # numbers meant inserting one tab silently overlapped another, and the
+        # status frame below had to be renumbered by hand every time.
+        self._nav_last_row = len(tabs)
+        # One empty row after the buttons takes all the slack, so the
+        # nav stays a solid block and Status/Help sit at the bottom.
+        sidebar.grid_rowconfigure(self._nav_last_row + 1, weight=1)
 
         for tab_name, row in tabs:
             btn = ctk.CTkButton(
@@ -390,7 +405,8 @@ class MainWindow(ctk.CTk):
             self.nav_buttons[tab_name] = btn
 
         status_frame = ctk.CTkFrame(sidebar, corner_radius=8)
-        status_frame.grid(row=14, column=0, padx=10, pady=10, sticky="ew")
+        status_frame.grid(row=self._nav_last_row + 2, column=0,
+                          padx=10, pady=10, sticky="ew")
 
         ctk.CTkLabel(status_frame, text="Status:", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
         self.status_label = ctk.CTkLabel(status_frame, text="Ready", text_color="#28a745", font=("Segoe UI", 10))
@@ -398,7 +414,8 @@ class MainWindow(ctk.CTk):
 
         # Utility buttons row (Help + Screen Record)
         button_frame = ctk.CTkFrame(sidebar)
-        button_frame.grid(row=15, column=0, padx=10, pady=10, sticky="ew")
+        button_frame.grid(row=self._nav_last_row + 3, column=0,
+                          padx=10, pady=10, sticky="ew")
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
 
@@ -444,17 +461,15 @@ class MainWindow(ctk.CTk):
         if VideoAnalysisTab is not None:
             self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
         self.tab_definitions.update({
-            "Session Analysis": {"class": AnalysisControlSessionTab, "args": (self.config_manager, self.update_status, self.broadcast_session_dir)},
-            "C3D Export": {"class": C3DExportTab, "args": (self.config_manager, self.update_status)},
-            "Batch C3D": {"class": BatchC3DExport, "args": ()},
+            "Trial Analysis": {"class": TrialAnalysisTab, "args": (self.config_manager, self.update_status)},
+            "EMG Analysis": {"class": EMGAnalysisTab, "args": (self.config_manager, self.update_status)},
+            "C3D Export": {"class": BatchC3DExport, "args": ()},
             "EMG Normalization": {"class": EMGNormalizationTab, "args": (self.config_manager, self.update_status)},
             "Model Scaling": {"class": ModelScalingTab, "args": (self.config_manager, self.update_status)},
             "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
-            "Batch": {"class": BatchProcessorTab, "args": (self.config_manager, self.update_status)},
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
             "Training Tracking": {"class": TrainingTrackingTab, "args": (self.config_manager, self.update_status)},
             "Settings": {"class": ConfigurationTab, "args": (self.config_manager, self.update_status)},
-            "Logs": {"class": LogsTab, "args": (self.config_manager, self.update_status)},
         })
 
         # Initialize tabs dict - will be populated on demand (lazy loading)
@@ -467,7 +482,7 @@ class MainWindow(ctk.CTk):
         default_tab = UISettings.DEFAULT_TAB_ON_LAUNCH
         if default_tab not in self.tab_definitions:
             logger.warning(f"Default tab '{default_tab}' not found, using 'Recording'")
-            default_tab = "Recording"
+            default_tab = next(iter(self.tab_definitions), "Recording")
 
         self.current_tab = default_tab
 

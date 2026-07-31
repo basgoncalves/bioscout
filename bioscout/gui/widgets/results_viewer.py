@@ -164,6 +164,151 @@ def _time_normalise(df: "pd.DataFrame") -> "pd.DataFrame":
 
 # ── main widget ──────────────────────────────────────────────────────────────
 
+# --------------------------------------------------------------- session layout
+# The Results tab has to answer "what trials does this session have?" without
+# assuming where they live: a session is either the numbered layout
+# (1_c3dfiles / 2_experimental / 3_iterations/<iteration>/<trial>) or the older
+# flat one (<session>/<iteration>/<trial>). bioscout.utils.session_layout knows
+# the difference, so ask it rather than globbing directories and hoping.
+
+def _layout():
+    from bioscout.utils import session_layout as _L
+    return _L
+
+
+def _layout_trials(sess_dir):
+    """Trial names for a session, from the c3d files and from what is on disk.
+
+    The c3d files are the authoritative list — they exist before any processing
+    has run, so a fresh session still populates. Trials that only exist as
+    output folders (an export from an earlier capture, a renamed c3d) are
+    unioned in, so nothing already processed disappears from the dropdown.
+    """
+    L = _layout()
+    sess_dir = Path(sess_dir)
+    names = set()
+    try:
+        c3d = Path(L.c3d_root(str(sess_dir)))
+        if c3d.is_dir():
+            names |= {f.stem for f in c3d.glob("*.c3d")}
+    except Exception:
+        pass
+    try:
+        exp = Path(L.experimental_root(str(sess_dir)))
+        if exp.is_dir():
+            names |= {d.name for d in exp.iterdir() if d.is_dir()}
+    except Exception:
+        pass
+    try:
+        itr = Path(L.iterations_root(str(sess_dir)))
+        if itr.is_dir():
+            for it in itr.iterdir():
+                if it.is_dir() and it.name not in L.NON_ITERATION_DIRS:
+                    names |= {d.name for d in it.iterdir() if d.is_dir()}
+    except Exception:
+        pass
+    return sorted(names)
+
+
+def _layout_trial_sources(sess_dir, trial):
+    """``[(label, directory)]`` holding data for one trial.
+
+    A trial's files are split across the shared export and every model
+    iteration that has run it, so a single "trial folder" does not exist. Each
+    location is labelled, and the label is what disambiguates two files with
+    the same name from different models.
+    """
+    L = _layout()
+    sess_dir = Path(sess_dir)
+    out = []
+    try:
+        exp = Path(L.experimental_root(str(sess_dir))) / trial
+        if exp.is_dir():
+            out.append((Path(L.experimental_root(str(sess_dir))).name, exp))
+    except Exception:
+        pass
+    try:
+        itr = Path(L.iterations_root(str(sess_dir)))
+        if itr.is_dir():
+            for it in sorted(itr.iterdir()):
+                if not it.is_dir() or it.name in L.NON_ITERATION_DIRS:
+                    continue
+                d = it / trial
+                if d.is_dir():
+                    out.append((it.name, d))
+    except Exception:
+        pass
+    legacy = sess_dir / trial          # pre-layout sessions
+    if legacy.is_dir():
+        out.append(("(session)", legacy))
+    return out
+
+
+# ------------------------------------------------------------------ filtering
+#: Filter name -> what its numeric parameter means. "none" is first so it is
+#: the default in the dropdown.
+FILTERS = ("none", "butterworth low-pass", "moving average", "savitzky-golay")
+
+
+def apply_filter(y, kind, cutoff, order, fs):
+    """Filter one signal. Returns the input unchanged on any failure.
+
+    Deliberately never raises: this runs inside the draw loop, where a bad
+    parameter must not take the whole plot down.
+    """
+    y = np.asarray(y, float)
+    if kind == "none" or y.size < 4 or not np.any(np.isfinite(y)):
+        return y
+    try:
+        if kind == "butterworth low-pass":
+            from scipy.signal import butter, filtfilt
+            wn = min(max(cutoff / (fs / 2.0), 1e-6), 0.999)
+            b, a = butter(max(1, int(order)), wn, btype="low")
+            return filtfilt(b, a, y)
+        if kind == "moving average":
+            w = max(1, int(cutoff))
+            if w >= y.size:
+                return y
+            return np.convolve(y, np.ones(w) / w, mode="same")
+        if kind == "savitzky-golay":
+            from scipy.signal import savgol_filter
+            w = max(3, min(int(cutoff) | 1, (y.size - 1) | 1))   # odd, in range
+            return savgol_filter(y, w, int(min(max(1, order), w - 1)))
+    except Exception:
+        return y
+    return y
+
+
+# --------------------------------------------------------------- file grouping
+#: Trial subfolder -> the pipeline stage it belongs to, in pipeline order.
+#: Anything not listed keeps its own folder name, so a new stage shows up as
+#: itself rather than being silently filed under "Other".
+GROUPS = (
+    ("",                     "Experimental"),      # files at the trial root
+    ("external_biomechanics", "Kinematics / Dynamics"),
+    ("muscle_analysis",       "Muscle Analysis"),
+    ("static_optimisation",   "Static Optimisation"),
+    ("static_optimization",   "Static Optimisation"),
+    ("joint_contact_forces",  "Joint Reaction"),
+    ("ceinms",                "CEINMS"),
+)
+_GROUP_LABEL = dict(GROUPS)
+_GROUP_ORDER = [lbl for _k, lbl in GROUPS]
+
+
+def group_of(rel_path):
+    """Stage label for a file's path relative to its trial folder."""
+    parts = str(rel_path).replace("\\", "/").split("/")
+    top = parts[0] if len(parts) > 1 else ""
+    return _GROUP_LABEL.get(top, top or "Experimental")
+
+
+def sort_groups(labels):
+    """Pipeline order first, then anything unrecognised alphabetically."""
+    known = [g for g in _GROUP_ORDER if g in labels]
+    return known + sorted(l for l in labels if l not in _GROUP_ORDER)
+
+
 class ResultsViewerTab(ctk.CTkFrame):
     """Results viewer with project-tree dropdowns, channel tickboxes, and grid subplots."""
 
@@ -199,13 +344,14 @@ class ResultsViewerTab(ctk.CTkFrame):
         left = ctk.CTkFrame(root, width=240, fg_color="#161620", corner_radius=8)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_propagate(False)
-        left.grid_rowconfigure(6, weight=1)
+        # The stretchy row is set AFTER the widgets are built (see below):
+        # hard-coding an index here put the weight on the 'File' label.
         left.grid_columnconfigure(0, weight=1)
 
         row = 0
         def _lbl(text):
             nonlocal row
-            ctk.CTkLabel(left, text=text, font=("Segoe UI", 9, "bold"),
+            ctk.CTkLabel(left, text=text, font=("Segoe UI", 11, "bold"),
                          text_color="#aaaaaa").grid(row=row, column=0,
                          sticky="w", padx=10, pady=(8, 1))
             row += 1
@@ -213,7 +359,7 @@ class ResultsViewerTab(ctk.CTkFrame):
         def _menu(var, values=("—",)):
             nonlocal row
             m = ctk.CTkOptionMenu(left, variable=var, values=list(values),
-                                  height=26, font=("Segoe UI", 10))
+                                  height=28, font=("Segoe UI", 12))
             m.grid(row=row, column=0, sticky="ew", padx=10, pady=(0, 2))
             row += 1
             return m
@@ -233,9 +379,36 @@ class ResultsViewerTab(ctk.CTkFrame):
         self._trial_menu = _menu(self._trial_var)
         self._trial_var.trace_add("write", lambda *_: self._on_trial_changed())
 
-        _lbl("File")
+        # Source and Group narrow the file list before it is shown: a trial
+        # with four iterations has ~200 outputs, which as one dropdown is a
+        # list taller than the screen.
+        _lbl("Source  (model / experimental)")
+        self._source_var = ctk.StringVar(value="—")
+        self._source_menu = _menu(self._source_var)
+        self._source_var.trace_add("write", lambda *_: self._on_source_changed())
+
+        _lbl("Group  (pipeline stage)")
+        self._group_var = ctk.StringVar(value="—")
+        self._group_menu = _menu(self._group_var)
+        self._group_var.trace_add("write", lambda *_: self._on_group_changed())
+
+        # File sits directly under Group with its label on the same line: it is
+        # the narrowest choice on the panel and a full-width label above it
+        # wasted a row for no gain.
+        file_row = ctk.CTkFrame(left, fg_color="transparent")
+        file_row.grid(row=row, column=0, sticky="ew", padx=10, pady=(8, 2))
+        file_row.grid_columnconfigure(1, weight=1)
+        row += 1
+        ctk.CTkLabel(file_row, text="File", font=("Segoe UI", 11, "bold"),
+                     text_color="#aaaaaa").grid(row=0, column=0, sticky="w",
+                                                padx=(0, 6))
         self._file_var  = ctk.StringVar(value="—")
-        self._file_menu = _menu(self._file_var)
+        self._file_menu = ctk.CTkOptionMenu(file_row, variable=self._file_var,
+                                            values=["—"], height=28,
+                                            font=("Segoe UI", 12))
+        self._file_menu.grid(row=0, column=1, sticky="ew")
+        #: display name -> absolute path, filled by _on_trial_changed
+        self._file_map = {}
 
         # colour + add button
         colour_row = ctk.CTkFrame(left, fg_color="transparent")
@@ -246,7 +419,7 @@ class ResultsViewerTab(ctk.CTkFrame):
                                          fg_color=_PALETTE[0], hover_color=_PALETTE[0],
                                          command=self._pick_colour)
         self._colour_btn.grid(row=0, column=0, padx=(0, 4))
-        ctk.CTkLabel(colour_row, text="Colour", font=("Segoe UI", 10)).grid(
+        ctk.CTkLabel(colour_row, text="Colour", font=("Segoe UI", 12)).grid(
             row=0, column=1, sticky="w")
 
         self._cur_colour = _PALETTE[0]
@@ -258,14 +431,56 @@ class ResultsViewerTab(ctk.CTkFrame):
         row += 1
 
         # series list (scrollable)
-        ctk.CTkLabel(left, text="Series", font=("Segoe UI", 9, "bold"),
+        ctk.CTkLabel(left, text="Series", font=("Segoe UI", 11, "bold"),
                      text_color="#aaaaaa").grid(row=row, column=0,
                      sticky="w", padx=10, pady=(6, 1))
         row += 1
         self._series_frame = ctk.CTkScrollableFrame(left, fg_color="transparent",
                                                      corner_radius=0)
         self._series_frame.grid(row=row, column=0, sticky="nsew", padx=4, pady=0)
+        left.grid_rowconfigure(row, weight=1)     # the list absorbs the slack
         row += 1
+
+        # ---- filter bar --------------------------------------------------
+        fbar = ctk.CTkFrame(left, fg_color="#1b1b26", corner_radius=6)
+        fbar.grid(row=row, column=0, sticky="ew", padx=6, pady=(6, 2))
+        fbar.grid_columnconfigure(1, weight=1)
+        row += 1
+        ctk.CTkLabel(fbar, text="Filter", font=("Segoe UI", 11, "bold"),
+                     text_color="#aaaaaa").grid(row=0, column=0, columnspan=2,
+                                                sticky="w", padx=6, pady=(6, 2))
+        self._filter_var = ctk.StringVar(value="none")
+        ctk.CTkOptionMenu(fbar, variable=self._filter_var, values=list(FILTERS),
+                          height=26, font=("Segoe UI", 11),
+                          command=lambda *_: self._on_filter_kind()).grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 2))
+        self._cut_lbl = ctk.CTkLabel(fbar, text="cutoff (Hz)",
+                                     font=("Segoe UI", 10), text_color="#aaaaaa")
+        self._cut_lbl.grid(row=2, column=0, sticky="w", padx=6)
+        self._cut_var = ctk.StringVar(value="6")
+        ctk.CTkEntry(fbar, textvariable=self._cut_var, width=64, height=24,
+                     font=("Segoe UI", 11)).grid(row=2, column=1, sticky="e",
+                                                 padx=6)
+        ctk.CTkLabel(fbar, text="order", font=("Segoe UI", 10),
+                     text_color="#aaaaaa").grid(row=3, column=0, sticky="w", padx=6)
+        self._ord_var = ctk.StringVar(value="4")
+        ctk.CTkEntry(fbar, textvariable=self._ord_var, width=64, height=24,
+                     font=("Segoe UI", 11)).grid(row=3, column=1, sticky="e",
+                                                 padx=6, pady=(0, 2))
+        self._filter_note = ctk.CTkLabel(fbar, text="", font=("Segoe UI", 9),
+                                         text_color="#888888", wraplength=195,
+                                         justify="left")
+        self._filter_note.grid(row=4, column=0, columnspan=2, sticky="w",
+                               padx=6, pady=(0, 2))
+        ctk.CTkButton(fbar, text="Apply", height=24, font=("Segoe UI", 11),
+                      command=self._refresh_plot).grid(row=5, column=0,
+                                                       sticky="ew", padx=(6, 3),
+                                                       pady=(2, 6))
+        ctk.CTkButton(fbar, text="Save…", height=24, font=("Segoe UI", 11),
+                      fg_color="#2f6f9f", hover_color="#3a86bd",
+                      command=self._save_filtered).grid(row=5, column=1,
+                                                        sticky="ew", padx=(3, 6),
+                                                        pady=(2, 6))
 
         ctk.CTkButton(left, text="Clear All", height=24,
                       fg_color="#555555", hover_color="#666666",
@@ -314,7 +529,7 @@ class ResultsViewerTab(ctk.CTkFrame):
         right.grid_rowconfigure(2, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(right, text="Channels", font=("Segoe UI", 10, "bold")).grid(
+        ctk.CTkLabel(right, text="Channels", font=("Segoe UI", 12, "bold")).grid(
             row=0, column=0, sticky="w", padx=10, pady=(8, 2))
 
         sel_row = ctk.CTkFrame(right, fg_color="transparent")
@@ -393,7 +608,7 @@ class ResultsViewerTab(ctk.CTkFrame):
             self._trial_var.set("—")
             return
         sess_dir = sims / part / sess
-        trials = sorted(p.name for p in sess_dir.iterdir() if p.is_dir())
+        trials = _layout_trials(sess_dir)
         opts = trials if trials else ["—"]
         self._trial_menu.configure(values=opts)
         self._trial_var.set(opts[0])
@@ -404,17 +619,137 @@ class ResultsViewerTab(ctk.CTkFrame):
         trial = self._trial_var.get()
         sims  = self._sims_dir()
         if not sims or "—" in (part, sess, trial):
-            self._file_menu.configure(values=["—"])
-            self._file_var.set("—")
+            self._tree = {}
+            for m, v in ((self._source_menu, self._source_var),
+                         (self._group_menu, self._group_var),
+                         (self._file_menu, self._file_var)):
+                m.configure(values=["—"])
+                v.set("—")
             return
-        trial_dir = sims / part / sess / trial
-        files = sorted(f.name for f in trial_dir.iterdir()
-                       if f.suffix.lower() in self._DATA_EXTS)
-        opts = files if files else ["—"]
+        # {source: {group: {display name: path}}} — built once per trial, then
+        # the two dropdowns just index into it.
+        self._tree = {}
+        for label, d in _layout_trial_sources(sims / part / sess, trial):
+            for f in sorted(d.rglob("*")):
+                if not f.is_file() or f.suffix.lower() not in self._DATA_EXTS:
+                    continue
+                rel = f.relative_to(d).as_posix()
+                g = group_of(rel)
+                # Show the leaf name; the source and group are already chosen
+                # above, so repeating them in every row is noise. CEINMS keeps
+                # its execution-parameter folder, which distinguishes runs.
+                name = rel if g == "CEINMS" else Path(rel).name
+                self._tree.setdefault(label, {}).setdefault(g, {})[name] = f
+        sources = list(self._tree) or ["—"]
+        self._source_menu.configure(values=sources)
+        self._source_var.set(sources[0])
+        self._on_source_changed()
+
+    def _on_source_changed(self, *_):
+        groups = sort_groups(self._tree.get(self._source_var.get(), {}))
+        self._group_menu.configure(values=groups or ["—"])
+        self._group_var.set((groups or ["—"])[0])
+        self._on_group_changed()
+
+    def _on_group_changed(self, *_):
+        files = self._tree.get(self._source_var.get(), {}).get(
+            self._group_var.get(), {})
+        self._file_map = dict(files)
+        opts = sorted(self._file_map) or ["—"]
         self._file_menu.configure(values=opts)
         self._file_var.set(opts[0])
 
     # ── colour picker ────────────────────────────────────────────────────────
+
+    # ------------------------------------------------------------- filtering
+    def _on_filter_kind(self):
+        kind = self._filter_var.get()
+        notes = {
+            "none": "",
+            "butterworth low-pass":
+                "zero-lag (filtfilt): no phase shift, effective order 2x",
+            "moving average":
+                "simple, but shifts and blunts peaks",
+            "savitzky-golay":
+                "preserves peak height and width",
+        }
+        self._cut_lbl.configure(
+            text="window (samples)" if kind in ("moving average", "savitzky-golay")
+            else "cutoff (Hz)")
+        self._filter_note.configure(text=notes.get(kind, ""))
+        self._refresh_plot()
+
+    def _filter_params(self):
+        try:
+            cut = float(self._cut_var.get())
+        except (ValueError, AttributeError):
+            cut = 6.0
+        try:
+            order = int(float(self._ord_var.get()))
+        except (ValueError, AttributeError):
+            order = 4
+        kind = getattr(self, "_filter_var", None)
+        return (kind.get() if kind else "none"), cut, order
+
+    @staticmethod
+    def _fs_from_x(x):
+        """Sampling rate from the time column; 100 Hz when it cannot be read."""
+        try:
+            dt = float(np.median(np.diff(np.asarray(x, float))))
+            if dt > 0:
+                return 1.0 / dt
+        except Exception:
+            pass
+        return 100.0
+
+    def _apply_filter(self, y, x):
+        kind, cut, order = self._filter_params()
+        if kind == "none":
+            return y
+        return apply_filter(y, kind, cut, order, self._fs_from_x(x))
+
+    def _save_filtered(self):
+        """Write every loaded series, filtered, to one CSV."""
+        kind, cut, order = self._filter_params()
+        if kind == "none":
+            self.status_callback("Filter is 'none' — nothing to save", "warning")
+            return
+        if not self._series:
+            self.status_callback("No series loaded", "warning")
+            return
+        try:
+            from tkinter.filedialog import asksaveasfilename
+            out = asksaveasfilename(parent=self, defaultextension=".csv",
+                                    filetypes=[("CSV", "*.csv")],
+                                    initialfile="filtered.csv")
+        except Exception:
+            out = None
+        if not out:
+            return
+        import csv
+        try:
+            with open(out, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                # Parameters go IN the file: the filename alone does not say
+                # what was done, and a filtered CSV that cannot be reproduced
+                # is not a result.
+                w.writerow([f"# filter={kind}", f"cutoff={cut}", f"order={order}"])
+                for srs in self._series:
+                    df = srs["df"]
+                    cols = list(df.columns)
+                    x = df[cols[0]].values
+                    w.writerow([f"# series: {srs['label']}"])
+                    w.writerow(cols)
+                    filtered = [x] + [
+                        self._apply_filter(df[c].values.astype(float), x)
+                        for c in cols[1:]
+                    ]
+                    for i in range(len(df)):
+                        w.writerow([col[i] for col in filtered])
+                    w.writerow([])
+            self.status_callback(f"Saved filtered data to {out}", "success")
+        except Exception as exc:
+            self.status_callback(f"{type(exc).__name__}: {exc}", "error")
 
     def _pick_colour(self):
         try:
@@ -444,12 +779,15 @@ class ResultsViewerTab(ctk.CTkFrame):
             self.status_callback("Select participant / session / trial / file first", "warning")
             return
 
-        file_path = sims / part / sess / trial / fname
+        file_path = self._file_map.get(fname) or (sims / part / sess / trial / fname)
         if not file_path.exists():
             self.status_callback(f"File not found: {file_path}", "error")
             return
 
-        label = f"{part} / {sess} / {trial} / {fname}"
+        # The source belongs in the legend: two series from the same
+        # trial and different models would otherwise read identically.
+        label = (f"{part} / {sess} / {trial} / "
+                 f"{self._source_var.get()} / {fname}")
 
         # Don't add duplicates
         if any(s["label"] == label for s in self._series):
@@ -497,12 +835,12 @@ class ResultsViewerTab(ctk.CTkFrame):
             row.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(row, text="■", text_color=s["colour"],
                          font=("Segoe UI", 12)).grid(row=0, column=0, padx=(2, 4))
-            ctk.CTkLabel(row, text=s["label"], font=("Segoe UI", 9),
+            ctk.CTkLabel(row, text=s["label"], font=("Segoe UI", 11),
                          anchor="w", wraplength=160).grid(row=0, column=1, sticky="ew")
             idx = i
             ctk.CTkButton(row, text="✕", width=20, height=20,
                           fg_color="#553333", hover_color="#774444",
-                          font=("Segoe UI", 9),
+                          font=("Segoe UI", 11),
                           command=lambda i=idx: self._remove_series(i)
                           ).grid(row=0, column=2, padx=(2, 0))
 
@@ -522,7 +860,7 @@ class ResultsViewerTab(ctk.CTkFrame):
             ctk.CTkCheckBox(
                 self._ch_scroll, text=col,
                 variable=var,
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 11),
                 command=self._refresh_plot,
             ).pack(anchor="w", padx=4, pady=1)
         self._channels = list(self._ch_vars.keys())
@@ -546,7 +884,7 @@ class ResultsViewerTab(ctk.CTkFrame):
             ctk.CTkCheckBox(
                 self._ch_scroll, text=col,
                 variable=self._ch_vars[col],
-                font=("Segoe UI", 9),
+                font=("Segoe UI", 11),
                 command=self._refresh_plot,
             ).pack(anchor="w", padx=4, pady=1)
         self._channels = list(self._ch_vars.keys())
@@ -619,7 +957,7 @@ class ResultsViewerTab(ctk.CTkFrame):
                     if ch not in df.columns:
                         continue
                     try:
-                        y = df[ch].values.astype(float)
+                        y = self._apply_filter(df[ch].values.astype(float), x)
                         ax.plot(x, y, linewidth=1.2, color=s["colour"],
                                 alpha=0.85, label=s["label"].split(" / ")[0])
                     except Exception:

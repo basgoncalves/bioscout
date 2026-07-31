@@ -2,6 +2,51 @@
 
 All notable changes to BioScout are documented here.
 
+## [2.0.0b1 - 2.0.0b4] — 2026-07-31
+
+Beta series while the GUI restructure settles. The last digit moves on each
+commit; this collapses to 2.0.1 when it merges to main.
+
+### Added
+
+* `bioscout.utils.motion_detect` — finds a trial's movement window from the
+  barbell markers, falling back to pelvis markers, then vertical GRF, then the
+  full capture. The 5%-of-bar-travel rule was **fitted to the hand-set windows
+  already in Athlete_06's session.yaml**: it reproduces all five squats with
+  end errors under 20 ms and starts 0.06-0.33 s early (the generous direction).
+  Reproducing the existing convention was the acceptance test — detecting a
+  *different* one and applying it to half a session would be worse than not
+  detecting at all.
+* `bioscout.utils.emg_analysis` — EMG power spectra with mains/artefact flags,
+  and muscle synergies by NMF with the VAF-vs-count curve.
+* GUI: **Trial Analysis** tab (per-trial stage status across every iteration,
+  editable session.yaml block with a Detect button, per-trial re-run) and
+  **EMG Analysis** tab (frequency + synergies, with channel selection).
+
+### Changed
+
+* GUI navigation follows the pipeline: Recording -> Video -> Trial Analysis ->
+  C3D Export -> EMG Normalization -> EMG Analysis -> Model Scaling -> CEINMS
+  Calibration -> Results. Session Analysis, Batch, Logs and the duplicate C3D
+  Export tab are gone; the C3D preview panel is hidden.
+* Results tab: Source -> Group -> File cascade instead of one ~200-entry list,
+  plus a filter bar (Butterworth zero-lag / moving average / Savitzky-Golay)
+  that applies at draw time and can save the filtered signals to CSV with the
+  parameters recorded in the file.
+
+### Fixed
+
+* Results tab listed the layout's own folders (`1_c3dfiles`, `3_iterations`,
+  `logs`) as trials, and a hard-coded `grid_rowconfigure(6, weight=1)` put the
+  stretchy row on the "File" label.
+* Trial stage detection keyed on guessed filenames, so Inverse Kinematics read
+  as never-run on trials that had run it — IK writes `joint_angles.mot`.
+  Detection now keys on the trial subfolder.
+* EMG tab crashed on redraw: the matplotlib canvas was assigned to
+  `self._canvas`, which `CTkFrame` already uses for its own drawing surface.
+* Sidebar had gaps because `grid_rowconfigure(10, weight=1)` had become a nav
+  button as tabs were added.
+
 ## [2.0.1] — 2026-07-30
 
 Two new subpackages land in this release, plus the version scheme is repaired.

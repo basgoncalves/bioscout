@@ -427,6 +427,16 @@ class BatchC3DExport(ctk.CTkFrame):
         )
         self._preview_placeholder.grid(row=0, column=0, sticky="nsew")
 
+        # --- preview panel hidden (bioscout 2.0.0b2) ---
+        # The preview showed one channel of one file while you tuned filters,
+        # which meant re-reading the c3d on every parameter change for a view
+        # the exported file and the Results tab both give you afterwards. The
+        # widgets are built and then hidden rather than destroyed, so every
+        # method that updates them keeps working and this is a one-line revert.
+        preview_ctrl.grid_remove()
+        self.preview_plot_frame.grid_remove()
+        emg_col.grid_rowconfigure(4, weight=0)
+
         # ----- EMG column: channels header + list -----
         ctk.CTkLabel(emg_col, text="EMG Channels:", font=("Segoe UI", 8, "bold")).grid(
             row=5, column=0, sticky="w", padx=5, pady=(6, 2)
