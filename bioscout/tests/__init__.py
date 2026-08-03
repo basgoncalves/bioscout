@@ -55,6 +55,16 @@ def suite():
     loader = unittest.TestLoader()
     s = unittest.TestSuite()
     s.addTests(loader.loadTestsFromTestCase(TestPackageWiring))
+    # model_edit: dependency-light by design — the registry, naming rule,
+    # validator, recipe engine and every pure-XML op run without OpenSim.
+    try:
+        from . import test_model_edit as _me
+        for _cls in (_me.TestRegistry, _me.TestIntrospect, _me.TestNaming,
+                     _me.TestValidation, _me.TestPureOps,
+                     _me.TestOpenSimOpsDegradeCleanly, _me.TestRecipe):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] model_edit tests unavailable: {_e}")
     # OpenSim/CEINMS knee integration tests — optional. They self-skip when
     # OpenSim (or the CEINMS binary) isn't available; the import is guarded so a
     # problem there can never break the lightweight suite.

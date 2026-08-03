@@ -71,7 +71,7 @@ _KEEP_MINIMAL = re.compile(
     # Maintenance commands the user invoked ON PURPOSE. Their whole output is
     # the answer, so dropping it in "minimal" makes the command look like it
     # did nothing at all — which is exactly how prune/reset reports vanished.
-    r"\[prune\]|\[reset\]|\[settings\]|\[tps\]|\[ma\]|"
+    r"\[prune\]|\[reset\]|\[settings\]|\[tps\]|\[ma\]|\[model-edit\]|"
     # [Session]/[Iteration] carry scale_model's and export_trials' verdicts —
     # including "static TRC not found", the one line that explains a whole run
     # of IK/MA/SO/CEINMS failures. [export is per-trial export progress.

@@ -2120,35 +2120,17 @@ class Iteration:
                         try:
                             ct = self.trial(cn)
                             ma_len = os.path.join(ct.path, ct.ma, "_MuscleAnalysis_Length.sto")
-                            # Recompute IK->ID->MA when the muscle-length file is MISSING
-                            # or STALE. Never reuse a stale IK/ID that was solved over a
-                            # DIFFERENT window than MA: the CEINMS inputData window then
-                            # inherits the stale IK/ID span, which has no muscle-length
-                            # data, and calibration dies SILENTLY (reads inputs, writes no
-                            # subjectCalibrated.xml). Keep all three consistent over the
-                            # trial's current window.
-                            #
-                            # Staleness is a MTIME question, not a flag question. Keying
-                            # this off `replace` alone re-solved IK/ID/MA on every CEINMS
-                            # run even when the stages earlier in the SAME run had just
-                            # produced them -- identical output, minutes per iteration. The
-                            # model is the thing MA is derived from, so compare against it.
-                            # (so_model vs ceinms_model differ only in max_isometric_force;
-                            # force enters neither IK, ID nor moment arms, so either is a
-                            # valid reference.)
-                            _mdl = os.path.join(
-                                self.path, _itc.get("ceinms_model", "scaled.osim"))
-                            _stale = (not os.path.exists(ma_len)) or (
-                                os.path.exists(_mdl)
-                                and os.path.getmtime(ma_len) < os.path.getmtime(_mdl))
-                            if _stale:
+                            # Recompute IK->ID->MA when MISSING or when replace. Never reuse
+                            # a stale IK/ID that was solved over a DIFFERENT window than MA:
+                            # the CEINMS inputData window then inherits the stale IK/ID span,
+                            # which has no muscle-length data, and calibration dies SILENTLY
+                            # (reads inputs, writes no subjectCalibrated.xml). Keep all three
+                            # consistent over the trial's current window.
+                            if replace or not os.path.exists(ma_len):
                                 log(f"  [CEINMS prep] IK->ID->MA for calibration trial {cn}")
                                 ct.run_ik(replace=replace)
                                 ct.run_id(replace=replace)
                                 ct.run_ma(replace=replace)
-                            else:
-                                log(f"  [CEINMS prep] reusing IK/ID/MA for {cn} "
-                                    f"(muscle lengths newer than the model)")
                         except Exception as e:
                             log(f"  [CEINMS prep ERROR] {cn}: {e}")
                     log(f"  [CEINMS] calibrating (trials={calibration_trials or cal}) — slow ...")

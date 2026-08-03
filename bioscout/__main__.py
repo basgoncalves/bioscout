@@ -24,6 +24,25 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ---------------------------------------------------------------------------
+# The environment bootstrap runs BEFORE every heavy import below, and exits.
+#
+# Everything from `from settings import ...` down pulls in scipy, matplotlib and
+# the rest of the scientific stack. Those are exactly the packages that are
+# missing in the one situation --env-create exists to fix: a fresh machine, or a
+# bare interpreter, where the environment has not been built yet. Handling the
+# flag after the imports would mean the command that installs your dependencies
+# could only run once your dependencies were installed.
+#
+# bioscout.envcheck imports nothing but the standard library, for the same reason.
+# ---------------------------------------------------------------------------
+_ENV_FLAGS = {"--env", "--env-check", "--env_check", "--env-create", "--env_create"}
+if _ENV_FLAGS & set(sys.argv[1:]):
+    from bioscout.envcheck import ensure
+    _create = bool({"--env-create", "--env_create"} & set(sys.argv[1:]))
+    _st = ensure(create=_create)
+    sys.exit(0 if (_st["match"] or _st["env_exists"]) else 1)
+
 from settings import BatchSettings, CEINMSSettings
 from utils.model_scaler import ModelScaler
 import utils
@@ -106,6 +125,22 @@ parser.add_argument('--change-moment-arms', '--change_moment_arms', '--ma',
                          "that span a coordinate, grows the wrap surface standing in for "
                          "muscle bulk until the moment arm shifts by the mm you ask for, "
                          "then re-checks for discontinuities.")
+parser.add_argument('--env', '--env-check', dest='env_check', action='store_true',
+                    help="Report which conda environment bioscout expects "
+                         "(bioscoutv<version>) versus the one it is running in.")
+parser.add_argument('--env-create', '--env_create', dest='env_create', action='store_true',
+                    help="Create the bioscoutv<version> conda environment if it is "
+                         "missing and install everything into it (pip installs uv, "
+                         "uv installs the rest, opensim falls back to conda). Cannot "
+                         "ACTIVATE it for your shell — see bioscout-env.sh.")
+parser.add_argument('--model-edit', '--model_edit', '--edit',
+                    dest='model_edit', nargs='?', const='', default=None,
+                    metavar='PROJECT_PATH',
+                    help="Build or change a model, interactively: scale it, set its "
+                         "mass, change max isometric force, grow moment arms, widen a "
+                         "coordinate range, place markers, inspect it. Same operations "
+                         "are available non-interactively via "
+                         "`python -m bioscout.model_edit` and as a YAML recipe.")
 parser.add_argument('--compare-models', '--compare_models', dest='compare_models',
                     nargs='+', default=None, metavar='FOLDER_OR_OSIM',
                     help="Compare the DIMENSIONS and SEGMENT MASSES of several .osim "
@@ -1612,6 +1647,13 @@ def main() -> int:
         return run_load_report_mode(args.load_report)
     if args.init is not None:
         return run_init_mode(args.init)
+    # NB: --env / --env-create never reach here — they are handled at the top of
+    # this file, before the heavy imports. The argparse entries below exist so
+    # they appear in --help.
+    if args.model_edit is not None:
+        from bioscout.model_edit.cli import run as _run_model_edit
+        return _run_model_edit(args.model_edit or args.project or os.getcwd())
+
     if args.change_moment_arms is not None:
         from bioscout.change_moment_arms.cli import run as _run_ma
         return _run_ma(args.change_moment_arms or args.project or os.getcwd())
