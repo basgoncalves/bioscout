@@ -107,6 +107,7 @@ class _Tee:
         self.streams = streams
         self._buf = ""
         self._in_tb = False        # inside a Python traceback block (keep every line)
+        self._kept_prev = False    # previous line survived the filter
 
     def _emit(self, text):
         for s in self.streams:
@@ -149,8 +150,19 @@ class _Tee:
                         and "Traceback (most recent call last)" not in line:
                     self._in_tb = False
                 continue
-            if _keep_line(line, level):
+            keep = _keep_line(line, level)
+            # A multi-line message only whitelists its FIRST line, so the
+            # indented continuation lines were dropped and the header survived
+            # with its content stripped — e.g. SO printing
+            #     [Success] Static Optimization completed. Results saved in:
+            # and nothing after it, which reads as though nothing was written.
+            # The stage banners lost their "trials:" / "model:" lines the same
+            # way. Keep an indented line whenever the line above it was kept.
+            if not keep and self._kept_prev and line[:1].isspace() and line.strip():
+                keep = True
+            if keep:
                 self._emit(self._stamp(line) + "\n")
+            self._kept_prev = keep
 
     def flush(self):
         for s in self.streams:

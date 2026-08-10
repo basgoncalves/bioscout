@@ -43,9 +43,31 @@ if _ENV_FLAGS & set(sys.argv[1:]):
     _st = ensure(create=_create)
     sys.exit(0 if (_st["match"] or _st["env_exists"]) else 1)
 
-from settings import BatchSettings, CEINMSSettings
-from utils.model_scaler import ModelScaler
-import utils
+# These pull in numpy/scipy/matplotlib and the rest of the scientific stack.
+# In a half-built environment the bare ImportError names the missing package but
+# not the command that installs it, so it reads as "you are on your own" when
+# bioscout can in fact build the whole environment itself.
+try:
+    from settings import BatchSettings, CEINMSSettings
+    from utils.model_scaler import ModelScaler
+    import utils
+except ImportError as _dep_err:
+    try:
+        from bioscout.envcheck import explain_missing
+        print(explain_missing(_dep_err), file=sys.stderr)
+    except Exception:                                        # noqa: BLE001
+        print(f"\nbioscout cannot start: {_dep_err}\n"
+              f"Try:  bioscout --env-create\n", file=sys.stderr)
+    raise SystemExit(1)
+
+# One quiet line when the running env is not the expected one. Never a block —
+# plenty of legitimate setups (a shared HPC module, a system python with
+# everything present) will never match the name.
+try:
+    from bioscout.envcheck import startup_warning as _startup_warning
+    _startup_warning()
+except Exception:                                            # noqa: BLE001
+    pass
 
 # Ensure utils.openSim is loaded — the deferred-import block at the bottom of
 # utils/__init__.py sets it, but it can silently remain None if the relative
@@ -80,6 +102,18 @@ parser.add_argument('--ingest-c3d', dest='ingest_c3d', type=str, default=None,
                          "simulations tree: each <trial>.c3d in C3D_FOLDER becomes "
                          "simulations/<subject>/<session>/<trial>/inputs/c3dfile.c3d. Requires "
                          "--subject and --session. Follow with --run_subject … --export to build.")
+parser.add_argument('--classifier', '--classify', dest='classifier',
+                    type=str, default=None, metavar='SESSION_PATH',
+                    help="Classify every trial in a session from its markers/GRF "
+                         "(bioscout.movement_detector). Writes "
+                         "session_auto_detection.yaml beside session.yaml.")
+parser.add_argument('--no-plots', dest='classifier_no_plots', action='store_true',
+                    help="--classifier: skip the per-trial QC figures "
+                         "(the slow part on a big session).")
+parser.add_argument('--write-session-yaml', dest='write_session_yaml',
+                    action='store_true',
+                    help="--classifier: also write session.yaml when the session "
+                         "has none. An EXISTING session.yaml is never modified.")
 parser.add_argument('--install', action='store_true',
                     help="Check dependencies and install missing ones (opensim via conda, others via pip)")
 parser.add_argument('--pylance-fix', '--pyglance-fix', '--pylance_fix', dest='pylance_fix',
@@ -379,6 +413,156 @@ if getattr(args, 'pylance_fix', None) is not None:
     print("  -> In VS Code: Ctrl+Shift+P -> 'Developer: Reload Window' "
           "(or 'Python: Restart Language Server'). Subject/functions should colour now.")
     sys.exit(0)
+
+# --- --classifier: movement detection over a whole session -------------------
+if getattr(args, 'classifier', None):
+    import csv as _csv
+    import yaml as _yaml
+    from bioscout.movement_detector import (classify_trial, segment_trial,
+                                            plot_trial_tasks)
+
+    _sess = os.path.abspath(args.classifier)
+    if not os.path.isdir(_sess):
+        print(f"[classifier] session folder not found: {_sess}"); sys.exit(1)
+
+    _exp = None
+    for _name in ("2_experimental", "experimental"):
+        if os.path.isdir(os.path.join(_sess, _name)):
+            _exp = os.path.join(_sess, _name); break
+    if _exp is None:
+        print(f"[classifier] no experimental folder under {_sess}\n"
+              f"[classifier] export the session first: it needs "
+              f"2_experimental/<trial>/marker_experimental.trc")
+        sys.exit(1)
+
+    _ypath = os.path.join(_sess, "session.yaml")
+    _cfg = {}
+    if os.path.isfile(_ypath):
+        try:
+            _cfg = _yaml.safe_load(open(_ypath, encoding="utf-8")) or {}
+        except Exception as _e:
+            print(f"[classifier] could not read session.yaml ({_e}); continuing")
+    _mass = _cfg.get("body_mass")
+    if _mass is None:
+        print("[classifier] no body_mass in session.yaml — force thresholds fall "
+              "back to a fraction of peak, which is less reliable.")
+
+    _trials = sorted(d for d in os.listdir(_exp)
+                     if os.path.isdir(os.path.join(_exp, d)))
+    # Everything this command produces lands together, beside the session it
+    # describes, so the detection travels with the data rather than living in
+    # whichever project happened to run it.
+    _det = os.path.join(_sess, "movement_detection")
+    _plots = os.path.join(_det, "plots")
+    _do_plots = not getattr(args, 'classifier_no_plots', False)
+    _out, _n_multi, _rows, _n_png = {}, 0, [], 0
+    for _t in _trials:
+        _d = os.path.join(_exp, _t)
+        try:
+            _lab, _conf, _why, _f = classify_trial(_d, body_mass=_mass)
+            _segs = segment_trial(_d, body_mass=_mass)
+        except Exception as _e:
+            print(f"  {_t:24} ERROR {type(_e).__name__}: {_e}")
+            continue
+        if len(_segs) > 1:
+            _n_multi += 1
+        _entry = {"type": _lab, "confidence": round(float(_conf), 2),
+                  "reason": _why}
+        if getattr(_f, "cut_direction", ""):
+            _entry["cut_direction"] = _f.cut_direction
+            _entry["cut_angle_deg"] = _f.cut_angle_deg
+        if getattr(_f, "single_support_side", ""):
+            _entry["side"] = _f.single_support_side
+        if getattr(_f, "window_consensus", ()):
+            _entry["time_range"] = list(_f.window_consensus)
+        if _segs:
+            _entry["tasks"] = [
+                {"task": _g.task, "time_range": [_g.t_start, _g.t_end],
+                 **({"side": _g.side} if _g.side else {}),
+                 **({"phases": [{"phase": _p.phase,
+                                 "time_range": [_p.t_start, _p.t_end],
+                                 **({"side": _p.side} if _p.side else {})}
+                                for _p in _g.phases]} if _g.phases else {})}
+                for _g in _segs]
+        _out[_t] = _entry
+
+        _yt = str(((_cfg.get("trials") or {}).get(_t) or {}).get("type", ""))
+        _row = {"trial": _t, "detected": _lab, "session_yaml_type": _yt,
+                "agrees": (_yt == "" or _yt == _lab),
+                "confidence": round(float(_conf), 2), "n_tasks": len(_segs),
+                "reason": _why,
+                "cut_direction": getattr(_f, "cut_direction", ""),
+                "cut_angle_deg": getattr(_f, "cut_angle_deg", ""),
+                "median_speed": getattr(_f, "median_speed", ""),
+                "vertical_rom_m": getattr(_f, "vertical_rom_m", ""),
+                "longest_flight_s": getattr(_f, "longest_flight_s", ""),
+                "peak_vgrf_bw": getattr(_f, "peak_vgrf_bw", ""),
+                "single_support_frac": getattr(_f, "single_support_frac", ""),
+                "tasks": "; ".join(f"{_g.task}[{_g.t_start:.2f}-{_g.t_end:.2f}]"
+                                   for _g in _segs)}
+        for _g, _sfx in zip(_segs, "abcdefghijklmnop"):
+            _row[f"task_{_sfx}"] = _g.task
+            _row[f"task_{_sfx}_start"] = _g.t_start
+            _row[f"task_{_sfx}_end"] = _g.t_end
+        _rows.append(_row)
+
+        if _do_plots:
+            try:
+                if plot_trial_tasks(_d, os.path.join(_plots, f"{_t}.png"),
+                                    body_mass=_mass, segments=_segs):
+                    _n_png += 1
+            except Exception as _e:
+                print(f"  [plot] {_t}: {type(_e).__name__}: {_e}")
+
+        _old = _yt
+        _flag = "" if not _old else ("  ==" if _old == _lab else f"  != session.yaml says {_old}")
+        print(f"  {_t:24} {_lab:18} {len(_segs)} task(s){_flag}")
+
+    _dst = os.path.join(_sess, "session_auto_detection.yaml")
+    _ver = getattr(__import__('bioscout'), '__version__', 'unknown')
+    _doc = {"generated_by": f"bioscout {_ver} --classifier",
+            "session": os.path.basename(_sess),
+            "body_mass": _mass,
+            "note": ("Detected from markers/GRF. This file is NEVER read by the "
+                     "pipeline and never overwrites session.yaml — it is a second "
+                     "opinion to diff against."),
+            "trials": _out}
+    with open(_dst, "w", encoding="utf-8") as _fh:
+        _yaml.safe_dump(_doc, _fh, sort_keys=False, default_flow_style=False)
+    _csv_path = os.path.join(_det, "classification.csv")
+    if _rows:
+        _keys = []
+        for _r in _rows:
+            for _k in _r:
+                if _k not in _keys:
+                    _keys.append(_k)
+        os.makedirs(_det, exist_ok=True)
+        with open(_csv_path, "w", newline="", encoding="utf-8") as _fh:
+            _w = _csv.DictWriter(_fh, fieldnames=_keys)
+            _w.writeheader(); _w.writerows(_rows)
+
+    _dis = [_r for _r in _rows if not _r["agrees"]]
+    print(f"\n[classifier] {len(_out)} trial(s), {_n_multi} with more than one task, "
+          f"{len(_dis)} disagreeing with session.yaml")
+    print(f"[classifier] wrote {_dst}")
+    if _rows:
+        print(f"[classifier] wrote {_csv_path}")
+    print(f"[classifier] wrote {_n_png} figures -> {_plots}" if _do_plots
+          else "[classifier] figures skipped (--no-plots)")
+
+    if not os.path.isfile(_ypath):
+        if getattr(args, 'write_session_yaml', False):
+            _seed = {"session": os.path.basename(_sess), "body_mass": _mass,
+                     "trials": {k: {"type": v["type"]} for k, v in _out.items()}}
+            with open(_ypath, "w", encoding="utf-8") as _fh:
+                _yaml.safe_dump(_seed, _fh, sort_keys=False)
+            print(f"[classifier] no session.yaml existed — seeded {_ypath}")
+            print("[classifier] REVIEW IT: detection is a starting point, not a source of truth.")
+        else:
+            print("[classifier] this session has no session.yaml. "
+                  "Re-run with --write-session-yaml to seed one from the detection.")
+    sys.exit(0)
+
 
 # --- --ingest-c3d : distribute loose <trial>.c3d files into the simulations tree
 # so a new subject/session is ready for --run_subject --export -----------------

@@ -301,6 +301,51 @@ def ensure(*, create: bool = False, install: bool = True,
     return status()
 
 
+def explain_missing(exc: BaseException) -> str:
+    """A message that names the missing package AND the command that fixes it.
+
+    A bare ``ModuleNotFoundError: No module named 'numpy'`` tells you what is
+    absent but not that bioscout can build the environment for you, so the
+    honest next step looks like hand-installing fifteen packages. bioscout has
+    had ``--env-create`` (pip installs uv, uv installs the rest) since 2.0.0b8;
+    it just never ran unless you already knew to ask for it.
+
+    Stdlib only, like the rest of this module: it has to work in exactly the
+    environment where nothing is installed.
+    """
+    name = getattr(exc, "name", None) or str(exc)
+    env = current_env() or "the active environment"
+    expected = expected_env_name()
+    req = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "requirements.txt")
+    lines = [
+        "",
+        "=" * 72,
+        f"  bioscout cannot start: '{name}' is not installed in {env}.",
+        "=" * 72,
+        "",
+        "  Build the environment (installs uv, then everything else with it):",
+        "",
+        "      bioscout --env-create",
+        "",
+        f"  Or install into the environment you are in right now:",
+        "",
+        f"      uv pip install -r {req}",
+        f"      python -m pip install -r {req}      (if uv is not available)",
+        "",
+        "  OpenSim is NOT on that list — it is not installable from PyPI on",
+        "  every platform:",
+        "",
+        "      conda install -c opensim-org opensim",
+        "",
+    ]
+    if expected and env != expected:
+        lines += [f"  Note: the expected environment for this build is '{expected}'.",
+                  f"  You are in '{env}'.", ""]
+    lines += ["=" * 72, ""]
+    return "\n".join(lines)
+
+
 def startup_warning(log=None) -> None:
     """One quiet line when the running env is not the expected one.
 
