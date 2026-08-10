@@ -1195,6 +1195,29 @@ if __name__ == "__main__":
         print(json.dumps(summary, indent=2))
 
 
+
+# ---------------------------------------------------------------------------
+# Does the CEINMS stage repair its own inputs?
+#
+# False (default): `do_ceinms` runs CEINMS and NOTHING else. If a calibration
+# trial's IK/ID/MA are missing or stale it reports an error naming the trial and
+# what to run, then skips calibration. A stage that silently runs three other
+# stages is a stage you cannot time, cannot reason about, and cannot use in a
+# sandbox -- a t10 calibration sweep re-solved IK->ID->MA before every
+# configuration, minutes each, for outputs that could not change.
+#
+# True: the previous behaviour -- re-solve IK->ID->MA for any stale calibration
+# trial before calibrating. Set it if you have a caller that relies on
+# `do_ceinms` self-healing after a re-scale.
+#
+# The staleness TEST is unchanged either way, and it is the right test: never
+# reuse a stale IK/ID solved over a DIFFERENT window than MA, because the CEINMS
+# inputData window then inherits that span, has no muscle-length data there, and
+# calibration dies silently -- reads its inputs, writes no subjectCalibrated.xml.
+CEINMS_AUTOPREP = False
+
+
+
 # ===========================================================================
 # The runnable Iteration  —  ONE model iteration of a recording session on disk.
 #
@@ -1304,17 +1327,26 @@ class Iteration:
         return it
 
     def _trial_names(self):
-        """Non-static trials from session.yaml that exist under this iteration."""
+        """Non-static trials for this iteration.
+
+        session.yaml is the source of truth, so a configured trial counts even
+        when its folder does not exist yet — export creates it on demand. That
+        keeps a project from having to carry thousands of empty placeholder
+        directories just to be enumerable. Falls back to what is on disk when
+        session.yaml lists no trials (legacy sessions with only
+        trial_settings.xml).
+        """
         trials_cfg = (self._cfg.get("trials") or {})
         out = [tr for tr, meta in trials_cfg.items()
-               if str((meta or {}).get("type", "")).lower() != "static"
-               and os.path.isdir(os.path.join(self.path, tr))]
+               if str((meta or {}).get("type", "")).lower() != "static"]
         if out:
             return out
         if not os.path.isdir(self.path):
             return []
         return sorted(d for d in os.listdir(self.path)
-                      if os.path.exists(os.path.join(self.path, d, "trial_settings.xml")))
+                      if os.path.isdir(os.path.join(self.path, d))
+                      and (os.path.exists(os.path.join(self.path, d, "trial_settings.xml"))
+                           or os.path.isdir(os.path.join(self.path, d, "inputs"))))
 
     def trial(self, name, force_type="SO"):
         """Return an Analyse for one trial, with shared experimental inputs bound.
@@ -1324,7 +1356,18 @@ class Iteration:
         Setting ``experimental_dir`` makes Analyse redirect them there on every
         settings reload; derived outputs still write under this iteration's own
         trial folder."""
-        t = Analyse(os.path.join(self.path, name))
+        _tp = os.path.join(self.path, name)
+        # session.yaml is the trial list, so a configured trial may have no folder
+        # yet (see _trial_names). Create it on demand — Analyse chdir's into it.
+        if not os.path.isdir(_tp):
+            try:
+                from bioscout import utils as _u
+                _auto = getattr(_u.settings.BatchSettings, 'auto_create_dirs', True)
+            except Exception:
+                _auto = True
+            if _auto:
+                os.makedirs(_tp, exist_ok=True)
+        t = Analyse(_tp)
         t.experimental_dir = experimental_dir(self.session_dir, name)
         if self._setup_dir:
             t._session_setup_dir = self._setup_dir
@@ -1740,7 +1783,13 @@ class Iteration:
                   f"fail for every trial.")
             return None
 
-        markerset = self._resolve_model_file(self._cfg.get("markerset"))
+        # Per-ITERATION marker set, falling back to the session-level one.
+        # Two models can need different marker sets: GPK_v3 is lower-limb only,
+        # so the pyCGM set's four torso markers (T10/T2/CLAV/RBAK) reference a
+        # body it does not have. Session-level only would force one set on every
+        # model. The `or` keeps every existing session.yaml working unchanged.
+        markerset = self._resolve_model_file(
+            it.get("markerset") or self._cfg.get("markerset"))
         linear = bool(it.get("linear_scaling", True) if linear_scaling is None else linear_scaling)
         mplace = bool(it.get("marker_placer", False) if marker_placer is None else marker_placer)
         n_eval = int(n_eval if n_eval is not None else (it.get("opt_neval", 10) or 10))
@@ -1794,6 +1843,43 @@ class Iteration:
         _os.scale_model(generic, trc, scaled, scale_setup_output_dir=self.path,
                         mass=(float(mass) if mass else None), marker_set_file=markerset,
                         linear_scaling=linear, marker_placer=mplace)
+
+        # Name the model after what it IS. OpenSim's ScaleTool names its output
+        # after the tool, and openSim.scale_model calls the tool "ModelScaling",
+        # so every scaled model in every project ends up as
+        # <Model name="ModelScaling">. Load two in the GUI to compare and the
+        # Navigator shows the same word twice. The linear_scaling=False branch is
+        # no better: it copies the generic through, so all subjects inherit the
+        # generic's name instead. Rewrite the attribute on the written file, which
+        # covers both branches and the marker-placer pass.
+        #
+        # Cosmetic ONLY - nothing reads this name. It appears in a couple of log
+        # lines and in the Navigator; JRA_COLUMNS keys off the SUBJECT, not the
+        # model name. Failure here must never sink a scaling run, hence the
+        # blanket except.
+        try:
+            import re as _re
+            _mname = "%s_scaled_%s_%s" % (
+                os.path.splitext(os.path.basename(generic))[0],
+                os.path.basename(os.path.dirname(self.session_dir)),
+                os.path.basename(self.session_dir))
+            # BYTES, not text. These models are CRLF; text mode would turn
+            # every CRLF into LF on read and write them back as LF, so a
+            # 33-character rename would also rewrite ~15000 line endings and
+            # shrink the file by ~15 kB. surrogateescape round-trips anything
+            # the decoder dislikes, so only the name attribute changes.
+            with open(scaled, "rb") as _fh:
+                _txt = _fh.read().decode("utf-8", "surrogateescape")
+            _txt, _n = _re.subn(r'(<Model\s+name=")([^"]*)(")',
+                               lambda m: m.group(1) + _mname + m.group(3),
+                               _txt, count=1)
+            if _n:
+                with open(scaled, "wb") as _fh:
+                    _fh.write(_txt.encode("utf-8", "surrogateescape"))
+                print("[Session] %s: model named '%s'" % (self.label, _mname))
+        except Exception as _e:
+            print("[Session] %s: [WARNING] could not name the scaled model: %s"
+                  % (self.label, _e))
 
         # 2) Force model = Modenese2015 muscle-opt output, OR (muscle_opt=False) the
         #    marker-registered scaled.osim itself — use the latter when the generic
@@ -1966,6 +2052,21 @@ class Iteration:
         _itc = (self._cfg.get("iterations") or {}).get(self.iteration, {}) or {}
         _ce = (self._cfg.get("ceinms") or {})
 
+        def _model_disp(*names):
+            """Resolved path of the model a stage will use, for the stage banner.
+
+            session.yaml stores a bare filename; it is resolved against THIS
+            iteration's folder (see Iteration.trial_config). Showing the full
+            path makes it obvious which .osim actually drove the analysis —
+            falls back to the bare name when the file is not there yet.
+            """
+            for n in names:
+                if not n:
+                    continue
+                p = os.path.join(self.path, n)
+                return p if os.path.exists(p) else f"{n}  (NOT FOUND in {self.path})"
+            return "scaled.osim"
+
         def _stage(title, **info):
             """Log a section header for a pipeline stage + the settings it uses."""
             log("")
@@ -2056,7 +2157,8 @@ class Iteration:
         if do_exbiomec:
             _stage("External biomechanics (IK -> ID)",
                    trials=names,
-                   model=_itc.get("so_model") or _itc.get("ceinms_model") or "scaled.osim")
+                   model=_model_disp(_itc.get("so_model"), _itc.get("ceinms_model"),
+                                     "scaled.osim"))
             for tn in names:
                 try:
                     log(f"  [exbiomec] {tn} — running (IK -> ID) ...")
@@ -2072,7 +2174,8 @@ class Iteration:
         if do_muscle_analysis:
             _stage("Muscle Analysis",
                    trials=names,
-                   model=_itc.get("so_model") or _itc.get("ceinms_model") or "scaled.osim")
+                   model=_model_disp(_itc.get("so_model"), _itc.get("ceinms_model"),
+                                     "scaled.osim"))
             for tn in names:
                 try:
                     log(f"  [MA] {tn} — running (Muscle Analysis) ...")
@@ -2087,7 +2190,9 @@ class Iteration:
 
         if do_so:
             _stage("Static Optimisation (SO -> muscle moments -> JRA)",
-                   trials=names, so_model=_itc.get("so_model", "scaled_opt_N10_mvicx3.00.osim"))
+                   trials=names,
+                   so_model=_model_disp(_itc.get("so_model"), _itc.get("ceinms_model"),
+                                        "scaled.osim"))
             for tn in names:
                 try:
                     log(f"  [SO] {tn} — running (SO -> muscle moments -> JRA) ...")
@@ -2114,8 +2219,10 @@ class Iteration:
                     cal = (list(calibration_trials) if calibration_trials
                            else (self._resolve_calibration_trials() or []))
                     _stage("CEINMS calibration (session level)",
-                           calibration_trials=cal, ceinms_model=_itc.get("ceinms_model", "scaled.osim"),
+                           calibration_trials=cal, ceinms_model=_model_disp(_itc.get("ceinms_model"),
+                                                    _itc.get("so_model"), "scaled.osim"),
                            alpha=_ce.get("alpha"), beta=_ce.get("beta"), gamma=_ce.get("gamma"))
+                    _prep_failed = []
                     for cn in cal:
                         try:
                             ct = self.trial(cn)
@@ -2141,8 +2248,21 @@ class Iteration:
                             _stale = (not os.path.exists(ma_len)) or (
                                 os.path.exists(_mdl)
                                 and os.path.getmtime(ma_len) < os.path.getmtime(_mdl))
-                            if _stale:
-                                log(f"  [CEINMS prep] IK->ID->MA for calibration trial {cn}")
+                            if _stale and not CEINMS_AUTOPREP:
+                                _why = ("missing" if not os.path.exists(ma_len)
+                                        else "older than " + os.path.basename(_mdl))
+                                log(f"  [CEINMS ERROR] calibration trial {cn}: "
+                                    f"{os.path.basename(ma_len)} is {_why}. "
+                                    f"do_ceinms does not solve IK/ID/MA -- run that "
+                                    f"stage first:")
+                                log(f"      it.run(trials=['{cn}'], do_exbiomec=True, "
+                                    f"do_muscle_analysis=True)")
+                                log(f"    (or set bioscout.utils.session.CEINMS_AUTOPREP "
+                                    f"= True to restore the old self-repairing behaviour)")
+                                _prep_failed.append(cn)
+                            elif _stale:
+                                log(f"  [CEINMS prep] IK->ID->MA for calibration trial {cn}"
+                                    f"  (CEINMS_AUTOPREP is on)")
                                 ct.run_ik(replace=replace)
                                 ct.run_id(replace=replace)
                                 ct.run_ma(replace=replace)
@@ -2151,6 +2271,16 @@ class Iteration:
                                     f"(muscle lengths newer than the model)")
                         except Exception as e:
                             log(f"  [CEINMS prep ERROR] {cn}: {e}")
+                    if _prep_failed:
+                        # Calibrating on a trial whose inputs are stale is the
+                        # silent-failure path this guard exists to close: it reads
+                        # the inputs, writes no subjectCalibrated.xml, and the run
+                        # continues against whatever calibration was there before.
+                        raise RuntimeError(
+                            "CEINMS calibration aborted: "
+                            + ", ".join(_prep_failed)
+                            + " lack usable IK/ID/MA. Run that stage first, or set "
+                              "CEINMS_AUTOPREP = True.")
                     log(f"  [CEINMS] calibrating (trials={calibration_trials or cal}) — slow ...")
                     self.prepare_ceinms(replace=replace, calibration_trials=calibration_trials)
                 else:
@@ -2162,7 +2292,8 @@ class Iteration:
                         return res
                     log(f"  [CEINMS] skipping calibration; using existing {os.path.basename(_cal_subj)}")
                 _stage("CEINMS execution (per trial -> muscle moments -> JRA)",
-                       trials=names, ceinms_model=_itc.get("ceinms_model", "scaled.osim"),
+                       trials=names, ceinms_model=_model_disp(_itc.get("ceinms_model"),
+                                                    _itc.get("so_model"), "scaled.osim"),
                        alpha=_ce.get("alpha"), beta=_ce.get("beta"), gamma=_ce.get("gamma"),
                        calibrate=calibrate)
                 for tn in names:

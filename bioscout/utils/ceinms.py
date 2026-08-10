@@ -7,6 +7,7 @@ calibration parameters) and the per-trial Analyse objects in
 :mod:`bioscout.utils.analysis`.
 """
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -358,11 +359,22 @@ def create_calibrationCfg(osimModelPath=None, inputPaths: list = [], outputPath:
     # analysis figures). For CALIBRATION we mirror each group to the LEFT leg too,
     # otherwise only right-side muscles ever get their strength coefficient (and
     # other params) calibrated. Emit the right group + its _l counterpart.
+    # DEDUPLICATED 2026-08-04. MUSCLE_GROUPS contains both "R Quadriceps" and
+    # "L Quadriceps". The R group emitted its right muscles and then MIRRORED
+    # them to the left; the L group then emitted that same left set again. So
+    # every left-side group appeared TWICE and every right-side group once, and
+    # the two sides were not constrained alike — while every muscle that
+    # diverged in calibration was a left one. Emit each distinct set exactly
+    # once, in first-seen order.
+    _seen = set()
     for group, muscles in settings.BatchSettings.MUSCLE_GROUPS.items():
-        ET.SubElement(muscleGroups, "muscles").text = " ".join(muscles)
         left = [m[:-2] + "_l" if m.endswith("_r") else m for m in muscles]
-        if left != list(muscles):
-            ET.SubElement(muscleGroups, "muscles").text = " ".join(left)
+        for variant in (list(muscles), left):
+            key = tuple(sorted(variant))
+            if not variant or key in _seen:
+                continue
+            _seen.add(key)
+            ET.SubElement(muscleGroups, "muscles").text = " ".join(variant)
 
     # objectiveFunctions
     objectiveFunctions = ET.SubElement(calibrationTargets, "objectiveFunctions")
@@ -373,8 +385,28 @@ def create_calibrationCfg(osimModelPath=None, inputPaths: list = [], outputPath:
 
     # target muscles
     targetMuscles = ET.SubElement(calibrationTargets, "muscles")
-    for muscle in params.target_muscles:
-        ET.SubElement(targetMuscles, "muscle").text = muscle
+    # FIXED 2026-08-04. target_muscles is "all" — a STRING — and iterating a
+    # string yields characters, so this wrote
+    # <muscles><muscle>a</muscle><muscle>l</muscle><muscle>l</muscle></muscles>.
+    # Three muscle names that match nothing in any model.
+    _targets = params.target_muscles
+    if isinstance(_targets, str):
+        _targets = [t for t in _targets.replace(",", " ").split() if t]
+    _targets = list(_targets or [])
+    if len(_targets) == 1 and _targets[0].lower() == "all":
+        # "all" is a settings sentinel, not a CEINMS token. Expand it to every
+        # muscle the calibration groups cover, both sides, first-seen order.
+        _targets, _seen_t = [], set()
+        for _g, _ms in settings.BatchSettings.MUSCLE_GROUPS.items():
+            for _m in list(_ms) + [x[:-2] + "_l" if x.endswith("_r") else x
+                                   for x in _ms]:
+                if _m not in _seen_t:
+                    _seen_t.add(_m)
+                    _targets.append(_m)
+        print(f"[ceinms] target_muscles='all' expanded to {len(_targets)} "
+              f"muscles from MUSCLE_GROUPS")
+    for muscle in _targets:
+        ET.SubElement(targetMuscles, "muscle").text = str(muscle)
 
     # --- trialSet ---
     trialSet = ET.SubElement(root, "trialSet")
@@ -947,6 +979,28 @@ def executable(setupXML_path=None):
     else:
         print(f"[Info] Skipping EMG vs CEINMS plot — output files not found in {outputDirectory}")
     
+_ABG_SUFFIX = re.compile(r"(?:_a-?\d+_b-?\d+_g-?\d+)+$")
+
+
+def abg_base_name(name):
+    """Strip any trailing _a<A>_b<B>_g<G> blocks so the base name never nests.
+
+    executable_loop writes its mutated <outputDirectory> back into the setup
+    XML, so before this fix every re-run appended another suffix
+    (Execution_a10_b1_g1000_a10_b1_g5000_a10_b1_g1 ...).
+    """
+    return _ABG_SUFFIX.sub("", name or "Execution") or "Execution"
+
+
+def abg_from_name(name):
+    """(alpha, beta, gamma) from the LAST suffix block; tolerates nested names."""
+    hits = re.findall(r"_a(-?\d+)_b(-?\d+)_g(-?\d+)", name)
+    if not hits:
+        return None
+    a, b, g = hits[-1]
+    return int(a), int(b), int(g)
+
+
 def executable_loop(setupXML_path=None, cfgXML_path=None, 
                     gammas: list = [1, 10, 100, 1000], 
                     betas: list = [1, 10, 100, 1000], 
@@ -966,7 +1020,7 @@ def executable_loop(setupXML_path=None, cfgXML_path=None,
     setup = ET.parse(setupXML_path).getroot()
     ceinmsModelPath = setup.find('subjectFile').text
     excitationGeneratorFilePath = os.path.abspath(setup.find('excitationGeneratorFile').text)
-    executionOutputDir = setup.find('outputDirectory').text
+    executionOutputDir = abg_base_name(setup.find('outputDirectory').text)
     for value in combinations:
         print(f"Running CEINMS with alpha={value[0]}, beta={value[1]}, gamma={value[2]}...")
         
@@ -981,6 +1035,10 @@ def executable_loop(setupXML_path=None, cfgXML_path=None,
         
         # Run CEINMS executable
         executable(setupXML_path=setupXML_path)
+
+    # leave the setup XML on the clean base name so a re-run does not nest
+    setup.find("outputDirectory").text = executionOutputDir
+    utils.save_pretty_xml(ET.ElementTree(setup), setupXML_path)
         
     # Summarise results
     executable_loop_summarise_results(baseDir=base_dir, prefix=executionOutputDir)
@@ -1045,9 +1103,11 @@ def executable_loop_summarise_results(baseDir=None, prefix='Execution'):
             
             # extract alpha, beta, gamma from folder name
             folder_name = os.path.basename(folder[0])
-            alpha = int(folder_name.split('_a')[1].split('_')[0])
-            beta = int(folder_name.split('_b')[1].split('_')[0])
-            gamma = int(folder_name.split('_g')[1].split('_')[0])
+            abg = abg_from_name(folder_name)
+            if abg is None:
+                print(f"skipping {folder_name}: no _a_b_g suffix")
+                continue
+            alpha, beta, gamma = abg
             
             results = pd.concat([results, pd.DataFrame({
                 'Alpha': [alpha],

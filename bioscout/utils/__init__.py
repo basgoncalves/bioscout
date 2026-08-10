@@ -154,13 +154,29 @@ CODE_DIR = UTILS_DIR   # where this package physically lives (e.g. for log.txt)
 # these just mirror it so the package can read utils.MODELS_DIR /
 # utils.SIMULATIONS_DIR / utils.RESULTS_DIR. They are None until a project's
 # settings define them, and bioscout.Project() (re)points them via _point_dirs().
+_DIR_DEFAULTS = {"MODELS_DIR": "models", "SIMULATIONS_DIR": "simulations",
+                 "RESULTS_DIR": "results"}
+
+
 def _dir_from_settings(name):
     # Prefer BatchSettings.<name>; fall back to a module-level settings.<name>
     # so a project may declare its paths as plain globals outside BatchSettings.
     val = getattr(getattr(settings, "BatchSettings", None), name, None)
     if val is None:
         val = getattr(settings, name, None)
-    return str(val) if val is not None else None
+    if val is not None:
+        return str(val)
+    # Last resort: <PROJECT_DIR>/<default>. This matters because of a circular
+    # import. A project settings.py imports bioscout.utils.analysis near its top;
+    # this module imports `settings` right back. A script that imports settings
+    # BEFORE bioscout therefore hands us a half-built settings module whose
+    # *_DIR globals (defined further down the file) do not exist yet -- and these
+    # three would be pinned to None for the life of the process, so every
+    # Analyse() failed later inside update_model() with an opaque
+    # "expected str, bytes or os.PathLike object, not NoneType".
+    if name in _DIR_DEFAULTS and PROJECT_DIR:
+        return os.path.join(PROJECT_DIR, _DIR_DEFAULTS[name])
+    return None
 
 MODELS_DIR       = _dir_from_settings('MODELS_DIR')
 SIMULATIONS_DIR  = _dir_from_settings('SIMULATIONS_DIR')

@@ -34,10 +34,53 @@ def _assembly_accuracy(default=1e-8):
         return default
 
 
+def _quiet_model(arg):
+    """``osim.Model(arg)`` with its printBasicInfo() dump suppressed.
+
+    Constructing a Model writes a fixed block to std::cout from C++::
+
+                   MODEL: 021
+             coordinates: 39
+                  forces: 97
+             ...
+        misc modelcomponents: 0
+
+    It bypasses OpenSim's logger, so BatchSettings.opensim_log_level cannot
+    touch it, and it bypasses sys.stdout, so the _Tee log filter never sees it
+    either. Only a file-descriptor level redirect stops it.
+
+    The redirect here is UNCONDITIONAL — deliberately not gated on
+    opensim_log_level like _osim_quiet_ctx(). That gate reads `settings`, which
+    openSim.py resolves via a sys.path insert of its own directory, so which
+    module it lands on depends on how the process was started; the block kept
+    leaking through as a result. printBasicInfo carries no diagnostic value, and
+    fd 2 (stderr) stays open throughout, so genuine OpenSim errors still surface.
+    """
+    import sys as _sys
+    try:
+        _sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        _saved = os.dup(1)
+    except Exception:                     # no real fd 1 (embedded/captured stdout)
+        return osim.Model(arg)
+    _devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(_devnull, 1)
+        return osim.Model(arg)
+    finally:
+        try:
+            os.dup2(_saved, 1)
+        finally:
+            os.close(_devnull)
+            os.close(_saved)
+
+
 def load_model(path, accuracy=None):
     """opensim.Model(path) with a relaxed assembly accuracy applied (see
     _assembly_accuracy). Use everywhere a model is loaded for a tool run."""
-    model = osim.Model(path)
+    model = _quiet_model(path)
     acc = accuracy if accuracy is not None else _assembly_accuracy()
     try:
         model.set_assembly_accuracy(acc)
@@ -170,10 +213,10 @@ def scale_body_masses(osim_modelPath):
     Scale the body masses of model_target to match the percentages of model_reference.
     """
 
-    model_ref = osim.Model(osim_modelPath)
+    model_ref = _quiet_model(osim_modelPath)
 
     model_targ_path = osim_modelPath.replace('.osim', '_scaledMasses.osim')
-    model_targ = osim.Model(model_targ_path)
+    model_targ = _quiet_model(model_targ_path)
 
     state1 = model_ref.initSystem()
     state2 = model_targ.initSystem()
@@ -218,7 +261,7 @@ def add_mass_to_body(osim_modelPath, body_name, mass_to_add):
     """
     Add a specific mass to a body in the OpenSim model.
     """
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     state = model.initSystem()
 
     save_path = osim_modelPath.replace('.osim', '_updatedMasses.osim')
@@ -241,7 +284,7 @@ def print_body_mass_per_segment(osim_modelPath=None):
     if not osim_modelPath:
         osim_modelPath = input("Enter path to OpenSim model (.osim): ").strip('"')
     
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     state = model.initSystem()
 
     print("Body Segment Masses:")
@@ -258,7 +301,7 @@ def increase_isometric_force(osim_modelPath=None, muscleList='all', factor: floa
     if not factor:
         factor = float(input("Enter factor to increase max isometric force (e.g., 1.2 for 20% increase): "))
 
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     
     if muscleList == 'all':
         muscleList = []
@@ -288,7 +331,7 @@ def lock_model_coordinates(osim_modelPath=None, coordinates_to_lock: list = None
     if not coordinates_to_lock:
         coordinates_to_lock = input("Enter coordinates to lock (comma-separated): ").split(',')
 
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     state = model.initSystem()
     
     for coord_name in coordinates_to_lock:
@@ -311,7 +354,7 @@ def lock_model_coordinates(osim_modelPath=None, coordinates_to_lock: list = None
 def coord_moment_arms(osim_model, muscle_list):
     '''Check which coordinates the muscles in the list have moment arms about (non-zero across the range of the model)'''
 
-    model = osim.Model(osim_model)
+    model = _quiet_model(osim_model)
     state = model.initSystem()
     coord_moment_arms = {}
 
@@ -359,8 +402,8 @@ def add_wrapping_surfaces(reference_model_path=None, target_model_path=None, out
     terminal_warnings('off')
     try:
         # Load both models
-        reference_model = osim.Model(reference_model_path)
-        target_model = osim.Model(target_model_path)
+        reference_model = _quiet_model(reference_model_path)
+        target_model = _quiet_model(target_model_path)
         
         # Get wrapping surfaces from reference model
         reference_bodies = reference_model.getBodySet()
@@ -415,7 +458,7 @@ def edit_model_range_coordinates(osim_modelPath, coordinate_name, new_range: lis
         save_path (str): Path to save the modified model
 
     """
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     state = model.initSystem()
 
     coordinate = model.getCoordinateSet().get(coordinate_name)
@@ -444,7 +487,7 @@ def add_wrapping_surface_to_model(model_path, surface_name, wrap_name, save_path
     """
     
     # Load model
-    model = osim.Model(model_path)
+    model = _quiet_model(model_path)
     
     # Initialize system
     state = model.initSystem()
@@ -494,8 +537,8 @@ def add_muscles_to_model(source_model_path, target_model_path, muscle_names, sav
     """
     
     # Load models
-    source_model = osim.Model(source_model_path)
-    target_model = osim.Model(target_model_path)
+    source_model = _quiet_model(source_model_path)
+    target_model = _quiet_model(target_model_path)
     
     # Initialize systems
     source_state = source_model.initSystem()
@@ -721,7 +764,7 @@ def copy_model_coordinate(src_model=None, target_model=None, coordinate_name=Non
 
     # Validate by loading with OpenSim API; save to separate file
     validated_path = save_path.replace('.osim', '_validated.osim')
-    model = osim.Model(save_path)
+    model = _quiet_model(save_path)
     model.initSystem()
     model.setName('tps_transformed_with_added_coordinates')
     model.printToXML(validated_path)
@@ -755,7 +798,7 @@ def checkMuscleMomentArms(model_file_path=None, ik_file_path=None, leg = 'l', th
 
     # Load motions and model
     motion = osim.Storage(ik_file_path)
-    model = osim.Model(model_file_path)
+    model = _quiet_model(model_file_path)
 
     # Initialize system and state
     model.initSystem()
@@ -1003,7 +1046,7 @@ def muscles_per_coordinate(osimModel=None):
 
     if osimModel is None:
         osimModel = input("Enter path to OpenSim model (.osim): ").strip('"')
-        osimModel = osim.Model(osimModel)
+        osimModel = _quiet_model(osimModel)
 
 
     muscles = {}
@@ -1034,6 +1077,17 @@ def muscles_per_coordinate(osimModel=None):
 
     return muscles, indexes
 
+#: Cap on evaluation points per muscle in sampleMuscleQuantities -- guards
+#: against combinatorial explosion for muscles spanning many DOFs. Above it the
+#: per-coordinate N is reduced until the grid fits, so a nominal N is NOT always
+#: the N a muscle actually gets: at 1500, a 3-DOF muscle collapses from N=12 to
+#: an effective 11, and a 4-DOF muscle sits at 6 from N=7 upwards. Module-level
+#: so a convergence study can raise it (tests/ModeneseN --max-eval-points)
+#: without editing this file. Changing it changes results for any muscle it
+#: binds on, so leave the default alone for production runs.
+MAX_EVAL_POINTS = 1500
+
+
 def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
     """Sample muscle-tendon quantities across the range of motion of the
     coordinates spanned by the muscle (Modenese 2015 muscle optimiser helper).
@@ -1050,18 +1104,31 @@ def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
     """
     import itertools
 
-    # cap on total evaluation points per muscle (guards against combinatorial
-    # explosion for muscles that span many DOFs). Grid is sub-sampled if larger.
-    MAX_EVAL_POINTS = 1500
-
     state = osimModel.initSystem()
     gp = osimMuscle.getGeometryPath()
     coords = osimModel.getCoordinateSet()
 
+    # getMuscles().get(...) hands back a base-class Muscle handle, and
+    # computeInitialFiberEquilibrium is declared on the CONCRETE type
+    # (Millard2012EquilibriumMuscle, Thelen2003Muscle, ...). Without this
+    # downcast BOTH getattr lookups in _equilibrate_single miss, every
+    # evaluation point falls through to equilibrateMuscles(), and the whole
+    # model is equilibrated to sample one muscle. Measured on this project's
+    # 80-muscle Catelli model: 0.39 ms/call for the model against 0.010 ms for
+    # the single muscle. The comment below always claimed it equilibrated only
+    # the current muscle; until now it never did.
+    _mus = osimMuscle
+    try:
+        _cc = getattr(osim, osimMuscle.getConcreteClassName(), None)
+        if _cc is not None and hasattr(_cc, "safeDownCast"):
+            _mus = _cc.safeDownCast(osimMuscle) or osimMuscle
+    except Exception:                                        # noqa: BLE001
+        pass
+
     def _equilibrate_single():
         """Equilibrate ONLY the current muscle (not all ~100 muscles)."""
         for meth in ("computeInitialFiberEquilibrium", "computeFiberEquilibrium"):
-            fn = getattr(osimMuscle, meth, None)
+            fn = getattr(_mus, meth, None)
             if fn is not None:
                 try:
                     fn(state)
@@ -1207,8 +1274,8 @@ def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, l
     res_file_id_exp = '_N' + str(N_eval)
     
     # import models
-    osimModel_ref = osim.Model(osimModel_ref_filepath)
-    osimModel_targ = osim.Model(osimModel_targ_filepath)
+    osimModel_ref = _quiet_model(osimModel_ref_filepath)
+    osimModel_targ = _quiet_model(osimModel_targ_filepath)
     
     # models details
     name = Path(osimModel_targ_filepath).stem
@@ -1224,6 +1291,29 @@ def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, l
     log_file_path = log_folder / (name + '_opt' + res_file_id_exp + '.log')
     
     # Check if log file exists and find last processed muscle
+    # ROTATE the log before reading it. `processed_muscles` below is a resume
+    # feature: any muscle named in this file is SKIPPED. The file is opened in
+    # append mode and never cleared, so a log left by an earlier run makes a
+    # later run skip almost everything and write a model whose parameters are
+    # mostly the UNOPTIMISED scaled ones -- under an `_opt_N10` filename, with
+    # no error and in a fraction of the expected time.
+    #
+    # Observed 2026-08-06: a production run resumed from a 168-entry log,
+    # optimised 8 muscles of 80, and produced a scaled_opt_N10.osim that
+    # differed from scaled.osim on 8 muscles. CEINMS then ran against it.
+    #
+    # Resume is worth far less than it was: the sampler is ~10x faster since
+    # the muscle downcast fix, so a full pass is minutes. Rotating always means
+    # an interrupted run restarts cleanly instead of silently half-finishing.
+    if log_file_path.exists() and log_file_path.stat().st_size > 0:
+        import time as _t
+        _prev = log_file_path.with_suffix('.log.prev_%s' % _t.strftime('%y%m%d_%H%M%S'))
+        try:
+            log_file_path.rename(_prev)
+            print('[muscle-opt] rotated previous log -> %s' % _prev.name)
+        except OSError:
+            pass
+
     processed_muscles = set()
     if log_file_path.exists():
         with open(log_file_path, 'r') as f:
@@ -1418,8 +1508,8 @@ def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, l
 
 def plot_optimization_results(intial_model_path, optimised_model_path):
 
-    base_model = osim.Model(intial_model_path)
-    optimized_model = osim.Model(optimised_model_path)
+    base_model = _quiet_model(intial_model_path)
+    optimized_model = _quiet_model(optimised_model_path)
     
     muscles = base_model.getMuscles()
     n_muscles = muscles.getSize()
@@ -1499,7 +1589,7 @@ def plot_optimization_results(intial_model_path, optimised_model_path):
         plot_optimization_results(osim_model_targ_filepath, output_path)
 
     
-    model = osim.Model(intial_model_path)
+    model = _quiet_model(intial_model_path)
     state = model.initSystem()
 
     # Call the Modenese 2015 optimization method
@@ -1536,7 +1626,7 @@ def compare_osim_models(model_list=None):
     all_muscles_set = set()
     
     for idx, model_path in enumerate(model_list):
-        model = osim.Model(model_path)
+        model = _quiet_model(model_path)
         models.append(model)
         model_name = f"Model {idx + 1}"
         model_names.append(model_name)
@@ -1638,9 +1728,9 @@ def optimize_moment_arms(ref_model_path=None, target_model_path=None):
     if target_model_path is None:
         target_model_path = input("Enter the path to the target .osim model file: ").strip('"')
 
-    ref_model = osim.Model(ref_model_path)
-    target_model = osim.Model(target_model_path)
-    optimized_model = osim.Model(target_model_path)
+    ref_model = _quiet_model(ref_model_path)
+    target_model = _quiet_model(target_model_path)
+    optimized_model = _quiet_model(target_model_path)
 
     def compute_moment_arms(model):
         state = model.initSystem()
@@ -1684,9 +1774,9 @@ def optimize_moment_arms(ref_model_path=None, target_model_path=None):
 
 
     # Compare moment arms and plot results
-    model1 = osim.Model(ref_model_path)
-    model2 = osim.Model(target_model_path)
-    model3 = osim.Model(optimized_model_path)
+    model1 = _quiet_model(ref_model_path)
+    model2 = _quiet_model(target_model_path)
+    model3 = _quiet_model(optimized_model_path)
 
     optimized_arms = compute_moment_arms(model3)
 
@@ -2039,7 +2129,7 @@ def add_joint_centers_to_trc(input_trc_path=None, output_trc_path=None, marker_m
 def validate_markers_used(osim_modelPath, ikTool, markers_path):
 
     def get_all_marker_parent_frames(model_path):
-        model = osim.Model(model_path)
+        model = _quiet_model(model_path)
         model.initSystem()
 
         marker_set = model.getMarkerSet()
@@ -2049,7 +2139,7 @@ def validate_markers_used(osim_modelPath, ikTool, markers_path):
             result[marker.getName()] = marker.getParentFrameName()
         return result
 
-    model =  osim.Model(osim_modelPath)
+    model =  _quiet_model(osim_modelPath)
     markerSet = model.get_MarkerSet() 
     markers_model = [marker.getName() for marker in markerSet]
 
@@ -2848,7 +2938,7 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
             except Exception as e:
                 print(f"[scale] [WARNING] mass-only rescale failed: {e}")
         return
-    model = osim.Model(generic_opensim_model_path)
+    model = _quiet_model(generic_opensim_model_path)
     state = model.initSystem()
     subject_mass = mass if mass is not None else model.getTotalMass(state)
 
@@ -3058,7 +3148,7 @@ def create_setup_IK(osim_modelPath=None, marker_trc=None,
         return
     
     # Load the model
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     
     # Load markers
     markers = osim.Storage(marker_trc)
@@ -3166,7 +3256,7 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
 
         # Load the model
         print(f"Loading model from {osim_modelPath}")
-        model = osim.Model(osim_modelPath)
+        model = _quiet_model(osim_modelPath)
 
         # Initialize the system before disabling analyses
         model.initSystem()
@@ -3428,7 +3518,7 @@ def edit_pelvis_com_actuators(osim_modelPath, actuatorsFilePath):
     """
     Edit the pelvis center of mass actuator in the OpenSim model.
     """ 
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     model.initSystem()
 
     # Find the pelvis center of mass actuator
@@ -3452,7 +3542,7 @@ def edit_pelvis_com_actuators(osim_modelPath, actuatorsFilePath):
 def normalise_muscle(muscle_forces_path, osim_modelPath):
     
     muscle_forces = utils.load_any_data_file(muscle_forces_path)
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     model_muscles = model.getMuscles()
     for muscle in muscle_forces.columns:
         try:
@@ -3525,7 +3615,7 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
     base model is left as-is (markers un-registered)."""
     import numpy as _np
     _quiet_osim()
-    model = osim.Model(model_path)
+    model = _quiet_model(model_path)
     if marker_set_file and os.path.exists(marker_set_file):
         try:
             model.updateMarkerSet(osim.MarkerSet(model, marker_set_file))
@@ -3682,7 +3772,7 @@ def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath,
     final_time = mot_data.getLastTime()
 
     # Create and set model
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     analyze_tool = osim.AnalyzeTool()
     analyze_tool.setModel(model)
 
@@ -3759,7 +3849,7 @@ def create_iaa_tool(osim_modelPath=None, ik_output=None, grf_xml=None, setup_fil
         activation_file = input("Enter the path to the Static Optimization activations file (.sto) (or press Enter to skip): ").strip('"')
 
     # Create and set model
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     tool = osim.AnalyzeTool(model)
     tool.setName("InducedAccelerations_Tool")
     tool.setModelFilename(osim_modelPath)
@@ -3833,7 +3923,7 @@ def create_setup_ID(osim_modelPath=None, ik_output=None, grf_xml=None,
         raise FileNotFoundError(f"GRF XML file not found: {grf_xml}")
 
     # Load the model
-    model = osim.Model(osim_modelPath)
+    model = _quiet_model(osim_modelPath)
     model.initSystem()
 
     # Load the motion data
@@ -4125,6 +4215,88 @@ def run_ma(osim_modelPath=None, ik_output=None,
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
 
+_RESIDUAL_NAMES = ("FX", "FY", "FZ", "MX", "MY", "MZ")
+
+
+def reserve_actuator_plan(model, actuators_path, model_path=""):
+    """Decide whether SO's reserve actuators come from the MODEL or from a file.
+
+    They must come from exactly ONE of the two. StaticOptimization runs with
+    useModelForceSet(True) and ALSO appends whatever force-set files it is
+    given, so an actuator present in both is created TWICE: two independent
+    actuators on the same coordinate. That halves the effective cost of using a
+    reserve and doubles the reserve torque available, and nothing warns.
+
+    Present in NEITHER is worse, and quieter. SO then has nothing to absorb the
+    difference between the muscle moments and the inverse-dynamics moments, so
+    it drives the muscles to whatever it takes. Measured case: a walking hip
+    contact force of 26 BW against a true 5.4, gastrocnemius off by 5.9 kN, and
+    no error, warning or missing file anywhere -- the only visible symptom was
+    the force file carrying 128 columns instead of 144.
+
+    -> ("model", note)  skip the append
+       ("file",  note)  append, as before
+    Raises RuntimeError when neither source has them, or when they are split
+    across both.
+    """
+    import re as _re
+    have = set()
+    fs = model.getForceSet()
+    for i in range(fs.getSize()):
+        n = fs.get(i).getName()
+        if n.endswith("_reserve") or n in _RESIDUAL_NAMES:
+            have.add(n)
+
+    want, file_state = set(), "missing"
+    if actuators_path and os.path.exists(actuators_path):
+        file_state = "present but empty"
+        try:
+            with open(actuators_path, encoding="utf-8", errors="replace") as _fh:
+                _txt = _fh.read()
+            want = set(_re.findall(
+                r'<(?:Coordinate|Point|Torque)Actuator name="([^"]+)"', _txt))
+            if want:
+                file_state = "%d actuator(s)" % len(want)
+        except OSError:
+            file_state = "unreadable"
+
+    if have and want:
+        both = have & want
+        if both == want:
+            return "model", ("%d already in the model; NOT appending %s "
+                             "(appending would create each one twice)"
+                             % (len(have), os.path.basename(actuators_path)))
+        raise RuntimeError(
+            "[SO ERROR] reserve actuators are SPLIT across the model and the "
+            "force-set file; the overlap would be duplicated.\n"
+            "  model only : %s\n"
+            "  file only  : %s\n"
+            "  in both    : %s\n"
+            "Put the whole set in one place -- all in the model, or all in %s."
+            % (sorted(have - want), sorted(want - have), sorted(both),
+               actuators_path))
+
+    if have:
+        return "model", ("%d in the model (force-set file: %s); nothing appended"
+                         % (len(have), file_state))
+    if want:
+        return "file", ("%d appended from %s"
+                        % (len(want), os.path.basename(actuators_path)))
+
+    raise RuntimeError(
+        "[SO ERROR] no reserve or residual actuators anywhere -- static "
+        "optimisation cannot run honestly.\n"
+        "  model : %s\n"
+        "          contains no *_reserve and none of FX/FY/FZ/MX/MY/MZ\n"
+        "  file  : %s\n"
+        "          %s\n"
+        "Without them SO has nothing to absorb the muscle-moment vs ID-moment "
+        "difference and will drive the muscle forces to compensate, silently. "
+        "Add the actuators to the model, or restore the force-set file."
+        % (model_path or "(unnamed)", actuators_path or "(none given)",
+           file_state))
+
+
 @_quiet_console
 def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
            setup_xml=None, actuators=None, resultsDir=None):
@@ -4154,8 +4326,9 @@ def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
         errors.append(f"IK output file not found: {ik_output}")
     if not os.path.exists(grf_xml):
         errors.append(f"GRF XML file not found: {grf_xml}")
-    if not os.path.exists(actuators):
-        errors.append(f"Actuators file not found: {actuators}")
+    # A missing actuator file is NOT fatal on its own any more: the reserve
+    # actuators may live in the model instead. reserve_actuator_plan() below
+    # raises if they are in neither place, which is the condition that matters.
 
     if errors:
         error_msg = "SO Pre-flight Check Failed:\n" + "\n".join(f"  - {err}" for err in errors)
@@ -4191,7 +4364,11 @@ def run_so(osim_modelPath=None, ik_output=None, grf_xml=None,
     so_analyze_tool.setCoordinatesFileName(os.path.relpath(ik_output, start=os.path.dirname(setup_xml)))
     so_analyze_tool.setExternalLoadsFileName(os.path.relpath(grf_xml, start=os.path.dirname(setup_xml)))
     so_analyze_tool.setReplaceForceSet(False)
-    so_analyze_tool.getForceSetFiles().append(os.path.relpath(actuators, start=os.path.dirname(setup_xml)))
+    _res_src, _res_note = reserve_actuator_plan(model, actuators, osim_modelPath)
+    print(f"[SO] reserve actuators: {_res_note}")
+    if _res_src == "file":
+        so_analyze_tool.getForceSetFiles().append(
+            os.path.relpath(actuators, start=os.path.dirname(setup_xml)))
 
     so_analyze_tool.setLowpassCutoffFrequency(6)
     
@@ -4254,7 +4431,7 @@ def run_jra(osim_modelPath=None, ik_output=None,
         else os.path.dirname(os.path.abspath(ik_output))
 
     # start model
-    osimModel = osim.Model(osim_modelPath)
+    osimModel = _quiet_model(osim_modelPath)
     
     # Get mot data to determine time range
     motData = osim.Storage(ik_output)
@@ -4429,7 +4606,7 @@ def run_rra(osim_modelPath=None, ik_output=None, grf_xml=None, actuators=None, s
             # Use existing RRA setup file
             try:
                 tool = osim.RRATool(setup_xml)
-                model = osim.Model(osim_modelPath)
+                model = _quiet_model(osim_modelPath)
                 tool.setModel(model)
                 tool.run()
                 utils.print_to_log("RRA completed successfully using existing setup file.")
@@ -4443,7 +4620,7 @@ def run_rra(osim_modelPath=None, ik_output=None, grf_xml=None, actuators=None, s
         if not osim_modelPath or not ik_output:
             raise ValueError("osim_modelPath and ik_output are required for RRA")
 
-        model = osim.Model(osim_modelPath)
+        model = _quiet_model(osim_modelPath)
         state = model.initSystem()
 
         # Create RRA tool
@@ -4499,7 +4676,7 @@ def run_cmc(osim_modelPath=None, ik_output=None, grf_xml=None, emg_file=None, ac
             # Use existing CMC setup file
             try:
                 tool = osim.CMCTool(setup_xml)
-                model = osim.Model(osim_modelPath)
+                model = _quiet_model(osim_modelPath)
                 tool.setModel(model)
                 tool.run()
                 utils.print_to_log("CMC completed successfully using existing setup file.")
@@ -4513,7 +4690,7 @@ def run_cmc(osim_modelPath=None, ik_output=None, grf_xml=None, emg_file=None, ac
         if not osim_modelPath or not ik_output:
             raise ValueError("osim_modelPath and ik_output are required for CMC")
 
-        model = osim.Model(osim_modelPath)
+        model = _quiet_model(osim_modelPath)
         state = model.initSystem()
 
         # Create CMC tool
@@ -4606,7 +4783,7 @@ def run_energetics(osim_modelPath=None, ik_output=None, muscle_activations=None,
         # ------------------------------------------------------------------ #
         # Path B — build a metabolic probe set + ProbeReporter from scratch.
         # ------------------------------------------------------------------ #
-        model = osim.Model(osim_modelPath)
+        model = _quiet_model(osim_modelPath)
         model.initSystem()
 
         # Attach an Umberger (2010) metabolic-energy probe covering every muscle.
@@ -4734,7 +4911,7 @@ def run_body_kinematics(osim_modelPath=None, ik_output=None, bodies=None, setup_
             # Use existing Body Kinematics setup file
             try:
                 tool = osim.AnalyzeTool(setup_xml)
-                model = osim.Model(osim_modelPath)
+                model = _quiet_model(osim_modelPath)
                 tool.setModel(model)
                 tool.run()
                 utils.print_to_log("Body Kinematics Analysis completed successfully using existing setup file.")
@@ -4748,7 +4925,7 @@ def run_body_kinematics(osim_modelPath=None, ik_output=None, bodies=None, setup_
         if not osim_modelPath or not ik_output:
             raise ValueError("osim_modelPath and ik_output are required for Body Kinematics Analysis")
 
-        model = osim.Model(osim_modelPath)
+        model = _quiet_model(osim_modelPath)
         state = model.initSystem()
 
         # Create AnalyzeTool for body kinematics

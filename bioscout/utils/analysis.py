@@ -147,6 +147,70 @@ def _default_layout_paths():
 # Subject
 # ===========================================================================
 
+# ---------------------------------------------------------------------------
+# Empty-export detection
+# ---------------------------------------------------------------------------
+# A C3D with no 3D point data (e.g. an MVIC/strength capture recorded for EMG
+# only) still produces a marker_experimental.trc — just a header with no rows.
+# The same goes for grf.mot when no force plate was recorded. Those husk files
+# are worse than nothing: they make every "does this trial have inputs?" check
+# answer yes, so IK/ID start and then fail deep inside OpenSim. Detect them so
+# export can drop them and the solve steps can skip cleanly.
+_EXPORT_ARTIFACTS = ("marker_experimental.trc", "grf.mot", "GRF.xml", "grf_events.png")
+
+
+def _numeric_rows(path, need=1):
+    """True when a .trc/.mot/.sto holds at least ``need`` numeric data rows.
+
+    Deliberately forgiving: any read problem returns True so this can only ever
+    skip a file we are confident is empty, never one we failed to parse.
+    """
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            return False
+        seen = 0
+        with open(path, 'r', errors='ignore') as fh:
+            for line in fh:
+                tok = line.split()
+                # A data row is ALL numeric. This rejects TRC/MOT header lines
+                # that merely START with a number, e.g. the TRC rate line
+                # "200.00  200.00  1000  40  mm  200.00  1  1000" (the "mm"
+                # disqualifies it) and "nRows=1000".
+                if len(tok) < 3:
+                    continue
+                try:
+                    for x in tok:
+                        float(x)
+                except ValueError:
+                    continue
+                seen += 1
+                if seen >= need:
+                    return True
+        return False
+    except Exception:
+        return True
+
+
+def _grf_xml_has_forces(path):
+    """True when a GRF.xml declares at least one ExternalForce."""
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            return False
+        return next(_u.ET.parse(path).getroot().iter('ExternalForce'), None) is not None
+    except Exception:
+        return True
+
+
+def has_markers(trial) -> bool:
+    """True when this trial has a marker TRC with real data (IK is possible)."""
+    return _numeric_rows(getattr(trial, 'markers', '') or '')
+
+
+def has_grf(trial) -> bool:
+    """True when this trial has usable ground reaction forces (ID is possible)."""
+    return _numeric_rows(getattr(trial, 'grf_mot', '') or '')
+
+
 def _is_ceinms(force_type) -> bool:
     return str(force_type).upper().startswith("CEIN")
 
@@ -1488,23 +1552,43 @@ class Analyse:
         _u.save_pretty_xml(tree, self.settingsXML)
         print(f"Trial settings saved to: {os.path.abspath(self.settingsXML)}")
     
+    # Legacy flat-layout files named after the trial (<trial>.mot/.trc/.c3d) sitting
+    # at the trial root, and where the subfoldered layout expects each to live.
+    _LEGACY_TRIAL_FILES = (('.mot', 'grf_mot'), ('.trc', 'markers'), ('.c3d', 'c3d'))
+
     def _update_input_files(self):
-        '''Update input file paths in the trial settings to match the expected names and save to XML'''
+        '''Relocate legacy trial-root <trial>.mot/.trc/.c3d into the subfoldered layout.
 
-        # change .mot file to match the self.grf_mot
-        if os.path.exists(os.path.join(self.path, self.trial + '.mot')):
-            os.rename(os.path.join(self.path, self.trial + '.mot'), os.path.join(self.path, self.grf_mot))
-            print(f"Renamed {self.trial + '.mot'} to {self.grf_mot}")
+        Idempotent by design. This runs on EVERY settings save, so it has to
+        cope with a trial that was already migrated: a bare os.rename() raises
+        FileExistsError on Windows when the destination is present (POSIX would
+        silently clobber it), and because _apply_inputs_layout() calls this for
+        every Analyse, one stale trial-root copy used to fail export, IK, ID,
+        MA and JRA for that trial — every stage, every run.
 
-        # change .trc file to match the self.markers
-        if os.path.exists(os.path.join(self.path, self.trial + '.trc')):
-            os.rename(os.path.join(self.path, self.trial + '.trc'), os.path.join(self.path, self.markers))
-            print(f"Renamed {self.trial + '.trc'} to {self.markers}")
-
-        # change .c3d file to match the self.c3d
-        if os.path.exists(os.path.join(self.path, self.trial + '.c3d')):
-            os.rename(os.path.join(self.path, self.trial + '.c3d'), os.path.join(self.path, self.c3d))
-            print(f"Renamed {self.trial + '.c3d'} to {self.c3d}")
+        When the destination already exists the trial-root file is a leftover
+        from the flat layout, so it is discarded rather than allowed to
+        overwrite a current export.
+        '''
+        for ext, attr in self._LEGACY_TRIAL_FILES:
+            src = os.path.join(self.path, self.trial + ext)
+            if not os.path.exists(src):
+                continue
+            dst = os.path.join(self.path, getattr(self, attr))
+            if os.path.abspath(src) == os.path.abspath(dst):
+                continue
+            try:
+                if os.path.exists(dst):
+                    os.remove(src)
+                    self._log(f"[layout] dropped stale trial-root "
+                              f"{self.trial + ext} (already at {attr})")
+                    continue
+                os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
+                os.replace(src, dst)          # atomic; never FileExistsError
+                print(f"Renamed {self.trial + ext} to {getattr(self, attr)}")
+            except OSError as e:
+                self._log(f"[layout] could not relocate {self.trial + ext}: "
+                          f"{type(e).__name__}: {e}")
 
     def _update_model(self):
         '''
@@ -2462,7 +2546,7 @@ class Analyse:
 
         os.chdir(self.path)
         try:
-            model = osim.Model(self.model_dir)
+            model = self.load_model()
             state = model.initSystem()
             markers = model.getMarkerSet()
             marker_data = []
@@ -2574,7 +2658,7 @@ class Analyse:
             return
         
         # Load the model
-        model = osim.Model(self.model_dir)
+        model = self.load_model()
         state = model.initSystem()
         
         # Increase max isometric force for each muscle
@@ -2608,7 +2692,7 @@ class Analyse:
             return 'Unknown'
 
         # Load the model
-        model = osim.Model(self.model_dir)
+        model = self.load_model()
         state = model.initSystem()
         
         body_mass = model.getTotalMass(state)
@@ -2654,7 +2738,7 @@ class Analyse:
 
         # Load the model
         osim.Logger.setLevelString("error")
-        model = osim.Model(self.model_dir)
+        model = self.load_model()
         state = model.initSystem()
         
         muscle_list = [model.getMuscles().get(i).getName() for i in range(model.getMuscles().getSize())]
@@ -2819,9 +2903,15 @@ class Analyse:
                     left_foot_markers=getattr(_u.settings.BatchSettings, 'left_foot_markers', None),
                     right_foot_body='calcn_r', left_foot_body='calcn_l',
                     vert_force_threshold=10.0, filter_cutoff=6, datafile=None)
-            self.plot_grf_events()
+            if _numeric_rows(self.grf_mot):
+                self.plot_grf_events()
         except Exception as _e:
             self._log(f'[export] grf plot skipped: {_e}')
+
+        # Drop the husk files this trial never really had (see _numeric_rows).
+        # Keeping them would make every downstream "has inputs?" check lie.
+        if getattr(_u.settings.BatchSettings, 'prune_empty_exports', True):
+            self.prune_empty_exports()
         try:
             print(f"[{self.trial}] Analysis window: {self.start_time} – {self.end_time} s "
                   f"({_ng} gait events)")
@@ -2850,12 +2940,68 @@ class Analyse:
         except Exception as _e:
             raise RuntimeError(f"openSim module unavailable: {_e}") from _e
 
+    def load_model(self, path=None):
+        """Load an OpenSim model with its printBasicInfo() dump suppressed.
+
+        ``osim.Model(...)`` writes a fixed "MODEL: / coordinates: N / forces: N
+        / ..." block to std::cout on construction. That bypasses OpenSim's
+        logger entirely, so opensim_log_level has no effect on it — only the
+        fd-level redirect in _osim_quiet_ctx() can swallow it. Several helpers
+        (get_body_mass, get_muscle_list, get_markers, ...) load the model
+        per call, so a single trial printed the block several times.
+
+        Deliberately NOT cached: callers such as increase_muscle_force() and
+        adjust_moment_arms() mutate the model they are handed, so handing back a
+        shared instance would let one stage's edits leak into another's.
+        """
+        mp = path or self.model_dir
+        _os = self._get_openSim()
+        import opensim as osim
+        _ctx = getattr(_os, "_osim_quiet_ctx", None)
+        if _ctx is None:
+            return osim.Model(mp)
+        with _ctx():
+            return osim.Model(mp)
+
     def _set_replace(self, replace):
         """Set self.replace (persisted) when an explicit replace= is passed to a
         run_* step. Lets ``Analyse(path).run_ik(replace=True)`` work directly —
         Analyse absorbed the old Trial convenience, so the two are now one class."""
         if replace is not None:
             self.update_trial_attribute("replace", replace)
+
+    def prune_empty_exports(self):
+        """Delete exported inputs that contain no data, and say so once.
+
+        A marker-only or EMG-only capture legitimately produces some of
+        marker_experimental.trc / grf.mot / GRF.xml / grf_events.png with
+        nothing in them. Removing them keeps the trial folder honest: the
+        session runner's "no experimental inputs" check then correctly skips
+        the trial instead of failing inside IK/ID.
+        """
+        out_dir = getattr(self, 'experimental_dir', None) or self.path
+        dropped = []
+        for name in _EXPORT_ARTIFACTS:
+            fp = os.path.join(out_dir, name)
+            if not os.path.exists(fp):
+                continue
+            if name.endswith('.png'):
+                # only meaningful alongside real GRF
+                empty = not _numeric_rows(os.path.join(out_dir, 'grf.mot'))
+            elif name.endswith('.xml'):
+                empty = not _grf_xml_has_forces(fp)
+            else:
+                empty = not _numeric_rows(fp)
+            if empty:
+                try:
+                    os.remove(fp)
+                    dropped.append(name)
+                except OSError:
+                    pass
+        if dropped:
+            self._log(f'[export] {self.trial}: no data in {", ".join(dropped)} '
+                      f'— not written')
+        return dropped
 
     def run_ik(self, replace=None):
         self._set_replace(replace)
@@ -2864,8 +3010,9 @@ class Analyse:
 
         # Guard: IK requires a TRC file. If marker export failed (e.g. C3D has no 3D point data),
         # skip IK rather than hanging on an input() prompt or crashing inside osim.Storage().
-        if not os.path.exists(self.markers):
-            self._log(f'[SKIP] IK skipped — marker TRC not found: {self.markers}')
+        if not _numeric_rows(self.markers):
+            why = 'not found' if not os.path.exists(self.markers) else 'has no marker data'
+            self._log(f'[SKIP] IK skipped — marker TRC {why}: {self.markers}')
             return
 
         # Refresh time_range from data — TRC may not have existed when settings XML was first written.
@@ -2912,6 +3059,19 @@ class Analyse:
     def run_id(self, replace=None):
         self._set_replace(replace)
         os.chdir(self.path)
+
+        # Guard: ID is external-load driven — without ground reaction forces there
+        # is nothing to solve. Skip rather than building a GRF.xml around an empty
+        # grf.mot and failing inside OpenSim.
+        if not _numeric_rows(self.grf_mot):
+            why = 'not found' if not os.path.exists(self.grf_mot) else 'has no force data'
+            self._log(f'[SKIP] ID skipped — grf.mot {why}: {self.grf_mot}')
+            return
+        # IK must have produced joint angles for ID to consume.
+        if not _numeric_rows(self.ik):
+            self._log(f'[SKIP] ID skipped — no IK output to solve from: {self.ik}')
+            return
+
         _os = self._get_openSim()
         # GRF ExternalLoads XML is an EXPORT-time artifact (created in export_c3d
         # next to the grf.mot). Here it's only a last-resort fallback: build it
@@ -3008,8 +3168,12 @@ class Analyse:
             if os.path.exists(template_actuators_path):
                 shutil.copyfile(template_actuators_path, actuators_abs)
             else:
-                raise FileNotFoundError(
-                    f"Actuators template not found: {template_actuators_path}")
+                # Not fatal any more. The reserve actuators may be in the model
+                # instead, in which case no force-set file is wanted at all.
+                # openSim.reserve_actuator_plan() raises if neither has them.
+                self._log(f'[Note] no actuators template at '
+                          f'{template_actuators_path} -- expecting the reserve '
+                          f'actuators to be in the model itself', terminal=True)
 
         if os.path.exists(os.path.join(self.path, self.so_forces)) and not self.replace:
             self._log(f'Static Optimization output already exists: '
@@ -3241,7 +3405,10 @@ class Analyse:
         ce = (None if so_only else
               (_u.load_any_data_file(self.jra_ceinms) if os.path.exists(self.jra_ceinms) else None))
         if so is None and ce is None:
-            self._log('[Warning] no JRA results to compare.'); return
+            # terminal=True: a silent return here leaves joint_contact_forces/
+            # holding the .sto with no figure and no explanation anywhere the
+            # user is actually looking.
+            self._log('[Warning] no JRA results to compare.', terminal=True); return
 
         # Which contact-force columns to plot (per joint) — from settings.
         # New layout: .../<session>/<iteration>/<trial>; the model/iteration that
@@ -3259,7 +3426,12 @@ class Analyse:
             jcols_by = {sd: _u.settings.BatchSettings.JRA_COLUMNS(_subject, sd)
                         for sd, _, _ in _sides}
         except Exception as e:
-            self._log(f'[Warning] JRA_COLUMNS unavailable ({e}); skipping JRA comparison.'); return
+            self._log(f'[Warning] JRA_COLUMNS unavailable ({e}); skipping JRA '
+                      f'comparison — no JRA figure will be written. Define a '
+                      f'JRA_COLUMNS(model_name, side) staticmethod on '
+                      f'settings.BatchSettings returning '
+                      f'{{"hip": [...fx,fy,fz], "knee": [...], "ankle": [...]}}.',
+                      terminal=True); return
 
         # Self-heal: if a joint's configured columns aren't in the JRA output
         # (e.g. a model names its knee reaction differently than JRA_COLUMNS
@@ -3584,7 +3756,7 @@ class Analyse:
     def muscles_per_coordinate(self, osimModel=None, coord_name=None):
 
         if osimModel is None:
-            osimModel = osim.Model(self.model_dir)
+            osimModel = self.load_model()
 
         muscles = []
         indexes = []
@@ -3740,7 +3912,7 @@ class Analyse:
                 print(f'  Muscles with discontinuities: {sorted(problem_muscles)}')
                 print(f'  Increasing wrap-object radii by {radius_step} m ...')
 
-                model = osim.Model(self.model_dir)
+                model = self.load_model()
                 model.initSystem()
 
                 adjusted_wraps: set = set()
@@ -3922,7 +4094,7 @@ class Analyse:
         dof = file.replace('.sto','').replace('_MuscleAnalysis_MomentArm_','')
         print(f"Loading moment arms for DOF: {dof} from {file}")
         moment_arms = _u.load_any_data_file(filepath)
-        muscleList,muscleIdx = self.muscles_per_coordinate(osim.Model(self.model_dir), dof)
+        muscleList,muscleIdx = self.muscles_per_coordinate(self.load_model(), dof)
         
         n_muscles = len(muscleList)
         if n_muscles == 0:
@@ -5571,13 +5743,27 @@ class Analyse:
             self._log(f'CEINMS optimisation setup already exists: {os.path.abspath(self.ceinms_optimise_setup)}', terminal=True)
             return
         
+        # The template lives FLAT in setupFiles/ (setupFiles/ceinms_cfg_optimise.xml).
+        # self.ceinms_optimise_cfg is a TRIAL-relative path ("ceinms/ceinms_cfg_optimise.xml"),
+        # so joining it onto setup_dir looked for setupFiles/ceinms/... and raised
+        # FileNotFoundError. Try the flat name first, keep the nested one as a fallback.
+        _tpl_candidates = [
+            os.path.join(self.setup_dir, os.path.basename(self.ceinms_optimise_cfg)),
+            os.path.join(self.setup_dir, self.ceinms_optimise_cfg),
+        ]
+        _tpl = next((c for c in _tpl_candidates if os.path.exists(c)), None)
+        if _tpl is None:
+            raise FileNotFoundError(
+                "CEINMS optimise cfg template not found. Looked for:\n  "
+                + "\n  ".join(os.path.abspath(c) for c in _tpl_candidates))
+
         _u.ceinms.create_optimise_setupFiles(ceinmsModelPath=self.ceinms_calibrated_model,
                                           inputDataFile=self.ceinms_input_data,
                                           calibrationCfgPath=self.ceinms_optimise_cfg,
                                           excitationGeneratorFilePath=self.ceinms_excitation_generator,
                                           outputDirectory=self.ceinms_optimisation_dir,
                                           setupXMLPath=self.ceinms_optimise_setup,
-                                          templateCfgXMLPath=os.path.join(self.setup_dir, self.ceinms_optimise_cfg))
+                                          templateCfgXMLPath=_tpl)
 
     def create_ceinms_exe_setup(self):
         # ceinms_setup.xml lives in ceinms/; CEINMS resolves its inner paths

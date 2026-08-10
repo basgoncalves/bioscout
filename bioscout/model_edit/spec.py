@@ -41,6 +41,7 @@ VERBS: Tuple[str, ...] = (
     "scale",        # dimensional scaling from the static trial
     "mass",         # total / per-body mass, without touching geometry
     "strength",     # max isometric force, optimal fibre & tendon slack length
+    "actuators",    # reserve and residual actuators (the SO force set)
     "moment_arms",  # wrap radii and path points
     "coordinates",  # ranges, locking
     "markers",      # marker placement and marker-set edits

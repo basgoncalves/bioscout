@@ -8,12 +8,14 @@ something discovered by a failed import.
 """
 from __future__ import annotations
 
-from . import coordinates, inspect, markers, moment_arms, scale, strength  # noqa: F401
+from . import (coordinates, inspect, markers, moment_arms, reserves,  # noqa: F401
+               scale, strength)
 
 #: op name -> callable(params) -> params, applied before a suffix is formatted.
 #: Lets an op expose a derived token (``{factor_tag}``) without leaking a
 #: filename-escaping rule into :mod:`bioscout.model_edit.naming`.
 SUFFIX_HOOKS = {}
-for _mod in (coordinates, inspect, markers, moment_arms, scale, strength):
+for _mod in (coordinates, inspect, markers, moment_arms, reserves,
+             scale, strength):
     SUFFIX_HOOKS.update(getattr(_mod, "SUFFIX_HOOKS", {}))
 del _mod
