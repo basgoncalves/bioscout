@@ -46,7 +46,14 @@ from config.config_manager import ConfigManager
 from utils.logger import logger
 from gui.styles import theme
 from settings import UISettings
-from gui.widgets.emg_normalization import EMGNormalizationTab
+# EMG Processing (was EMG Normalization). Guarded: it imports scipy at run
+# time and a failure there should cost the tab, not the whole app.
+EMGProcessingTab = None
+try:
+    from gui.widgets.emg_processing_tab import EMGProcessingTab as _EMGProcessingTab
+    EMGProcessingTab = _EMGProcessingTab
+except Exception as _emg_err:
+    print(f"[main_window] EMGProcessingTab unavailable: {_emg_err}", flush=True)
 from gui.widgets.model_scaling import ModelScalingTab
 from gui.widgets.batch_c3d_export import BatchC3DExport
 from gui.widgets.results_viewer import ResultsViewerTab
@@ -56,6 +63,15 @@ from gui.widgets.training_tracking import TrainingTrackingTab
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
 from gui.widgets.configuration import ConfigurationTab
 from gui.widgets.console_terminal import ResizablePanelSplitter
+
+# File Editor is new in 2.0.0b9. Guarded like the other optional tabs so a
+# failure inside it degrades to "tab missing" rather than "app won't start".
+FileEditorTab = None
+try:
+    from gui.widgets.file_editor import FileEditorTab as _FileEditorTab
+    FileEditorTab = _FileEditorTab
+except Exception as _fe_err:
+    print(f"[main_window] FileEditorTab unavailable: {_fe_err}", flush=True)
 
 # Recording tab imports mediapipe/cv2 at module level — a native crash there
 # would kill the whole process.  Import it lazily so any failure is catchable.
@@ -370,18 +386,21 @@ class MainWindow(ctk.CTk):
         _all_tabs = [
             ("Recording",          None),
             ("Video Analysis",     None),
-            ("Trial Analysis",     None),
             ("C3D Export",       None),
-            ("EMG Normalization",  None),
+            ("Trial Analysis",     None),
+            ("EMG Processing",     None),
             ("EMG Analysis",       None),
             ("Model Scaling",      None),
             ("CEINMS Calibration", None),
             ("Results",            None),
             ("Training Tracking",  None),
+            ("File Editor",        None),
             ("Settings",           None),
         ]
         tabs = [(name, i + 1) for i, (name, _r) in enumerate(_all_tabs)
-                if (name != "Recording" or RecordingTab is not None)
+                if (name != "File Editor" or FileEditorTab is not None)
+                and (name != "EMG Processing" or EMGProcessingTab is not None)
+                and (name != "Recording" or RecordingTab is not None)
                 and (name != "Video Analysis" or VideoAnalysisTab is not None)]
         # Rows are numbered here rather than in the list above: hard-coded row
         # numbers meant inserting one tab silently overlapped another, and the
@@ -464,13 +483,20 @@ class MainWindow(ctk.CTk):
             "Trial Analysis": {"class": TrialAnalysisTab, "args": (self.config_manager, self.update_status)},
             "EMG Analysis": {"class": EMGAnalysisTab, "args": (self.config_manager, self.update_status)},
             "C3D Export": {"class": BatchC3DExport, "args": ()},
-            "EMG Normalization": {"class": EMGNormalizationTab, "args": (self.config_manager, self.update_status)},
             "Model Scaling": {"class": ModelScalingTab, "args": (self.config_manager, self.update_status)},
             "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
             "Training Tracking": {"class": TrainingTrackingTab, "args": (self.config_manager, self.update_status)},
             "Settings": {"class": ConfigurationTab, "args": (self.config_manager, self.update_status)},
         })
+        if EMGProcessingTab is not None:
+            self.tab_definitions["EMG Processing"] = {
+                "class": EMGProcessingTab,
+                "args": (self.config_manager, self.update_status)}
+        if FileEditorTab is not None:
+            self.tab_definitions["File Editor"] = {
+                "class": FileEditorTab,
+                "args": (self.config_manager, self.update_status)}
 
         # Initialize tabs dict - will be populated on demand (lazy loading)
         self.tabs = {}

@@ -2,6 +2,127 @@
 
 All notable changes to BioScout are documented here.
 
+> **Versioning.** The 2.x line is still a **pre-release** (`2.0.0bN`). PyPI
+> treats `bN` as a beta: `pip install bioscout` will NOT pick it up, only
+> `pip install --pre bioscout` (or an exact pin) will. That is deliberate while
+> the session-model refactor lands — it keeps the released package honest about
+> its state without holding back installs for people who want it. When the
+> pipeline runs end to end on a clean session without hand-holding, move to
+> `2.0.0rc1`, then `2.0.0`.
+
+## [2.0.0b10] — 2026-08-07
+
+### Added — Trial Analysis rebuilt around a stage's real inputs
+
+The stage x iteration grid of file counts is gone. A count of files in a folder
+says a stage produced *something*, not whether it produced the right thing, and
+it cost the whole left panel. That panel now answers the question you actually
+have when one trial looks wrong:
+
+* **Inputs** — the selected stage's inputs resolved to real paths, editable,
+  each marked present or missing (the model path is read from the iteration's
+  `session.yaml` block, so it follows `so_model` / `ceinms_model`). Run warns
+  which file is absent instead of letting OpenSim fail two minutes later.
+* **GRF window** — plots the trial's vertical ground reaction per plate; drag
+  across it to set the time window. The window currently in the fields is drawn
+  as dashed lines, so the plot and the numbers cannot disagree.
+* Stages are chosen one at a time rather than as checkboxes.
+* **Iterations can be added and removed from the GUI** (`+` / `-` beside the
+  Iteration menu). Adding one used to mean hand-editing session.yaml, which is
+  why every session had the same six. Removing deletes the folder only when it
+  is empty — a folder with results in it is never deleted by a config edit.
+
+### Added — EMG Processing (was EMG Normalization)
+
+The tab owns the whole chain now, each step independently switchable:
+band-pass -> notch -> rectify -> envelope low-pass -> amplitude normalise, with
+a frequency-spectrum view for arguing about cut-offs. Normalisation stays
+SESSION-level on purpose: an MVC computed from one trial is not an MVC. One
+trial list picks what the reference spans, another picks what is drawn.
+
+Input and output are names inside each trial folder rather than absolute paths,
+because the tab runs over many trials at once; the output follows the input as
+`<stem>_processed<ext>` until edited by hand, so the raw recording is never
+overwritten. `write_table()` dispatches on the OUTPUT extension — asking for
+`.csv` used to produce a file with an OpenSim .sto header inside it.
+
+### Changed
+
+* Sidebar order: C3D Export now precedes Trial Analysis.
+* Results viewer: adding a series ticks ONE channel (the first non-time column)
+  instead of all of them. A 126-channel static-optimisation file opened as a
+  126-subplot figure ~1300x8600 px, which reads as a hang. Grid mode caps at 64
+  subplots and says so; a new "Single plot (overlay channels)" toggle draws them
+  all on one axes. "All" now skips time columns.
+
+### Changed — the bundled settings.py template caught up with the study project
+
+`bioscout/settings.py` was ~112 lines behind the powerlifting project's copy:
+it was missing the CONTROL PANEL restructure (`CAPTURES` / `CAPTURE` and the
+module-level `RUN_*` / `DO_*` / `TPS_*` / `PRUNE_*` flags) and both runner
+functions, and still had that block buried inside `if __name__ == "__main__"`.
+Ported across; the two are now in sync (verified by AST diff — no top-level
+name and no class attribute differs).
+
+Two adaptations were required, and both matter:
+
+* `matplotlib.use("Agg")` moved out of module scope into the `__main__` runner.
+  The template is exec'd while bioscout imports, so setting Agg there would
+  have killed the GUI's TkAgg canvases.
+* The `bioscout.utils.analysis` imports are guarded with stub fallbacks. The
+  template is loaded DURING bioscout's own import, so a bare import is
+  circular; a real project's copy takes the real imports.
+
+The schema `__version__` stays `2.0.0b1` — the shape did not change, it caught
+up — so projects pinned to it still validate.
+
+## [2.0.0b9] — 2026-08-06
+
+### Added — File Editor tab: edit session.yaml / OpenSim XML / JSON in the GUI
+
+Changing a trial's `time_range`, an `ExternalForce` body or a CEINMS weight
+meant leaving BioScout for a text editor, where a bad indent or a stringified
+number surfaces three pipeline stages later as an unrelated OpenSim error.
+
+* **New** `bioscout/utils/file_edit.py` — a headless, format-agnostic document
+  model (`load_document` → tree of `Node`, form of `Field`). Handles YAML, XML
+  (incl. `.osim`) and JSON behind one API. Atomic saves, `.bak` kept.
+* **New** `bioscout/gui/widgets/file_editor.py` — `FileEditorTab` (sidebar) and
+  the reusable `FileEditorFrame` / `open_file_editor_window()`, so any tab can
+  offer "edit this file" without duplicating the editor. Structure tree,
+  typed form (switches for booleans, dropdowns for keys that behave like
+  enumerations), raw-text view with a syntax check, and a **Changes** view
+  showing the diff a save would produce plus semantic checks (`time_range`
+  ordering, `side` values, `static_trial` present in `trials:`, model files
+  actually on disk).
+* Files with no structured editor, and anything over 3 MB, fall back to
+  plain-text editing rather than freezing on a 10k-row tree.
+
+### Fixed — saving a trial from Trial Analysis deleted every comment in session.yaml
+
+`_save_trial_settings` did `yaml.safe_dump` of the WHOLE file. That rewrote
+session.yaml from the parsed object on every save, which:
+
+* deleted all comments — including the block recording that **Walking_02 must
+  not be re-enabled** and why, the only place that decision was written down;
+* reordered keys, expanded every one-line `{type: ..., side: ...}` trial into
+  four lines, and rewrote `0.00` as `0.0`.
+
+YAML is no longer re-dumped anywhere. `file_edit` composes the document to get
+the exact character span of every scalar and patches only the spans that
+changed, so an edit to one trial is a one-line diff and everything else stays
+byte-identical. Verified against the real `Athlete_03/25_03_31/session.yaml`:
+loading and browsing every node changes nothing, and editing one trial touches
+two lines out of 153.
+
+Trial Analysis also gained an **Edit whole file…** button for the keys that
+panel does not model (`iterations`, `emg_map`, `ceinms`).
+
+### Note
+
+No new dependency: the comment-preserving writer is built on PyYAML's composer,
+which is already required.
+
 ## [2.0.0b6] — 2026-07-31
 
 ### Fixed — `bioscout.utils.openSim` was None outside the CLI

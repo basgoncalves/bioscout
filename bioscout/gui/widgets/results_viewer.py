@@ -8,7 +8,12 @@ Centre      : matplotlib grid of subplots (one per selected channel)
               + NavigationToolbar + Save / Clear buttons
 Right panel : channel tick-boxes (union across all loaded series)
               + Select All / None
-Bottom bar  : Time Normalise toggle (0-100 %)
+Bottom bar  : Time Normalise toggle (0-100 %) + Single plot toggle
+
+Adding a series ticks exactly ONE channel — the first non-time column — and
+leaves the rest loaded but unticked. Ticking everything by default meant a
+126-channel static-optimisation file opened as a 126-subplot figure roughly
+1300x8600 px, which takes seconds to draw and reads as a hang.
 """
 
 from __future__ import annotations
@@ -49,6 +54,43 @@ _PALETTE = [
     "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
     "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
 ]
+
+#: Column names that are an x-axis, not a signal. These are never the channel
+#: auto-ticked when a series loads, and never counted as data.
+_TIME_NAMES = {"time", "t", "times", "frame", "frame#", "frames", "index",
+               "percent", "%", "% cycle", "cycle"}
+
+#: Above this many subplots the grid figure gets tall enough to take seconds to
+#: rasterise. Past it the grid is capped and the count is reported — see
+#: _render_plot. Single-plot mode has no such limit.
+MAX_GRID_SUBPLOTS = 64
+
+#: Beyond this many lines a legend is more noise than key, so it is dropped and
+#: the count goes in the title instead.
+MAX_LEGEND_ENTRIES = 24
+
+#: Series are told apart by line style when several share one axes.
+_SERIES_STYLES = ["-", "--", ":", "-."]
+
+
+def is_time_column(name: str) -> bool:
+    """True for a column that is an x-axis rather than a signal."""
+    n = str(name).strip().lower()
+    return n in _TIME_NAMES or n.startswith("time")
+
+
+def default_channel(columns) -> Optional[str]:
+    """The channel to tick when a series is first added: first non-time column.
+
+    Falls back to the first column outright for a file that is somehow all
+    time-like, so adding a series always plots *something* rather than
+    silently showing an empty figure.
+    """
+    cols = list(columns)
+    for c in cols:
+        if not is_time_column(c):
+            return c
+    return cols[0] if cols else None
 
 
 # ── file parsers ─────────────────────────────────────────────────────────────
@@ -514,6 +556,14 @@ class ResultsViewerTab(ctk.CTkFrame):
         ctk.CTkCheckBox(bot, text="Normalise time 0-100%", variable=self._norm_var,
                         font=("Segoe UI", 10), command=self._refresh_plot
                         ).grid(row=0, column=0, padx=10, pady=6, sticky="w")
+        # One axes for everything vs one subplot per channel. Overlaying is the
+        # right view when the channels share units (comparing muscle forces);
+        # the grid is right when they do not.
+        self._single_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bot, text="Single plot (overlay channels)",
+                        variable=self._single_var,
+                        font=("Segoe UI", 10), command=self._refresh_plot
+                        ).grid(row=0, column=1, padx=(4, 10), pady=6, sticky="w")
         ctk.CTkButton(bot, text="💾 Save", width=70, height=26,
                       command=self._save_figure
                       ).grid(row=0, column=2, padx=(4, 4), pady=6)
@@ -818,12 +868,23 @@ class ResultsViewerTab(ctk.CTkFrame):
         series = {"label": label, "file": file_path, "colour": colour, "df": df}
         self._series.append(series)
 
-        # Update channel union
+        # Update channel union. Only the FIRST series to arrive gets a channel
+        # ticked for it — a second series added to compare against the first
+        # must not disturb whatever is currently plotted.
         new_cols = [c for c in df.columns if c not in self._ch_vars]
-        self._add_channel_rows(new_cols)
+        nothing_plotted = not any(v.get() for v in self._ch_vars.values())
+        auto = default_channel(df.columns) if nothing_plotted else None
+        self._add_channel_rows(new_cols, auto_select=auto)
 
         self._rebuild_series_list()
-        self.status_callback(f"Added: {label}", "success")
+        n_new = len(new_cols)
+        if auto:
+            self.status_callback(
+                f"Added: {label} — plotting '{auto}'; "
+                f"{max(n_new - 1, 0)} more channels loaded, tick to add",
+                "success")
+        else:
+            self.status_callback(f"Added: {label} ({n_new} new channels)", "success")
         self._refresh_plot()
 
     def _rebuild_series_list(self):
@@ -853,9 +914,10 @@ class ResultsViewerTab(ctk.CTkFrame):
 
     # ── channel panel ────────────────────────────────────────────────────────
 
-    def _add_channel_rows(self, cols: list[str]):
+    def _add_channel_rows(self, cols: list[str], auto_select: Optional[str] = None):
+        """Add tick-boxes for *cols*, ticking only *auto_select* (if given)."""
         for col in cols:
-            var = ctk.BooleanVar(value=True)
+            var = ctk.BooleanVar(value=(col == auto_select))
             self._ch_vars[col] = var
             ctk.CTkCheckBox(
                 self._ch_scroll, text=col,
@@ -890,8 +952,11 @@ class ResultsViewerTab(ctk.CTkFrame):
         self._channels = list(self._ch_vars.keys())
 
     def _set_all_channels(self, state: bool):
-        for var in self._ch_vars.values():
-            var.set(state)
+        """All / None. 'All' skips time columns — a time-vs-time subplot is
+        never what anyone wanted, and it cost a panel in a 126-channel grid.
+        The tick-box stays, so it can still be selected by hand."""
+        for col, var in self._ch_vars.items():
+            var.set(state and not is_time_column(col))
         self._refresh_plot()
 
     # ── plotting ─────────────────────────────────────────────────────────────
@@ -911,81 +976,148 @@ class ResultsViewerTab(ctk.CTkFrame):
 
         threading.Thread(target=self._render_plot, args=(selected,), daemon=True).start()
 
+    def _style_axes(self, ax):
+        ax.set_facecolor("#1a1a28")
+        ax.tick_params(colors="#888888", labelsize=7)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#333344")
+        ax.grid(True, color="#222233", linewidth=0.5)
+
+    def _series_x(self, df, normalise: bool):
+        """x values for one series' dataframe."""
+        if normalise:
+            return np.linspace(0, 100, len(df))
+        first_vals = df[df.columns[0]].values
+        # First column is time in every format we parse — but only trust it if
+        # it actually increases, otherwise fall back to sample index.
+        if len(first_vals) > 1 and first_vals[-1] > first_vals[0]:
+            return first_vals
+        return np.arange(len(df))
+
     def _render_plot(self, channels: list[str]):
         try:
-            normalise = self._norm_var.get()
-            n_ch = len(channels)
-
-            # Grid layout: max 4 columns
-            n_cols = min(4, n_ch)
-            n_rows = (n_ch + n_cols - 1) // n_cols
-
-            fig_w = max(10, n_cols * 3.5)
-            fig_h = max(5, n_rows * 2.8)
-
-            fig = Figure(figsize=(fig_w, fig_h), dpi=96,
-                         facecolor="#111118")
-            fig.subplots_adjust(hspace=0.45, wspace=0.35,
-                                left=0.07, right=0.97, top=0.93, bottom=0.08)
-
-            axes: list = []
-            for i, ch in enumerate(channels):
-                ax = fig.add_subplot(n_rows, n_cols, i + 1)
-                ax.set_facecolor("#1a1a28")
-                ax.tick_params(colors="#888888", labelsize=7)
-                for spine in ax.spines.values():
-                    spine.set_edgecolor("#333344")
-                ax.grid(True, color="#222233", linewidth=0.5)
-                ax.set_title(ch, fontsize=8, color="#cccccc", pad=3)
-                axes.append((ch, ax))
-
-            for s in self._series:
-                df = _time_normalise(s["df"]) if normalise else s["df"]
-                # x axis
-                if normalise:
-                    x = np.linspace(0, 100, len(df))
-                else:
-                    # Use first column if it looks like time (values increasing)
-                    first_col = df.columns[0]
-                    first_vals = df[first_col].values
-                    if first_vals[-1] > first_vals[0]:
-                        x = first_vals
-                    else:
-                        x = np.arange(len(df))
-
-                for ch, ax in axes:
-                    if ch not in df.columns:
-                        continue
-                    try:
-                        y = self._apply_filter(df[ch].values.astype(float), x)
-                        ax.plot(x, y, linewidth=1.2, color=s["colour"],
-                                alpha=0.85, label=s["label"].split(" / ")[0])
-                    except Exception:
-                        pass
-
-            if normalise:
-                for _, ax in axes:
-                    ax.set_xlabel("% cycle", fontsize=7, color="#888888")
+            if self._single_var.get():
+                fig, note = self._render_single(channels)
             else:
-                for _, ax in axes:
-                    ax.set_xlabel("time (s)", fontsize=7, color="#888888")
-
-            # Legend in first subplot if multiple series
-            if len(self._series) > 1 and axes:
-                handles, labels = axes[0][1].get_legend_handles_labels()
-                if handles:
-                    axes[0][1].legend(handles, labels,
-                                      fontsize=6, loc="best",
-                                      facecolor="#1e1e2e",
-                                      labelcolor="#cccccc",
-                                      edgecolor="#333344")
-
+                fig, note = self._render_grid(channels)
             self._fig = fig
             self.after(0, lambda: self._display_figure(fig))
-
+            if note:
+                self.after(0, lambda: self.status_callback(note, "warning"))
         except Exception as e:
             logger.error(f"Render error: {e}")
             self.status_callback(f"Plot error: {e}", "error")
+
+    # -- one subplot per channel -------------------------------------------- #
+    def _render_grid(self, channels: list[str]):
+        normalise = self._norm_var.get()
+        note = ""
+        if len(channels) > MAX_GRID_SUBPLOTS:
+            # Say what was dropped. A silently truncated grid reads as "these
+            # are all the channels", which is exactly the wrong impression.
+            note = (f"{len(channels)} channels ticked — showing the first "
+                    f"{MAX_GRID_SUBPLOTS}. Use 'Single plot (overlay channels)' "
+                    f"to see them all on one axes.")
+            channels = channels[:MAX_GRID_SUBPLOTS]
+
+        n_ch = len(channels)
+        n_cols = min(4, n_ch)
+        n_rows = (n_ch + n_cols - 1) // n_cols
+        fig_w = max(10, n_cols * 3.5)
+        fig_h = max(5, n_rows * 2.8)
+
+        fig = Figure(figsize=(fig_w, fig_h), dpi=96, facecolor="#111118")
+        fig.subplots_adjust(hspace=0.45, wspace=0.35,
+                            left=0.07, right=0.97, top=0.93, bottom=0.08)
+
+        axes: list = []
+        for i, ch in enumerate(channels):
+            ax = fig.add_subplot(n_rows, n_cols, i + 1)
+            self._style_axes(ax)
+            ax.set_title(ch, fontsize=8, color="#cccccc", pad=3)
+            axes.append((ch, ax))
+
+        for s in self._series:
+            df = _time_normalise(s["df"]) if normalise else s["df"]
+            x = self._series_x(df, normalise)
+            for ch, ax in axes:
+                if ch not in df.columns:
+                    continue
+                try:
+                    y = self._apply_filter(df[ch].values.astype(float), x)
+                    ax.plot(x, y, linewidth=1.2, color=s["colour"],
+                            alpha=0.85, label=s["label"].split(" / ")[0])
+                except Exception:
+                    pass
+
+        xlabel = "% cycle" if normalise else "time (s)"
+        for _, ax in axes:
+            ax.set_xlabel(xlabel, fontsize=7, color="#888888")
+
+        if len(self._series) > 1 and axes:
+            handles, labels = axes[0][1].get_legend_handles_labels()
+            if handles:
+                axes[0][1].legend(handles, labels, fontsize=6, loc="best",
+                                  facecolor="#1e1e2e", labelcolor="#cccccc",
+                                  edgecolor="#333344")
+        return fig, note
+
+    # -- everything on one axes --------------------------------------------- #
+    def _render_single(self, channels: list[str]):
+        """All selected channels overlaid on one axes.
+
+        Colour identifies the CHANNEL here and line style the series, which is
+        the opposite of the grid — there, every subplot is one channel already,
+        so colour is free to mean series. Keeping colour=series in overlay mode
+        would draw every channel of a series in one colour, i.e. an
+        indistinguishable bundle.
+        """
+        normalise = self._norm_var.get()
+        multi_series = len(self._series) > 1
+
+        fig = Figure(figsize=(12, 6.5), dpi=96, facecolor="#111118")
+        fig.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.11)
+        ax = fig.add_subplot(1, 1, 1)
+        self._style_axes(ax)
+        ax.tick_params(labelsize=9)
+
+        colours = {ch: _PALETTE[i % len(_PALETTE)] for i, ch in enumerate(channels)}
+        n_lines = 0
+        for si, s in enumerate(self._series):
+            df = _time_normalise(s["df"]) if normalise else s["df"]
+            x = self._series_x(df, normalise)
+            style = _SERIES_STYLES[si % len(_SERIES_STYLES)]
+            for ch in channels:
+                if ch not in df.columns:
+                    continue
+                try:
+                    y = self._apply_filter(df[ch].values.astype(float), x)
+                except Exception:
+                    continue
+                label = f"{ch} — {s['label'].split(' / ')[0]}" if multi_series else ch
+                ax.plot(x, y, linewidth=1.3, color=colours[ch], alpha=0.9,
+                        linestyle=style, label=label)
+                n_lines += 1
+
+        ax.set_xlabel("% cycle" if normalise else "time (s)",
+                      fontsize=9, color="#999999")
+        ax.set_ylabel("value", fontsize=9, color="#999999")
+
+        note = ""
+        if 0 < n_lines <= MAX_LEGEND_ENTRIES:
+            ax.legend(fontsize=7, loc="best", ncol=max(1, n_lines // 12 + 1),
+                      facecolor="#1e1e2e", labelcolor="#cccccc",
+                      edgecolor="#333344")
+            ax.set_title(f"{len(channels)} channel(s)", fontsize=10,
+                         color="#cccccc", pad=6)
+        else:
+            ax.set_title(f"{n_lines} lines — legend hidden above "
+                         f"{MAX_LEGEND_ENTRIES}", fontsize=10,
+                         color="#cccccc", pad=6)
+            if n_lines:
+                note = (f"{n_lines} lines on one axes; legend hidden. "
+                        f"Y axis mixes units unless the channels share them.")
+        return fig, note
 
     def _display_figure(self, fig: Figure):
         # Remove old canvas

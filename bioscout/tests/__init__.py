@@ -65,6 +65,17 @@ def suite():
             s.addTests(loader.loadTestsFromTestCase(_cls))
     except Exception as _e:  # pragma: no cover
         print(f"[tests] model_edit tests unavailable: {_e}")
+    # file_edit: config-file editing (session.yaml / OpenSim XML / JSON).
+    # Pure stdlib + PyYAML, so it always runs. Pins that a YAML edit is
+    # surgical — losing session.yaml's comments is silent and unrecoverable.
+    try:
+        from . import test_file_edit as _fe
+        for _cls in (_fe.TestYamlIsSurgical, _fe.TestYamlStructuralEdits,
+                     _fe.TestSaving, _fe.TestChecks, _fe.TestXml, _fe.TestJson,
+                     _fe.TestDispatch, _fe.TestFlowMap):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] file_edit tests unavailable: {_e}")
     # OpenSim/CEINMS knee integration tests — optional. They self-skip when
     # OpenSim (or the CEINMS binary) isn't available; the import is guarded so a
     # problem there can never break the lightweight suite.

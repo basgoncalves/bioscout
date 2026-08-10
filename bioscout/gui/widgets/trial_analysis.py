@@ -1,28 +1,26 @@
-"""Trial Analysis tab — one trial: what exists, what it's configured as, and re-run it.
+"""Trial Analysis tab — one trial: configure it, see what a stage will read, re-run it.
 
-The Session tab is "run these stages over these trials". This is the other
-question, the one you ask when a session finishes and one trial looks wrong:
-*for this trial, which stages produced output, for which models, what is it
-configured as, and can I re-run just this one?*
+The question this tab answers is the one you ask when a session finishes and one
+trial looks wrong: *for this trial and this model, what is the analysis actually
+going to read, is it all there, where should the trial be cut, and can I re-run
+just this one?*
 
 Three panels:
 
-* **Status grid** — stages down the side, iterations across the top, read from
-  the files on disk. No state file, so nothing can claim a stage ran when it
-  didn't. Click a cell to list what it found.
 * **Trial settings** — this trial's block from ``session.yaml`` (type, side,
-  time_range), editable and saved back in place. That block is what decides
-  which part of the capture every downstream stage sees, so it belongs next to
-  the status rather than three folders away.
-* **Run** — re-run chosen stages for this trial alone, on one iteration.
+  time_range), editable and saved back in place. That block decides which part
+  of the capture every downstream stage sees, so it belongs next to the run
+  button rather than three folders away.
+* **Inputs / GRF window** (left) — the selected stage's inputs, resolved to real
+  paths, editable, each marked present or missing. Switch the view to plot the
+  trial's ground reaction and drag out the window to cut on.
+* **Run** — re-run one stage for this trial on one iteration.
 
-Stage detection keys on the trial's SUBFOLDER first and the filename second.
-The folders (``external_biomechanics``, ``muscle_analysis``,
-``static_optimisation``, ``joint_contact_forces``, ``ceinms``) are stable, and
-matching on them avoids the mistake the first version made — guessing that IK
-writes something called ``*_ik.mot`` when it actually writes
-``joint_angles.mot``, which showed Inverse Kinematics as never-run on a trial
-that had run it.
+The left panel used to be a stage-by-iteration grid of ✓counts. It was removed
+in 2.0.0b10: a count of files in a folder tells you a stage produced *something*,
+not whether it produced the right thing, and it cost the whole panel. Knowing
+which file a stage is about to read — and being able to point it somewhere else —
+is the thing that actually unblocks a bad trial.
 """
 from __future__ import annotations
 
@@ -31,84 +29,77 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import customtkinter as ctk
+from tkinter import filedialog, messagebox
 
-#: (key, label, subdirectory or None for the trial root, filename fragments).
-#: An empty fragment tuple means "any file in that subdirectory counts".
-STAGES: List[Tuple[str, str, Optional[str], Tuple[str, ...]]] = [
-    ("export",  "Export (markers/GRF)", None, ("marker_experimental.trc", "grf.mot")),
-    ("emg",     "EMG normalised",       None, ("emg_filtered_normalised.mot",
-                                               "emg_filtered.mot")),
-    ("ik",      "Inverse Kinematics",   "external_biomechanics",
-     ("joint_angles.mot", "_ik_marker_errors")),
-    ("id",      "Inverse Dynamics",     "external_biomechanics",
-     ("inverse_dynamics.sto",)),
-    ("ma",      "Muscle Analysis",      "muscle_analysis",      ()),
-    ("so",      "Static Optimisation",  "static_optimisation",  ()),
-    ("jra",     "Joint Reaction",       "joint_contact_forces", ()),
-    ("ceinms",  "CEINMS",               "ceinms",               ()),
-]
+try:
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.figure import Figure
+    from matplotlib.widgets import SpanSelector
+    import numpy as np
+    HAS_MPL = True
+except Exception:                                        # pragma: no cover
+    HAS_MPL = False
 
-#: Which stage keys the Run panel can actually drive, and the Iteration.run()
-#: keyword each maps to. Export and EMG are session-level, not per-iteration,
-#: so they are deliberately absent — running them for one trial from here would
-#: silently skip the session-wide EMG normalisation reference.
-RUNNABLE = [
-    ("ik",     "Inverse Kinematics + ID", "do_exbiomec"),
-    ("ma",     "Muscle Analysis",         "do_muscle_analysis"),
-    ("so",     "Static Optimisation",     "do_so"),
-    ("ceinms", "CEINMS",                  "do_ceinms"),
-]
+#: Stage key -> (label, Iteration.run kwarg, inputs, outputs).
+#:
+#: Each input is ``(label, where, relative)`` where *where* is:
+#:   ``exp``   — the session's model-INDEPENDENT export (2_experimental/<trial>/)
+#:   ``iter``  — this iteration's folder for this trial (3_iterations/<it>/<trial>/)
+#:   ``model`` — a key in the iteration's session.yaml block naming an .osim
+#:
+#: Export and EMG normalisation are deliberately absent: they are session-level,
+#: and running them for one trial would skip the session-wide MVC reference.
+STAGES_IO: Dict[str, tuple] = {
+    "ik": (
+        "Inverse Kinematics + ID", "do_exbiomec",
+        [("markers (.trc)",          "exp",   "marker_experimental.trc"),
+         ("ground reaction (.mot)",  "exp",   "grf.mot"),
+         ("external loads (.xml)",   "exp",   "GRF.xml"),
+         ("model (.osim)",           "model", "so_model")],
+        ["external_biomechanics/joint_angles.mot",
+         "external_biomechanics/inverse_dynamics.sto"],
+    ),
+    "ma": (
+        "Muscle Analysis", "do_muscle_analysis",
+        [("model (.osim)",           "model", "so_model"),
+         ("joint angles (.mot)",     "iter",  "external_biomechanics/joint_angles.mot")],
+        ["muscle_analysis/"],
+    ),
+    "so": (
+        "Static Optimisation", "do_so",
+        [("model (.osim)",           "model", "so_model"),
+         ("joint angles (.mot)",     "iter",  "external_biomechanics/joint_angles.mot"),
+         ("ground reaction (.mot)",  "exp",   "grf.mot"),
+         ("external loads (.xml)",   "exp",   "GRF.xml")],
+        ["static_optimisation/", "joint_contact_forces/"],
+    ),
+    "ceinms": (
+        "CEINMS", "do_ceinms",
+        [("CEINMS model (.osim)",    "model", "ceinms_model"),
+         ("normalised EMG (.mot)",   "exp",   "emg_filtered_normalised.mot"),
+         ("muscle analysis",         "iter",  "muscle_analysis"),
+         ("inverse dynamics (.sto)", "iter",  "external_biomechanics/inverse_dynamics.sto")],
+        ["ceinms/"],
+    ),
+}
+STAGE_ORDER = ["ik", "ma", "so", "ceinms"]
+STAGE_LABELS = [STAGES_IO[k][0] for k in STAGE_ORDER]
+
+#: A new iteration copied from nothing starts from this block.
+NEW_ITERATION_TEMPLATE = {
+    "generic": "", "ceinms_model": "scaled_opt_N10.osim",
+    "so_model": "scaled_opt_N10_mvicx3.00.osim",
+    "linear_scaling": True, "marker_placer": True,
+    "opt_neval": 10, "mvic_factor": 3.0, "label": "", "color": "black",
+    "group": "generic",
+}
 
 
 def _layout():
     from bioscout.utils import session_layout as _L
     return _L
-
-
-def _files(d: Path) -> List[Path]:
-    try:
-        return [p for p in d.iterdir() if p.is_file()] if d.is_dir() else []
-    except OSError:
-        return []
-
-
-def stage_status(session_dir, trial: str) -> Dict[str, Dict[str, List[Path]]]:
-    """``{iteration: {stage_key: [files]}}`` for one trial.
-
-    ``2_experimental`` appears as a pseudo-iteration because export and EMG are
-    model-independent: they run once per session, not once per model.
-    """
-    L = _layout()
-    session_dir = Path(session_dir)
-    cols: Dict[str, Dict[str, List[Path]]] = {}
-
-    def scan(label: str, root: Path):
-        if not root.is_dir():
-            return
-        per_stage: Dict[str, List[Path]] = {}
-        for key, _lbl, sub, frags in STAGES:
-            d = root / sub if sub else root
-            found = _files(d)
-            if frags:
-                found = [f for f in found
-                         if any(fr in f.name.lower() for fr in frags)]
-            per_stage[key] = found
-        cols[label] = per_stage
-
-    try:
-        exp_root = Path(L.experimental_root(str(session_dir)))
-        scan(exp_root.name, exp_root / trial)
-    except Exception:
-        pass
-    try:
-        itr = Path(L.iterations_root(str(session_dir)))
-        if itr.is_dir():
-            for it in sorted(itr.iterdir()):
-                if it.is_dir() and it.name not in L.NON_ITERATION_DIRS:
-                    scan(it.name, it / trial)
-    except Exception:
-        pass
-    return cols
 
 
 class TrialAnalysisTab(ctk.CTkFrame):
@@ -118,6 +109,9 @@ class TrialAnalysisTab(ctk.CTkFrame):
         self.status_callback = status_callback or (lambda *a, **k: None)
         self._project_root: Optional[Path] = None
         self._running = False
+        self._input_rows: List[tuple] = []     # (label, StringVar, marker widget)
+        self._grf_df = None
+        self._span = None
         self._build()
 
     # ------------------------------------------------------------- layout
@@ -158,23 +152,75 @@ class TrialAnalysisTab(ctk.CTkFrame):
         mid.grid_columnconfigure(0, weight=3)
         mid.grid_columnconfigure(1, weight=2)
 
-        self._grid_frame = ctk.CTkScrollableFrame(mid, fg_color="#12121a",
-                                                  corner_radius=8)
-        self._grid_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self._build_left(mid)
+        self._build_right(mid)
 
-        right = ctk.CTkFrame(mid, fg_color="#12121a", corner_radius=8)
+        self._detail = ctk.CTkTextbox(self, height=130, font=("Consolas", 11))
+        self._detail.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self._detail.insert("1.0", "Pick a subject, session and trial.\n")
+
+    # -- left: inputs / GRF window ---------------------------------------- #
+    def _build_left(self, parent):
+        left = ctk.CTkFrame(parent, fg_color="#12121a", corner_radius=8)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+
+        head = ctk.CTkFrame(left, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        head.grid_columnconfigure(1, weight=1)
+        self._left_view = ctk.CTkSegmentedButton(
+            head, values=["Inputs", "GRF window"], command=self._switch_left,
+            font=("Segoe UI", 11))
+        self._left_view.set("Inputs")
+        self._left_view.grid(row=0, column=0, sticky="w")
+        self._left_note = ctk.CTkLabel(head, text="", font=("Segoe UI", 10),
+                                       text_color="#8a8a8a", anchor="e")
+        self._left_note.grid(row=0, column=1, sticky="ew", padx=8)
+
+        self._stack = ctk.CTkFrame(left, fg_color="transparent")
+        self._stack.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 8))
+        self._stack.grid_rowconfigure(0, weight=1)
+        self._stack.grid_columnconfigure(0, weight=1)
+
+        self._inputs_pane = ctk.CTkScrollableFrame(self._stack, fg_color="transparent")
+        self._inputs_pane.grid_columnconfigure(1, weight=1)
+
+        self._grf_pane = ctk.CTkFrame(self._stack, fg_color="transparent")
+        self._grf_pane.grid_rowconfigure(0, weight=1)
+        self._grf_pane.grid_columnconfigure(0, weight=1)
+        self._grf_canvas_frame = ctk.CTkFrame(self._grf_pane, fg_color="#12121a")
+        self._grf_canvas_frame.grid(row=0, column=0, sticky="nsew")
+        self._grf_canvas_frame.grid_rowconfigure(0, weight=1)
+        self._grf_canvas_frame.grid_columnconfigure(0, weight=1)
+        grfbar = ctk.CTkFrame(self._grf_pane, fg_color="transparent")
+        grfbar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        grfbar.grid_columnconfigure(2, weight=1)
+        ctk.CTkButton(grfbar, text="Use dragged window", width=150, height=26,
+                      font=("Segoe UI", 11), command=self._apply_span
+                      ).grid(row=0, column=0, padx=(0, 6))
+        ctk.CTkButton(grfbar, text="Whole capture", width=110, height=26,
+                      font=("Segoe UI", 11), fg_color="#3a3a4a",
+                      hover_color="#4a4a5a", command=self._span_full
+                      ).grid(row=0, column=1, padx=(0, 6))
+        self._grf_note = ctk.CTkLabel(grfbar, text="Drag across the plot to pick "
+                                                   "a window.",
+                                      font=("Segoe UI", 10), text_color="#8a8a8a",
+                                      anchor="w")
+        self._grf_note.grid(row=0, column=2, sticky="ew")
+        self._show_left(self._inputs_pane)
+
+    # -- right: settings + run --------------------------------------------- #
+    def _build_right(self, parent):
+        right = ctk.CTkFrame(parent, fg_color="#12121a", corner_radius=8)
         right.grid(row=0, column=1, sticky="nsew")
-        right.grid_rowconfigure(8, weight=1)
+        right.grid_rowconfigure(9, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        # ---- trial settings (session.yaml) -------------------------------
         ctk.CTkLabel(right, text="Trial settings  (session.yaml)",
                      font=("Segoe UI", 12, "bold"), text_color="#dddddd").grid(
             row=0, column=0, sticky="w", padx=10, pady=(10, 2))
 
-        # Named fields rather than raw YAML only: a trial whose block has no
-        # time_range line had nowhere to type one, and time_range is the key
-        # that decides what every downstream stage sees.
         fields = ctk.CTkFrame(right, fg_color="transparent")
         fields.grid(row=1, column=0, sticky="new", padx=10, pady=(0, 4))
         fields.grid_columnconfigure(1, weight=1)
@@ -206,26 +252,36 @@ class TrialAnalysisTab(ctk.CTkFrame):
         ctk.CTkEntry(fields, textvariable=self._t1_var, height=26,
                      font=("Segoe UI", 12)).grid(row=1, column=3, sticky="ew", pady=3)
 
-        # Fills the fields, does not save: a detection you disagree with costs
-        # one glance, and the Save button stays the only thing that writes.
-        ctk.CTkButton(fields, text="⤢  Detect from motion", height=26,
+        detect = ctk.CTkFrame(fields, fg_color="transparent")
+        detect.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 2))
+        detect.grid_columnconfigure(0, weight=1)
+        detect.grid_columnconfigure(1, weight=1)
+        # Both fill the fields and neither saves: a window you disagree with
+        # costs one glance, and Save stays the only thing that writes.
+        ctk.CTkButton(detect, text="⤢  Detect from motion", height=26,
                       font=("Segoe UI", 11), fg_color="#2f6f9f",
-                      hover_color="#3a86bd",
-                      command=self._detect_time_range).grid(
-            row=2, column=0, columnspan=4, sticky="ew", pady=(6, 2))
+                      hover_color="#3a86bd", command=self._detect_time_range
+                      ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ctk.CTkButton(detect, text="⤢  Pick from GRF", height=26,
+                      font=("Segoe UI", 11), fg_color="#2f6f9f",
+                      hover_color="#3a86bd", command=self._goto_grf
+                      ).grid(row=0, column=1, sticky="ew", padx=(3, 0))
         self._detect_note = ctk.CTkLabel(fields, text="", font=("Segoe UI", 10),
                                          text_color="#888888", anchor="w")
         self._detect_note.grid(row=3, column=0, columnspan=4, sticky="ew")
 
-        ctk.CTkLabel(right, text="other keys (YAML)", font=("Segoe UI", 10),
-                     text_color="#888888").grid(row=7, column=0, sticky="w",
-                                                padx=10, pady=(4, 0))
-        self._yaml_box = ctk.CTkTextbox(right, font=("Consolas", 12), height=90)
-        self._yaml_box.grid(row=8, column=0, sticky="nsew", padx=10, pady=(0, 6))
-        ctk.CTkButton(right, text="Save to session.yaml", height=28,
+        save_row = ctk.CTkFrame(right, fg_color="transparent")
+        save_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        save_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(save_row, text="Save to session.yaml", height=28,
                       font=("Segoe UI", 12),
-                      command=self._save_trial_settings).grid(
-            row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+                      command=self._save_trial_settings).grid(row=0, column=0,
+                                                              sticky="ew")
+        ctk.CTkButton(save_row, text="Edit whole file…", height=28, width=120,
+                      font=("Segoe UI", 12), fg_color="#3a3a4a",
+                      hover_color="#4a4a5a",
+                      command=self._open_session_yaml_in_editor).grid(
+            row=0, column=1, sticky="e", padx=(6, 0))
 
         # ---- run panel ----------------------------------------------------
         ctk.CTkLabel(right, text="Run this trial", font=("Segoe UI", 12, "bold"),
@@ -241,30 +297,42 @@ class TrialAnalysisTab(ctk.CTkFrame):
                                             values=["—"], height=28,
                                             font=("Segoe UI", 12))
         self._iter_menu.grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(runbar, text="+", width=30, height=28,
+                      font=("Segoe UI", 14), command=self._add_iteration
+                      ).grid(row=0, column=2, padx=(4, 0))
+        ctk.CTkButton(runbar, text="–", width=30, height=28,
+                      font=("Segoe UI", 14), fg_color="#553333",
+                      hover_color="#774444", command=self._remove_iteration
+                      ).grid(row=0, column=3, padx=(3, 0))
+        self._iter_var.trace_add("write", lambda *_: self._render_inputs())
 
-        self._stage_vars = {}
-        stages_frame = ctk.CTkFrame(right, fg_color="transparent")
-        stages_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=(4, 0))
-        for i, (key, label, _kw) in enumerate(RUNNABLE):
-            v = ctk.BooleanVar(value=(key == "ik"))
-            self._stage_vars[key] = v
-            ctk.CTkCheckBox(stages_frame, text=label, variable=v,
-                            font=("Segoe UI", 11)).grid(row=i // 2, column=i % 2,
-                                                        sticky="w", padx=4, pady=2)
+        stagebar = ctk.CTkFrame(right, fg_color="transparent")
+        stagebar.grid(row=5, column=0, sticky="ew", padx=10, pady=(6, 0))
+        stagebar.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(stagebar, text="Stage", font=("Segoe UI", 11)).grid(
+            row=0, column=0, padx=(0, 6), sticky="w")
+        self._stage_var = ctk.StringVar(value=STAGE_LABELS[0])
+        ctk.CTkOptionMenu(stagebar, variable=self._stage_var,
+                          values=STAGE_LABELS, height=28,
+                          font=("Segoe UI", 12)).grid(row=0, column=1, sticky="ew")
+        self._stage_var.trace_add("write", lambda *_: self._render_inputs())
+
         self._replace_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(stages_frame, text="overwrite existing",
-                        variable=self._replace_var,
-                        font=("Segoe UI", 11)).grid(row=2, column=0, columnspan=2,
-                                                    sticky="w", padx=4, pady=2)
-        self._run_btn = ctk.CTkButton(right, text="▶  Run selected stages",
+        ctk.CTkCheckBox(right, text="overwrite existing", variable=self._replace_var,
+                        font=("Segoe UI", 11)).grid(row=6, column=0, sticky="w",
+                                                    padx=14, pady=(6, 0))
+
+        self._run_btn = ctk.CTkButton(right, text="▶  Run this stage",
                                       height=32, font=("Segoe UI", 12),
                                       fg_color="#28a745", hover_color="#218838",
                                       command=self._run)
-        self._run_btn.grid(row=6, column=0, sticky="ew", padx=10, pady=(6, 10))
+        self._run_btn.grid(row=7, column=0, sticky="ew", padx=10, pady=(6, 4))
 
-        self._detail = ctk.CTkTextbox(self, height=130, font=("Consolas", 11))
-        self._detail.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
-        self._detail.insert("1.0", "Pick a trial, then click a cell to list its files.\n")
+        ctk.CTkLabel(right, text="other keys (YAML)", font=("Segoe UI", 10),
+                     text_color="#888888").grid(row=8, column=0, sticky="w",
+                                                padx=10, pady=(4, 0))
+        self._yaml_box = ctk.CTkTextbox(right, font=("Consolas", 12), height=80)
+        self._yaml_box.grid(row=9, column=0, sticky="nsew", padx=10, pady=(0, 8))
 
     # ---------------------------------------------------------- selection
     def set_project_dir(self, project_dir: str) -> None:
@@ -307,10 +375,310 @@ class TrialAnalysisTab(ctk.CTkFrame):
                 pass
         self._trial_menu.configure(values=opts or ["—"])
         self._trial_var.set((opts or ["—"])[0])
+        self._refresh_iterations()
 
     def _on_trial(self, *_):
-        self.refresh()
         self._load_trial_settings()
+        self._render_inputs()
+        self._grf_df = None
+        if self._left_view.get() == "GRF window":
+            self._render_grf()
+
+    def refresh(self, *_):
+        self._refresh_iterations()
+        self._load_trial_settings()
+        self._render_inputs()
+        if self._left_view.get() == "GRF window":
+            self._grf_df = None
+            self._render_grf()
+
+    def _refresh_iterations(self):
+        d = self._session_dir()
+        iters: List[str] = []
+        if d:
+            try:
+                L = _layout()
+                root = Path(L.iterations_root(str(d)))
+                if root.is_dir():
+                    iters = sorted(p.name for p in root.iterdir()
+                                   if p.is_dir() and p.name not in L.NON_ITERATION_DIRS)
+            except Exception:
+                pass
+            for name in self._yaml_iterations():
+                if name not in iters:
+                    iters.append(name)          # declared but not yet scaled
+        self._iter_menu.configure(values=iters or ["—"])
+        if self._iter_var.get() not in iters:
+            self._iter_var.set((iters or ["—"])[0])
+
+    def _yaml_iterations(self) -> List[str]:
+        f = self._session_yaml()
+        if not f:
+            return []
+        try:
+            import yaml
+            cfg = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            return list((cfg.get("iterations") or {}).keys())
+        except Exception:
+            return []
+
+    # ------------------------------------------------- stage input editor
+    def _stage_key(self) -> str:
+        label = self._stage_var.get()
+        for k in STAGE_ORDER:
+            if STAGES_IO[k][0] == label:
+                return k
+        return STAGE_ORDER[0]
+
+    def _exp_dir(self) -> Optional[Path]:
+        d, trial = self._session_dir(), self._trial_var.get()
+        if not d or trial == "—":
+            return None
+        try:
+            return Path(_layout().experimental_root(str(d))) / trial
+        except Exception:
+            return None
+
+    def _iter_dir(self) -> Optional[Path]:
+        d, trial, it = self._session_dir(), self._trial_var.get(), self._iter_var.get()
+        if not d or "—" in (trial, it):
+            return None
+        try:
+            return Path(_layout().iteration_path(str(d), it)) / trial
+        except Exception:
+            return None
+
+    def _model_path(self, key: str) -> Optional[Path]:
+        """Resolve ``iterations.<it>.<key>`` to a real .osim under the iteration."""
+        d, it = self._session_dir(), self._iter_var.get()
+        f = self._session_yaml()
+        if not d or it == "—" or not f:
+            return None
+        try:
+            import yaml
+            cfg = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            blk = (cfg.get("iterations") or {}).get(it) or {}
+            rel = blk.get(key) or blk.get("so_model") or blk.get("model")
+            if not rel:
+                return None
+            return Path(_layout().iteration_path(str(d), it)) / str(rel)
+        except Exception:
+            return None
+
+    def _resolve_inputs(self) -> List[Tuple[str, Optional[Path]]]:
+        key = self._stage_key()
+        _label, _kw, inputs, _out = STAGES_IO[key]
+        exp, itd = self._exp_dir(), self._iter_dir()
+        out = []
+        for label, where, rel in inputs:
+            if where == "exp":
+                p = (exp / rel) if exp else None
+            elif where == "iter":
+                p = (itd / rel) if itd else None
+            else:
+                p = self._model_path(rel)
+            out.append((label, p))
+        return out
+
+    def _render_inputs(self, *_):
+        for w in self._inputs_pane.winfo_children():
+            w.destroy()
+        self._input_rows = []
+
+        trial, it = self._trial_var.get(), self._iter_var.get()
+        key = self._stage_key()
+        label, _kw, _inp, outputs = STAGES_IO[key]
+        if "—" in (trial, it):
+            ctk.CTkLabel(self._inputs_pane,
+                         text="Pick a trial and an iteration to see what "
+                              "this stage will read.",
+                         font=("Segoe UI", 11), text_color="#888888"
+                         ).grid(row=0, column=0, columnspan=4, sticky="w",
+                                padx=8, pady=10)
+            self._left_note.configure(text="")
+            return
+
+        ctk.CTkLabel(self._inputs_pane,
+                     text=f"{label}   ·   {it} / {trial}",
+                     font=("Segoe UI", 12, "bold"), text_color="#7fb2e5"
+                     ).grid(row=0, column=0, columnspan=4, sticky="w",
+                            padx=6, pady=(4, 8))
+
+        row, missing = 1, 0
+        for name, path in self._resolve_inputs():
+            ctk.CTkLabel(self._inputs_pane, text=name, font=("Segoe UI", 11),
+                         anchor="w", width=170).grid(row=row, column=0,
+                                                     sticky="w", padx=(6, 6), pady=3)
+            var = ctk.StringVar(value=str(path) if path else "")
+            ctk.CTkEntry(self._inputs_pane, textvariable=var,
+                         font=("Consolas", 10), height=26).grid(
+                row=row, column=1, sticky="ew", pady=3)
+            exists = bool(path and path.exists())
+            if not exists:
+                missing += 1
+            mark = ctk.CTkLabel(self._inputs_pane, text="✓" if exists else "⚠",
+                                font=("Segoe UI", 13, "bold"),
+                                text_color="#4cc46a" if exists else "#e5b567",
+                                width=20)
+            mark.grid(row=row, column=2, padx=4)
+            ctk.CTkButton(self._inputs_pane, text="…", width=28, height=24,
+                          font=("Segoe UI", 11),
+                          command=lambda v=var: self._browse_into(v)
+                          ).grid(row=row, column=3, padx=(0, 6))
+            self._input_rows.append((name, var, mark))
+            row += 1
+
+        ctk.CTkLabel(self._inputs_pane, text="writes", font=("Segoe UI", 10, "bold"),
+                     text_color="#8a8a8a").grid(row=row, column=0, sticky="w",
+                                                padx=6, pady=(12, 2))
+        row += 1
+        itd = self._iter_dir()
+        for rel in outputs:
+            p = (itd / rel) if itd else None
+            present = bool(p and p.exists())
+            ctk.CTkLabel(self._inputs_pane,
+                         text=("✓  " if present else "·  ") + rel,
+                         font=("Consolas", 10), anchor="w",
+                         text_color="#4cc46a" if present else "#777777"
+                         ).grid(row=row, column=0, columnspan=4, sticky="w",
+                                padx=14, pady=1)
+            row += 1
+
+        self._left_note.configure(
+            text="all inputs present" if not missing
+            else f"{missing} input(s) missing",
+            text_color="#4cc46a" if not missing else "#e5b567")
+
+    def _browse_into(self, var):
+        start = Path(var.get()).parent if var.get() else (self._project_root or Path("."))
+        p = filedialog.askopenfilename(title="Choose input file",
+                                       initialdir=str(start))
+        if p:
+            var.set(p)
+            self.status_callback("Input overridden for this run", "warning")
+
+    def _show_left(self, pane):
+        for p in (self._inputs_pane, self._grf_pane):
+            p.grid_forget()
+        pane.grid(row=0, column=0, sticky="nsew")
+
+    def _switch_left(self, name: str):
+        if name == "GRF window":
+            self._show_left(self._grf_pane)
+            self._render_grf()
+        else:
+            self._show_left(self._inputs_pane)
+            self._render_inputs()
+
+    def _goto_grf(self):
+        self._left_view.set("GRF window")
+        self._switch_left("GRF window")
+
+    # --------------------------------------------------------- GRF window
+    def _render_grf(self):
+        for w in self._grf_canvas_frame.winfo_children():
+            w.destroy()
+        self._span = None
+        if not HAS_MPL:
+            self._grf_note.configure(text="matplotlib not installed.")
+            return
+        exp, trial = self._exp_dir(), self._trial_var.get()
+        if not exp or trial == "—":
+            self._grf_note.configure(text="Pick a trial first.")
+            return
+        grf = exp / "grf.mot"
+        if not grf.is_file():
+            self._grf_note.configure(
+                text=f"No grf.mot in 2_experimental/{trial} — run Export first.")
+            return
+        if self._grf_df is None:
+            try:
+                from bioscout.gui.widgets.results_viewer import _load_file
+                self._grf_df = _load_file(grf)
+            except Exception as exc:
+                self._grf_note.configure(text=f"{type(exc).__name__}: {exc}")
+                return
+        df = self._grf_df
+        if df is None or df.empty:
+            self._grf_note.configure(text="grf.mot is empty.")
+            return
+
+        t = df[df.columns[0]].values
+        # Vertical force per plate is what tells you when the athlete is on it;
+        # the horizontal and CoP columns just crowd the picture.
+        vy = [c for c in df.columns if c.lower().endswith("vy")] or \
+             [c for c in df.columns[1:] if "force" in c.lower()][:6]
+
+        fig = Figure(figsize=(7, 4.2), dpi=96, facecolor="#111118")
+        fig.subplots_adjust(left=0.10, right=0.98, top=0.92, bottom=0.14)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.set_facecolor("#1a1a28")
+        ax.tick_params(colors="#888888", labelsize=8)
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#333344")
+        ax.grid(True, color="#222233", linewidth=0.5)
+        for c in vy:
+            try:
+                ax.plot(t, df[c].values.astype(float), linewidth=1.1, label=c)
+            except Exception:
+                pass
+        ax.set_xlabel("time (s)", fontsize=9, color="#999999")
+        ax.set_ylabel("vertical force (N)", fontsize=9, color="#999999")
+        ax.set_title(f"{trial} — drag to select the window", fontsize=10,
+                     color="#cccccc")
+        if 0 < len(vy) <= 8:
+            ax.legend(fontsize=6, loc="upper right", facecolor="#1e1e2e",
+                      labelcolor="#cccccc", edgecolor="#333344")
+
+        # Show the window currently in the fields, so the plot and the numbers
+        # never disagree about what is configured.
+        for var, colour in ((self._t0_var, "#4cc46a"), (self._t1_var, "#e06c75")):
+            try:
+                ax.axvline(float(var.get()), color=colour, linewidth=1.2,
+                           linestyle="--", alpha=0.9)
+            except (TypeError, ValueError):
+                pass
+
+        canvas = FigureCanvasTkAgg(fig, master=self._grf_canvas_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._grf_span = None
+
+        def on_select(a, b):
+            self._grf_span = (float(a), float(b))
+            self._grf_note.configure(
+                text=f"selected {a:.3f} – {b:.3f} s  ({b - a:.2f} s) — "
+                     f"press 'Use dragged window'")
+
+        try:
+            self._span = SpanSelector(ax, on_select, "horizontal", useblit=False,
+                                      props=dict(alpha=0.25, facecolor="#4cc46a"),
+                                      interactive=True)
+        except TypeError:      # matplotlib < 3.5 spelt it rectprops
+            self._span = SpanSelector(ax, on_select, "horizontal", useblit=False,
+                                      rectprops=dict(alpha=0.25, facecolor="#4cc46a"))
+        self._grf_note.configure(text=f"{len(vy)} vertical force channel(s). "
+                                      f"Drag across the plot to pick a window.")
+
+    def _apply_span(self):
+        span = getattr(self, "_grf_span", None)
+        if not span:
+            self.status_callback("Drag a window on the GRF plot first", "warning")
+            return
+        a, b = span
+        self._t0_var.set(f"{a:.3f}")
+        self._t1_var.set(f"{b:.3f}")
+        self._detect_note.configure(
+            text=f"{b - a:.2f}s from the GRF plot — press Save to keep")
+        self.status_callback(f"Window {a:.3f}–{b:.3f}s — not saved yet", "info")
+
+    def _span_full(self):
+        if self._grf_df is None or self._grf_df.empty:
+            return
+        t = self._grf_df[self._grf_df.columns[0]].values
+        self._t0_var.set(f"{float(t[0]):.3f}")
+        self._t1_var.set(f"{float(t[-1]):.3f}")
+        self._detect_note.configure(text="Whole capture — press Save to keep")
 
     # -------------------------------------------------- trial settings I/O
     def _session_yaml(self) -> Optional[Path]:
@@ -384,18 +752,29 @@ class TrialAnalysisTab(ctk.CTkFrame):
                      f"bounds, i.e. no cropping.")
 
     def _save_trial_settings(self):
+        """Write this trial's block back, touching only that block's line.
+
+        This used to ``yaml.safe_dump`` the WHOLE file, which silently deleted
+        every comment in session.yaml — including the block recording why
+        Walking_02 must not be re-enabled — and reordered keys and reformatted
+        numbers on every save. ``file_edit`` patches the value span instead, so
+        one trial edit is a one-line diff.
+        """
         f, trial = self._session_yaml(), self._trial_var.get()
         if not f or trial == "—":
             self.status_callback("No session.yaml / trial selected", "warning")
             return
         try:
             import yaml
+            from bioscout.utils.file_edit import flow_map, load_document
+
             block = yaml.safe_load(self._yaml_box.get("1.0", "end")) or {}
             if not isinstance(block, dict):
                 raise ValueError("the extra-keys box must be a mapping (key: value)")
+            ordered = {}
             if self._type_var.get().strip():
-                block["type"] = self._type_var.get().strip()
-            block["side"] = self._side_var.get()
+                ordered["type"] = self._type_var.get().strip()
+            ordered["side"] = self._side_var.get()
             t0, t1 = self._t0_var.get().strip(), self._t1_var.get().strip()
             if t0 or t1:
                 try:
@@ -404,81 +783,141 @@ class TrialAnalysisTab(ctk.CTkFrame):
                     raise ValueError("time start and end must both be numbers")
                 if b <= a:
                     raise ValueError(f"end ({b}) must be after start ({a})")
-                block["time_range"] = [a, b]
-            else:
-                # Explicitly dropped rather than left stale: an empty pair means
-                # "use the whole capture", and keeping the old numbers would
-                # crop silently.
-                block.pop("time_range", None)
-            cfg = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-            cfg.setdefault("trials", {})[trial] = block
-            # Written via a temp file then replaced, so an exception midway
-            # cannot leave the session with a half-written session.yaml.
-            tmp = f.with_suffix(".yaml.tmp")
-            tmp.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-            tmp.replace(f)
+                ordered["time_range"] = [a, b]
+            # An empty pair means "use the whole capture"; time_range is simply
+            # left out rather than kept stale, which would crop silently.
+            for k, v in block.items():
+                if k not in ("type", "side", "time_range"):
+                    ordered[k] = v
+
+            doc = load_document(f)
+            trials = doc.ensure_mapping("trials")
+            doc.set_entry_source(trials, trial, flow_map(ordered))
+            doc.save()                       # atomic; keeps session.yaml.bak
+
             self.status_callback(f"Saved {trial} to session.yaml", "success")
             self._detail.delete("1.0", "end")
-            self._detail.insert("1.0", f"session.yaml updated: trials.{trial}\n")
+            self._detail.insert("1.0", f"session.yaml updated: trials.{trial}\n"
+                                       f"  {trial}: {flow_map(ordered)}\n"
+                                       f"Comments and other trials untouched; "
+                                       f"previous file kept as {f.name}.bak\n")
         except Exception as exc:
             self.status_callback(f"{type(exc).__name__}: {exc}", "error")
             self._detail.delete("1.0", "end")
             self._detail.insert("1.0", f"NOT saved — {type(exc).__name__}: {exc}\n")
 
-    # ------------------------------------------------------------- table
-    def refresh(self, *_):
-        for w in self._grid_frame.winfo_children():
-            w.destroy()
-        d, trial = self._session_dir(), self._trial_var.get()
-        if not d or trial == "—":
+    def _open_session_yaml_in_editor(self):
+        """Pop out the full editor for this session's session.yaml."""
+        f = self._session_yaml()
+        if not f:
+            self.status_callback("No session.yaml for this session", "warning")
             return
-        cols = stage_status(d, trial)
-        iters = [c for c in cols if not c.startswith(("2_", "experimental"))]
-        self._iter_menu.configure(values=iters or ["—"])
-        if self._iter_var.get() not in iters:
-            self._iter_var.set((iters or ["—"])[0])
-        if not cols:
-            ctk.CTkLabel(self._grid_frame, text=f"No folders for trial '{trial}'.",
-                         font=("Segoe UI", 12)).grid(row=0, column=0, padx=12, pady=12)
+        try:
+            from bioscout.gui.widgets.file_editor import open_file_editor_window
+            open_file_editor_window(self, f, status_callback=self.status_callback)
+        except Exception as exc:
+            self.status_callback(f"Could not open editor: {exc}", "error")
+
+    # ----------------------------------------------------- iterations CRUD
+    def _add_iteration(self):
+        """Add an iteration to session.yaml, optionally copying an existing one.
+
+        Adding one used to mean hand-editing session.yaml, which is why every
+        session had the same six: the cost of a seventh was a text editor and a
+        chance of breaking the file.
+        """
+        f = self._session_yaml()
+        if not f:
+            self.status_callback("No session.yaml for this session", "warning")
             return
-
-        names = list(cols)
-        ctk.CTkLabel(self._grid_frame, text="Stage", font=("Segoe UI", 11, "bold"),
-                     text_color="#aaaaaa").grid(row=0, column=0, sticky="w",
-                                                padx=8, pady=6)
-        for j, n in enumerate(names, start=1):
-            ctk.CTkLabel(self._grid_frame, text=n, font=("Segoe UI", 11, "bold"),
-                         text_color="#dddddd").grid(row=0, column=j, padx=8, pady=6)
-
-        for i, (key, label, _sub, _fr) in enumerate(STAGES, start=1):
-            ctk.CTkLabel(self._grid_frame, text=label, font=("Segoe UI", 12),
-                         anchor="w").grid(row=i, column=0, sticky="w", padx=8, pady=3)
-            for j, n in enumerate(names, start=1):
-                files = cols[n].get(key) or []
-                done = bool(files)
-                ctk.CTkButton(
-                    self._grid_frame,
-                    text=f"✓ {len(files)}" if done else "–",
-                    width=70, height=26, font=("Segoe UI", 11),
-                    fg_color="#1f6f3f" if done else "#2a2a33",
-                    hover_color="#28874e" if done else "#3a3a44",
-                    command=lambda f=files, t=f"{n} / {label}": self._show(t, f)
-                ).grid(row=i, column=j, padx=6, pady=3)
-
-    def _show(self, title, files):
+        existing = self._yaml_iterations()
+        name = _ask(self, "Add iteration", "Name for the new iteration:")
+        if not name:
+            return
+        name = name.strip()
+        if name in existing:
+            self.status_callback(f"'{name}' already exists", "error")
+            return
+        copy_from = None
+        if existing:
+            copy_from = _ask(self, "Copy from",
+                             "Copy settings from which iteration?\n"
+                             f"({', '.join(existing)})  — leave blank for a "
+                             f"blank template.")
+            if copy_from:
+                copy_from = copy_from.strip()
+                if copy_from not in existing:
+                    self.status_callback(f"'{copy_from}' is not an iteration", "error")
+                    return
+        try:
+            from bioscout.utils.file_edit import flow_map, load_document
+            doc = load_document(f)
+            iters = doc.ensure_mapping("iterations")
+            if copy_from:
+                doc.duplicate_entry(iters, copy_from, name)
+            else:
+                blk = dict(NEW_ITERATION_TEMPLATE, label=name)
+                doc.set_entry_source(iters, name, flow_map(blk))
+            doc.save()
+        except Exception as exc:
+            self.status_callback(f"{type(exc).__name__}: {exc}", "error")
+            return
+        # Create the folder too, so the iteration shows up in every other tab
+        # that lists directories rather than reading the yaml.
+        try:
+            d = self._session_dir()
+            Path(_layout().iteration_path(str(d), name)).mkdir(parents=True,
+                                                               exist_ok=True)
+        except Exception:
+            pass
+        self._refresh_iterations()
+        self._iter_var.set(name)
+        src = f"copied from {copy_from}" if copy_from else "blank template"
+        self.status_callback(f"Added iteration '{name}' ({src})", "success")
         self._detail.delete("1.0", "end")
-        if not files:
-            self._detail.insert("1.0", f"{title}\n  (nothing on disk)\n")
+        self._detail.insert("1.0",
+                            f"session.yaml: iterations.{name} added ({src}).\n"
+                            f"Set its 'generic' model, then run Model Scaling "
+                            f"before analysing with it.\n")
+
+    def _remove_iteration(self):
+        f, it = self._session_yaml(), self._iter_var.get()
+        if not f or it == "—":
             return
-        lines = [title, ""]
-        for f in sorted(files):
-            try:
-                kb = f.stat().st_size / 1024.0
-            except OSError:
-                kb = float("nan")
-            lines.append(f"  {f.name:<52s} {kb:>9.1f} kB")
-        lines += ["", f"  {files[0].parent}"]
-        self._detail.insert("1.0", "\n".join(lines) + "\n")
+        if not messagebox.askyesno(
+                "Remove iteration",
+                f"Remove '{it}' from session.yaml?\n\n"
+                f"Any results it has produced stay on disk — only the "
+                f"configuration entry is removed (and its folder, if empty).",
+                parent=self):
+            return
+        try:
+            from bioscout.utils.file_edit import load_document
+            doc = load_document(f)
+            iters = doc.map_node("iterations")
+            if iters is None:
+                raise KeyError("no 'iterations' section")
+            doc.delete_entry(iters, it)
+            doc.save()
+        except Exception as exc:
+            self.status_callback(f"{type(exc).__name__}: {exc}", "error")
+            return
+        # Drop the folder ONLY when it holds nothing. Otherwise the iteration
+        # keeps showing in every dropdown that lists directories, so removing it
+        # looks like it silently failed — but a folder with results in it is
+        # never deleted from a config edit.
+        note = ""
+        try:
+            folder = Path(_layout().iteration_path(str(self._session_dir()), it))
+            if folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
+            elif folder.is_dir():
+                note = f"  Its results remain in {folder}."
+        except Exception:
+            pass
+        self._refresh_iterations()
+        self.status_callback(f"Removed iteration '{it}' from session.yaml" + note,
+                             "success")
 
     # --------------------------------------------------------------- run
     def _run(self):
@@ -489,10 +928,20 @@ class TrialAnalysisTab(ctk.CTkFrame):
         if not d or "—" in (trial, it_name):
             self.status_callback("Pick a session, trial and iteration first", "warning")
             return
-        kwargs = {kw: self._stage_vars[k].get() for k, _l, kw in RUNNABLE}
-        if not any(kwargs.values()):
-            self.status_callback("No stage selected", "warning")
-            return
+        key = self._stage_key()
+        label, kwarg, _inp, _out = STAGES_IO[key]
+
+        missing = [n for n, p in self._resolve_inputs() if not (p and p.exists())]
+        if missing:
+            # Better to say which file is absent now than to read a traceback
+            # from inside OpenSim in two minutes' time.
+            if not messagebox.askyesno(
+                    "Missing inputs",
+                    f"{label} is missing:\n\n  " + "\n  ".join(missing) +
+                    "\n\nRun anyway?", parent=self):
+                return
+
+        kwargs = {kw: (k == key) for k, (_l, kw, _i, _o) in STAGES_IO.items()}
         kwargs["replace"] = self._replace_var.get()
         # CEINMS needs a calibrated subject; calibrating from here would
         # recalibrate the whole model off one trial, which is not what a
@@ -502,8 +951,7 @@ class TrialAnalysisTab(ctk.CTkFrame):
         self._running = True
         self._run_btn.configure(state="disabled", text="running…")
         self._detail.delete("1.0", "end")
-        self._detail.insert("1.0", f"Running {it_name} / {trial}: "
-                                   f"{', '.join(k for k, v in kwargs.items() if v is True)}\n"
+        self._detail.insert("1.0", f"Running {label} for {it_name} / {trial}\n"
                                    f"(CEINMS calibration is reused, not re-run)\n")
 
         def work():
@@ -512,7 +960,7 @@ class TrialAnalysisTab(ctk.CTkFrame):
                 from bioscout import Session
                 s = Session.open(str(d))
                 s.iteration(it_name).run(trials=[trial], **kwargs)
-            except Exception as exc:      # surfaced in the panel, never raised
+            except Exception:      # surfaced in the panel, never raised
                 import traceback
                 err = traceback.format_exc()
             self.after(0, lambda: self._done(err))
@@ -521,11 +969,46 @@ class TrialAnalysisTab(ctk.CTkFrame):
 
     def _done(self, err):
         self._running = False
-        self._run_btn.configure(state="normal", text="▶  Run selected stages")
+        self._run_btn.configure(state="normal", text="▶  Run this stage")
         if err:
             self._detail.insert("end", "\nFAILED\n" + err)
             self.status_callback("Trial run failed — see the panel", "error")
         else:
             self._detail.insert("end", "\nDone.\n")
             self.status_callback("Trial run finished", "success")
-        self.refresh()
+            self._render_inputs()
+
+
+def _ask(parent, title: str, prompt: str) -> Optional[str]:
+    """A themed one-line prompt — tkinter's simpledialog renders light-on-dark."""
+    import tkinter as tk
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title(title)
+    dlg.geometry("460x180")
+    dlg.transient(parent.winfo_toplevel())
+    dlg.grid_columnconfigure(0, weight=1)
+    ctk.CTkLabel(dlg, text=prompt, font=("Segoe UI", 12), anchor="w",
+                 justify="left", wraplength=420).grid(row=0, column=0, sticky="ew",
+                                                      padx=16, pady=(16, 6))
+    var = tk.StringVar()
+    entry = ctk.CTkEntry(dlg, textvariable=var, font=("Consolas", 11))
+    entry.grid(row=1, column=0, sticky="ew", padx=16)
+    out = {"value": None}
+
+    def ok(*_):
+        out["value"] = var.get().strip() or None
+        dlg.destroy()
+
+    row = ctk.CTkFrame(dlg, fg_color="transparent")
+    row.grid(row=2, column=0, sticky="e", padx=16, pady=14)
+    ctk.CTkButton(row, text="Cancel", width=80, fg_color="#4a4a4a",
+                  hover_color="#5a5a5a", command=dlg.destroy).grid(row=0, column=0,
+                                                                   padx=4)
+    ctk.CTkButton(row, text="OK", width=80, command=ok).grid(row=0, column=1, padx=4)
+    entry.bind("<Return>", ok)
+    try:
+        dlg.after(120, lambda: (dlg.lift(), dlg.grab_set(), entry.focus_force()))
+    except Exception:
+        pass
+    dlg.wait_window()
+    return out["value"]

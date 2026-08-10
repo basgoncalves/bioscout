@@ -82,3 +82,9 @@ _to_delete_*.py
 _patch_*.py
 _bashwrite_probe.txt
 ziLDWRaE
+
+# editor/tool backups
+*.pre_*
+*.bak
+*.tmp
+*.new

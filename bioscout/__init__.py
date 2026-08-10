@@ -1,4 +1,4 @@
-__version__ = "2.0.0b8"
+__version__ = "2.0.0b10"
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
