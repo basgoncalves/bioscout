@@ -2,13 +2,34 @@
 
 All notable changes to BioScout are documented here.
 
-> **Versioning.** The 2.x line is still a **pre-release** (`2.0.0bN`). PyPI
-> treats `bN` as a beta: `pip install bioscout` will NOT pick it up, only
-> `pip install --pre bioscout` (or an exact pin) will. That is deliberate while
-> the session-model refactor lands — it keeps the released package honest about
-> its state without holding back installs for people who want it. When the
-> pipeline runs end to end on a clean session without hand-holding, move to
-> `2.0.0rc1`, then `2.0.0`.
+> **Versioning.** 2.0.0 is a **normal release** — `pip install bioscout` picks
+> it up, no `--pre`. It is still beta software, and says so through the
+> `Development Status :: 4 - Beta` classifier rather than through a `bN` version
+> suffix: a PEP 440 pre-release is hidden from the PyPI landing page and skipped
+> by pip's resolver, which was hiding the 2.x line rather than qualifying it.
+> The `2.0.0bN` betas stay in the release history. Breaking changes are still
+> possible in 2.x while the session/iteration API settles; they get a minor bump
+> and a note here.
+
+## [2.0.0] — 2026-08-11
+
+First normal (non-pre-release) 2.x. Code-identical to `2.0.0b20` — only the
+version string and the packaging metadata changed.
+
+### Changed — beta is declared by classifier, not by the version string
+
+`2.0.0bN` is a PEP 440 pre-release, which meant PyPI kept the 2.x line off the
+project's landing page (it showed 1.1.0) and pip skipped it unless you passed
+`--pre`. That hid the release rather than qualifying it. 2.0.0 is a normal
+release; the beta status is now stated by `Development Status :: 4 - Beta`,
+which shows in the PyPI sidebar and does not affect resolution.
+
+**Anyone still on 1.x will now get 2.x from a plain `pip install bioscout`.**
+2.x requires Python 3.9–3.11 and OpenSim — `python_requires` is `>=3.9`, so a
+3.8 install fails at resolution instead of at import.
+
+Also added the Python 3.9/3.10/3.11, Science/Research and Medical Science Apps.
+classifiers, which were missing entirely.
 
 ## [2.0.0b20] — 2026-08-11
 

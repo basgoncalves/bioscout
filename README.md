@@ -4,7 +4,7 @@
 
 <h1 align="center">BioScout</h1>
 
-<p align="center">v2.0.0b20 &nbsp;·&nbsp; <em>pre-release</em></p>
+<p align="center">v2.0.0 &nbsp;·&nbsp; <em>beta — the API may still move</em></p>
 
 <p align="center"><strong>A Python toolbox for musculoskeletal modelling.</strong></p>
 
@@ -98,12 +98,15 @@ python -c "import opensim; print(opensim.__version__)"
 **3 — Install BioScout:**
 
 ```bash
-pip install --pre bioscout       # 2.x is a pre-release: --pre is required
+pip install bioscout
 ```
 
-> The 2.x line is published as `2.0.0bN`. PyPI treats `bN` as a beta, so a plain
-> `pip install bioscout` resolves to the last 1.x release and will NOT pick up
-> 2.x — you need `--pre`, or an exact pin (`pip install bioscout==2.0.0b20`).
+> **2.x is a beta line.** It is a normal release — no `--pre` needed — but it is
+> marked *Development Status :: 4 - Beta* on PyPI because the session/iteration
+> API is still settling. Pin it (`bioscout==2.0.0`) if you need a run to stay
+> reproducible. Coming from 1.x, see
+> [Migration from msk_modelling_python](#migration-from-msk_modelling_python);
+> note 2.x requires Python 3.9–3.11 and OpenSim.
 
 For development, install editable so your edits take effect immediately:
 

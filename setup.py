@@ -17,13 +17,30 @@ setup(
     version=__version__,
     author="Bas",
     author_email="basilio.goncalves7@gmail.com",
-    description=f"an open-source Python toolbox movement assessment (version {__version__})",
+    # PyPI prints this one line directly under the project name, and it is what
+    # shows in index listings. "BETA" goes HERE rather than in the version
+    # string: a 2.0.0bN version would make pip treat the release as a
+    # pre-release and hide it from the landing page entirely.
+    description=(
+        f"BETA ({__version__}) - an open-source Python toolbox for "
+        "musculoskeletal modelling and movement assessment"
+    ),
     long_description=f"{long_description}\n\nVersion: {__version__}",
     long_description_content_type="text/markdown",
     url="https://github.com/basgoncalves/bioscout",
     packages=find_packages(),
     classifiers=[
+        # "Beta" is declared HERE, not in the version string. A PEP 440
+        # pre-release (2.0.0bN) is hidden from the PyPI landing page and
+        # skipped by pip unless --pre; this classifier says the same thing
+        # while 2.0.0 stays a normal, installable release.
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Science/Research",
+        "Topic :: Scientific/Engineering :: Medical Science Apps.",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
