@@ -84,6 +84,10 @@ setup(
             'tps-landmarks=bioscout.tps_personalise.landmarks_cli:main',
         ],
     },
-    python_requires='>=3.8',
+    # 3.9 is the documented floor (see the Requirements table in README.md).
+    # It was '>=3.8', which let pip install a build that then failed on import.
+    # No upper bound on purpose: OpenSim's supported range moves, and a pinned
+    # ceiling here would block installs the day it widens.
+    python_requires='>=3.9',
     include_package_data=True,
 )

@@ -4,7 +4,7 @@
 
 <h1 align="center">BioScout</h1>
 
-<p align="center">v2.0.0</p>
+<p align="center">v2.0.0b20 &nbsp;·&nbsp; <em>pre-release</em></p>
 
 <p align="center"><strong>A Python toolbox for musculoskeletal modelling.</strong></p>
 
@@ -98,8 +98,12 @@ python -c "import opensim; print(opensim.__version__)"
 **3 — Install BioScout:**
 
 ```bash
-pip install bioscout             # stable release from PyPI
+pip install --pre bioscout       # 2.x is a pre-release: --pre is required
 ```
+
+> The 2.x line is published as `2.0.0bN`. PyPI treats `bN` as a beta, so a plain
+> `pip install bioscout` resolves to the last 1.x release and will NOT pick up
+> 2.x — you need `--pre`, or an exact pin (`pip install bioscout==2.0.0b20`).
 
 For development, install editable so your edits take effect immediately:
 
