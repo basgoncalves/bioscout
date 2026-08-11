@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import customtkinter as ctk
+from .. import simulations_root as _simulations_root
 
 try:
     import matplotlib
@@ -154,7 +155,8 @@ class EMGAnalysisTab(ctk.CTkFrame):
     def _sims(self) -> Optional[Path]:
         if not self._project_root:
             return None
-        p = self._project_root / "simulations"
+        p = _simulations_root(self._project_root,
+                              getattr(self, 'config_manager', None))
         return p if p.is_dir() else None
 
     def _on_subject(self, *_):

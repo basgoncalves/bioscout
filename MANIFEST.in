@@ -1,4 +1,10 @@
-recursive-include bioscout/utils/ceinms *.exe *.dll *.txt
+# CEINMS binaries. torch_cpu.dll is 252 MB and is DELIBERATELY not shipped:
+# ceinms.py extracts it from torch_cpu.zip (76 MB) on first run. Shipping the
+# extracted copy — which is what happens on a dev machine that has run CEINMS —
+# puts the wheel far past PyPI's 100 MB per-file limit AND leaves out the zip,
+# so the extraction that was meant to avoid the problem never had its input.
+recursive-include bioscout/utils/ceinms/bin *.exe *.dll *.txt *.zip
+exclude bioscout/utils/ceinms/bin/torch_cpu.dll
 recursive-include bioscout/config *.yaml *.xml
 recursive-include bioscout/setup_files *.xml *.txt
 recursive-include bioscout/models *.osim *.txt

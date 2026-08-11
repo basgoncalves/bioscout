@@ -64,14 +64,14 @@ def _run_all(rest):
     """One-shot FULL validation: moment arms + fibre + isometric + isokinetic.
 
     Auto-resolves the bundled literature (validation/ folder) so only --model is
-    required. Writes everything into muscle_inspect_<model>/ next to the model.
+    required. Writes everything into validation/<model>/ next to the model.
     """
     from . import muscle_length_validation as V
     from . import strength as S
-    from .paths import LITERATURE_MOMENT_ARMS_CSV
+    from .paths import LITERATURE_MOMENT_ARMS_CSV, validation_dir
     p = argparse.ArgumentParser(prog="muscle_inspect all")
     p.add_argument("--model", required=True, help="OpenSim .osim model")
-    p.add_argument("--out", default=None, help="default: muscle_inspect_<model>/ next to the model")
+    p.add_argument("--out", default=None, help="default: validation/<model>/ next to the model")
     p.add_argument("--lit", default=None, help="moment-arm + fibre CSV (default: bundled)")
     p.add_argument("--strength-lit", dest="strength_lit", default=None,
                    help="strength CSV (default: bundled literature_strength.csv)")
@@ -89,7 +89,7 @@ def _run_all(rest):
     scsv = a.strength_lit or os.path.join(data_dir, "literature_strength.csv")
     groups = a.groups or os.path.join(data_dir, "muscle_functions.csv")
     base = os.path.splitext(os.path.basename(a.model))[0]
-    out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.model)), f"muscle_inspect_{base}")
+    out = validation_dir(a.model, out=a.out, base=base)
     os.makedirs(out, exist_ok=True)
     print(f"[all] full validation -> {out}")
 

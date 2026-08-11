@@ -83,6 +83,10 @@ class Model:
                                            # SO = the model with isometric force x mvic_factor
     mvic_factor: Optional[float] = None
     opt_neval: Optional[int] = None
+    emg_map: Optional[str] = None          # NAME of a mapping under the session-wide
+                                           # emg_map; only needed when several exist
+    calibration: Optional[str] = None      # NAME of a config under the session-wide
+                                           # calibration block; same rules as emg_map
 
     def __post_init__(self):
         if self.label is None:
@@ -105,7 +109,13 @@ class SessionSpec:
     markerset: Optional[str] = None
     c3d_source: Optional[str] = None       # reference c3d folder to import trials FROM
     models: List[Model] = field(default_factory=list)
-    emg_muscle_mapping: Dict[str, list] = field(default_factory=dict)
+    emg_muscle_mapping: Dict[str, list] = field(default_factory=dict)  # the session DEFAULT map
+    emg_muscle_mappings: Dict[str, Dict[str, list]] = field(default_factory=dict)
+                                           # every NAMED map, {} when the file is flat
+    default_emg_map: Optional[str] = None  # which name iterations get when silent
+    calibrations: Dict[str, Dict[str, str]] = field(default_factory=dict)
+                                           # named CEINMS calibration configs
+    default_calibration: Optional[str] = None
     ceinms: Dict[str, str] = field(default_factory=dict)   # alpha/beta/gamma...
     # session-wide trial selections (which trials drive session-level steps)
     normalisation_trials: List[str] = field(default_factory=list)  # EMG MVC normalisation
@@ -115,6 +125,34 @@ class SessionSpec:
     # -- convenience --------------------------------------------------------
     def get_model(self, name) -> Optional[Model]:
         return next((m for m in self.models if m.name == name), None)
+
+    def emg_map_for(self, model=None) -> Dict[str, list]:
+        """``{channel: [muscles]}`` for one model iteration.
+
+        Named a model, this raises when that model's selector is missing or
+        unknown. Named nothing it returns the SESSION default — the same value
+        as ``emg_muscle_mapping``, falling back to the first map rather than
+        raising, because the strict gate is ``load_session_yaml`` and this is
+        a convenience view over an already-validated spec.
+        """
+        if not self.emg_muscle_mappings:
+            return dict(self.emg_muscle_mapping)
+        m = self.get_model(model) if model else None
+        name = (m.emg_map if m and m.emg_map else
+                self.default_emg_map or
+                ("default" if "default" in self.emg_muscle_mappings else None) or
+                (next(iter(self.emg_muscle_mappings))
+                 if len(self.emg_muscle_mappings) == 1 else None))
+        if name is None:
+            if model is None:
+                return dict(next(iter(self.emg_muscle_mappings.values())))
+            raise ValueError(
+                f"emg_map defines {sorted(self.emg_muscle_mappings)} and model "
+                f"{model!r} does not select one.")
+        if name not in self.emg_muscle_mappings:
+            raise ValueError(f"emg_map {name!r} is not defined. Available: "
+                             f"{sorted(self.emg_muscle_mappings)}.")
+        return dict(self.emg_muscle_mappings[name])
 
     def model_names(self) -> List[str]:
         return [m.name for m in self.models]
@@ -176,6 +214,7 @@ def read_session_xml(path) -> SessionSpec:
             group=m.get("group"),
             generic_model=m.get("generic"),
             static_trial=m.get("static_trial"),
+            emg_map=m.get("emg_map"),
             marker_weights=mw,
             preserve_mass_distribution=(m.get("preserve_mass_distribution", "true").lower()
                                         not in ("false", "0", "no")),
@@ -249,6 +288,7 @@ def write_session_xml(spec: SessionSpec, path=None) -> str:
         if m.static_trial: attrs["static_trial"] = m.static_trial
         if m.mvic_factor is not None:  attrs["mvic"] = f"{m.mvic_factor}"
         if m.opt_neval is not None:    attrs["opt_neval"] = f"{m.opt_neval}"
+        if m.emg_map:      attrs["emg_map"] = m.emg_map
         attrs["preserve_mass_distribution"] = "true" if m.preserve_mass_distribution else "false"
         me = ET.SubElement(ms, "model", attrs)
         if m.marker_weights:
@@ -256,6 +296,14 @@ def write_session_xml(spec: SessionSpec, path=None) -> str:
             for seg, val in m.marker_weights.items():
                 ET.SubElement(mw, "weight", segment=str(seg), value=str(val))
     if spec.emg_muscle_mapping:
+        # session.xml is the legacy format and has no place for NAMED maps, so
+        # only the default survives the trip. Say so rather than writing a file
+        # that looks complete and quietly lost two thirds of the config.
+        if len(spec.emg_muscle_mappings or {}) > 1:
+            print(f"[session.xml] WARNING: {sorted(spec.emg_muscle_mappings)} "
+                  "named emg_maps cannot be represented in XML — writing only "
+                  f"{spec.default_emg_map or 'the first'}. Keep session.yaml as "
+                  "the source of truth.")
         em = ET.SubElement(root, "emg_muscle_mapping")
         for ch, muscles in spec.emg_muscle_mapping.items():
             ET.SubElement(em, "channel", id=str(ch)).text = " ".join(muscles)
@@ -374,6 +422,13 @@ Example ``session.yaml``::
       # Since 2.4.1 this map is authoritative for the session's trials and
       # overrides settings.BatchSettings.emg_muscle_mapping, so two sessions
       # with different electrode sets can live in one project.
+    emg_gain:                            # optional, applied AFTER normalisation
+      EMG_Channels_EMG09_gast_med_l: 0.70
+      # A per-channel multiplier on the SESSION-NORMALISED excitation. Scaling
+      # the raw emg.mot instead is an exact no-op -- the session max scales with
+      # it. Flat and session-wide on purpose: it rewrites one file that every
+      # iteration reads, so it cannot vary per iteration. A channel name not in
+      # the data raises rather than passing the signal through unscaled.
     ceinms: {alpha: 10, beta: 1, gamma: 1000}
     trials:
       Walking_02: {type: walking, time_range: [0.10, 1.91]}
@@ -390,6 +445,49 @@ Example ``session.yaml``::
         label: "Scaled (Cateli)"
         color: green
         group: generic
+
+``emg_map`` may instead hold SEVERAL NAMED maps, with each iteration naming
+the one it runs with. How electrodes are grouped onto muscles is a modelling
+choice, like the generic model is, so it belongs in an iteration rather than
+in a whole duplicated session::
+
+    emg_map:
+      narrow:
+        EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l]
+        # ... plus the other nine channels
+      triceps:
+        EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l, soleus_l]
+      wide:
+        EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l, soleus_l, perlong_l]
+    default_emg_map: narrow      # optional: what iterations that stay silent get
+    iterations:
+      cateli_narrow:  {generic: Catelli.osim, emg_map: narrow,  ...}
+      cateli_triceps: {generic: Catelli.osim, emg_map: triceps, ...}
+
+The two forms are told apart by value type — a channel maps to a LIST of
+muscles, a named map to a MAPPING of channels — so every existing flat file
+keeps working untouched. With more than one map and no way to pick (no
+iteration selector, no ``default_emg_map``, no map called ``default``) loading
+FAILS rather than guessing: a silently wrong electrode set leaves no trace in
+the output. See :func:`emg_maps` / :func:`resolve_emg_map`.
+
+``calibration`` works the same way for CEINMS's parameter bounds, which used to
+be one global value in ``settings.py`` — so sweeping a bound meant copied
+sessions plus a runtime monkeypatch of the settings module::
+
+    calibration:
+      wide:  {optimalFiberLength: "0.5 3", tendonSlackLength: "0.5 3"}
+      tight: {optimal_fiber_length: [0.75, 1.25], tendon_slack_length: "0.75 1.25"}
+    default_calibration: wide
+    iterations:
+      cateli__tight: {generic: Catelli.osim, calibration: tight, ...}
+
+Both spellings of every parameter are accepted and canonicalised — settings.py
+declared ``optimal_fiber_length`` while the XML writer read
+``optimalFiberLength``, so four of the six ranges were unreachable and editing
+them silently did nothing. An override is PARTIAL: a config naming one bound
+leaves the rest to settings.py. See :func:`calibration_configs` /
+:func:`resolve_calibration`.
 """
 
 import os
@@ -421,6 +519,534 @@ def _as_list(v):
             return []                        # empty = "all trials" by convention
         return v.replace(",", " ").split()
     return [str(x) for x in v]
+
+
+#: Strings a human writes in YAML meaning "no". PyYAML already turns bare
+#: `false`/`no`/`off` into a bool, but a QUOTED "false" -- or a value that
+#: reached us from an XML round-trip -- arrives as a string, and `bool("false")`
+#: is True. A silent True there would run a calibration the session asked to
+#: skip, so the string spellings are handled explicitly.
+_FALSEY = ("false", "0", "no", "off", "none", "", "uncalibrated")
+
+
+def yaml_bool(v, default=True):
+    """A session.yaml flag as a bool, tolerating quoted strings."""
+    if v is None:
+        return default
+    if isinstance(v, str):
+        return v.strip().lower() not in _FALSEY
+    return bool(v)
+
+
+# ---------------------------------------------------------------------------
+# emg_map: one flat map, or several NAMED maps selected per iteration
+# ---------------------------------------------------------------------------
+#: session.yaml key naming which mapping iterations use when they don't say.
+DEFAULT_EMG_MAP_KEY = "default_emg_map"
+
+
+def _raw_emg_map(cfg):
+    """The `emg_map` block as authored (legacy alias `emg_muscle_mapping`)."""
+    if not isinstance(cfg, dict):
+        return {}
+    raw = cfg.get("emg_map", cfg.get("emg_muscle_mapping"))
+    return raw if isinstance(raw, dict) else {}
+
+
+def _iteration_blocks(cfg) -> Dict[str, dict]:
+    """``{name: block}`` for `iterations` in either authored shape.
+
+    `iterations` (alias `models`) may be a mapping or a list of blocks each
+    carrying their own `name`, exactly as ``read_session_yaml`` accepts them.
+    """
+    if not isinstance(cfg, dict):
+        return {}
+    its = cfg.get("iterations", cfg.get("models")) or {}
+    if isinstance(its, dict):
+        return {str(k): (v if isinstance(v, dict) else {}) for k, v in its.items()}
+    out = {}
+    for m in its or []:
+        if isinstance(m, dict) and m.get("name") is not None:
+            out[str(m["name"])] = m
+    return out
+
+
+def _is_named(raw, key, leaf) -> bool:
+    """Is `raw` a block of NAMED sub-blocks, or one flat block?
+
+    Told apart by value TYPE, and nothing else: a leaf entry never maps to a
+    mapping, a named sub-block always does. `leaf` names what a leaf is, for
+    the error. Shared by `emg_map` and `calibration` so the two cannot drift
+    into behaving differently.
+
+    A block mixing the two is a typo, not a third form, so it raises rather
+    than guessing — half a block silently dropped is exactly the failure these
+    features exist to make impossible.
+    """
+    if not raw:
+        return False
+    dicts = [k for k, v in raw.items() if isinstance(v, dict)]
+    if not dicts:
+        return False
+    if len(dicts) != len(raw):
+        others = [k for k in raw if k not in set(dicts)]
+        raise ValueError(
+            f"{key} mixes named sub-blocks with bare {leaf}s: "
+            f"{sorted(dicts)} are sub-blocks but {sorted(others)} are not. "
+            f"Either give every {leaf} a name to sit under, or use a single "
+            f"flat {key} block.")
+    return True
+
+
+def _select_name(cfg, iteration, *, blocks, named, key, default_key, what):
+    """Which named block `iteration` runs with, or a ValueError saying why not.
+
+    The order is: the iteration's own selector, the session-wide default key, a
+    block literally called ``default``, the only block if there is one. Shared
+    by `emg_map` and `calibration`.
+    """
+    if not blocks:
+        return None
+    it = _iteration_blocks(cfg).get(iteration) or {} if iteration else {}
+    want = it.get(key)
+
+    if want is not None:
+        if not isinstance(want, str):
+            raise ValueError(
+                f"iteration {iteration!r}: {key} must be the NAME of a "
+                f"{what} under the session-wide {key} (a string), not "
+                f"{type(want).__name__}. The {what}s themselves belong at the "
+                "top level, not inside an iteration.")
+        if not named:
+            raise ValueError(
+                f"iteration {iteration!r} selects {key} {want!r} but the "
+                f"session-wide {key} is a single flat block with no names to "
+                "choose from. Nest it under a name first.")
+        if want not in blocks:
+            raise ValueError(
+                f"iteration {iteration!r} selects {key} {want!r}, which is "
+                f"not defined. Available: {sorted(blocks)}.")
+        return want
+
+    dflt = cfg.get(default_key) if isinstance(cfg, dict) else None
+    if not named:
+        # A default only means something when there is a set to choose from.
+        # Accepting it silently on a flat block would let a typo'd name sit in
+        # session.yaml looking effective, and a rewrite would drop it.
+        if dflt is not None and str(dflt) != "default":
+            raise ValueError(
+                f"{default_key}: {dflt!r} is set, but {key} is a single flat "
+                "block with no names to choose from. Nest it under a name, or "
+                "drop the key.")
+        return "default"
+
+    if dflt is not None:
+        if str(dflt) not in blocks:
+            raise ValueError(
+                f"{default_key}: {dflt!r} is not a defined {key}. "
+                f"Available: {sorted(blocks)}.")
+        return str(dflt)
+    if "default" in blocks:
+        return "default"
+    if len(blocks) == 1:
+        return next(iter(blocks))
+    where = f"iteration {iteration!r}" if iteration else "this session"
+    raise ValueError(
+        f"{key} defines {len(blocks)} {what}s ({sorted(blocks)}) and {where} "
+        f"does not say which to use. Add `{key}: <name>` to the iteration, or "
+        f"a session-wide `{default_key}: <name>`. Guessing here would run the "
+        "wrong one without any sign in the output.")
+
+
+def is_named_emg_map(cfg) -> bool:
+    """True when `emg_map` holds NAMED sub-maps rather than channels.
+
+        emg_map: {EMG01_vast_lat_l: [vaslat_l, ...]}        -> flat  (legacy)
+        emg_map: {narrow: {EMG01_vast_lat_l: [...]}, ...}   -> named
+    """
+    return _is_named(_raw_emg_map(cfg), "emg_map", "channel")
+
+
+def emg_maps(cfg) -> Dict[str, Dict[str, list]]:
+    """``{name: {channel: [muscles]}}`` for every mapping in a session config.
+
+    A legacy flat `emg_map` comes back as a single entry under the name
+    ``'default'``, so callers never need to branch on the form. Insertion
+    order follows the YAML.
+    """
+    raw = _raw_emg_map(cfg)
+    if not raw:
+        return {}
+    if not is_named_emg_map(cfg):
+        return {"default": {str(k): _as_list(v) for k, v in raw.items()}}
+    return {str(name): {str(k): _as_list(v) for k, v in (block or {}).items()}
+            for name, block in raw.items()}
+
+
+def emg_map_name_for(cfg, iteration=None) -> Optional[str]:
+    """Which named mapping `iteration` runs with — see :func:`resolve_emg_map`."""
+    return _select_name(cfg, iteration, blocks=emg_maps(cfg),
+                        named=is_named_emg_map(cfg), key="emg_map",
+                        default_key=DEFAULT_EMG_MAP_KEY, what="mapping")
+
+
+def resolve_emg_map(cfg, iteration=None, *, strict=True) -> Dict[str, list]:
+    """The ``{channel: [muscles]}`` map one iteration should actually run with.
+
+    Resolution order: the iteration's own ``emg_map: <name>`` selector, then
+    the session-wide ``default_emg_map``, then a mapping literally called
+    ``default``, then the only mapping if there is exactly one. Anything left
+    over is ambiguous and raises.
+
+    With ``strict=False`` an ambiguous or unknown selection falls back to the
+    first mapping in YAML order instead of raising — for read-only consumers
+    (plots, reports) where a missing figure is worse than an approximate one.
+    """
+    try:
+        maps = emg_maps(cfg)
+        if not maps:
+            return {}
+        name = emg_map_name_for(cfg, iteration)
+    except Exception:
+        # Lenient callers get the first map rather than nothing: a malformed
+        # block is the strict path's problem, and it has already refused the
+        # file by the time anything runs.
+        if strict:
+            raise
+        try:
+            raw = _raw_emg_map(cfg)
+            vals = list(raw.values())
+            if not vals:
+                return {}
+            if all(isinstance(v, dict) for v in vals):
+                first = vals[0]                       # named: the first map
+            elif not any(isinstance(v, dict) for v in vals):
+                first = raw                           # flat: the map itself
+            else:                                     # mixed: first sub-map
+                first = next(v for v in vals if isinstance(v, dict))
+            return {str(k): _as_list(v) for k, v in (first or {}).items()}
+        except Exception:
+            return {}
+    return dict(maps.get(name) or {})
+
+
+# ---------------------------------------------------------------------------
+# emg_gain: a per-channel multiplier applied AFTER session-max normalisation
+# ---------------------------------------------------------------------------
+#: session.yaml key holding ``{channel: factor}``.
+EMG_GAIN_KEY = "emg_gain"
+
+
+def raw_emg_gain(cfg):
+    """The ``emg_gain`` block as authored, or ``{}``."""
+    if not isinstance(cfg, dict):
+        return {}
+    raw = cfg.get(EMG_GAIN_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def resolve_emg_gain(cfg, channels=None, *, strict=True) -> Dict[str, float]:
+    """``{channel: factor}`` to multiply the session-normalised EMG by.
+
+    WHY IT IS APPLIED AFTER NORMALISATION, NOT TO THE RAW SIGNAL
+        ``run_emg_normalise`` divides every channel by its own maximum across
+        the session's trials. Scaling the raw ``emg.mot`` is therefore an exact
+        no-op: the session maximum scales with the signal and divides the
+        factor straight back out. The gain has to land on the normalised
+        signal, which also means a hand-edited
+        ``emg_filtered_normalised.mot`` cannot survive -- every calibration and
+        every uncalibrated preparation regenerates that file from the raw EMG.
+
+    WHY THERE IS NO NAMED FORM
+        Unlike ``emg_map`` and ``calibration``, this block is deliberately FLAT
+        and session-wide. It changes
+        ``2_experimental/<trial>/emg_filtered_normalised.mot``, ONE file shared
+        by every iteration of the session, so a per-iteration gain would
+        promise something the folder layout cannot deliver: the last iteration
+        to normalise would win and every other iteration would silently read
+        its excitations. To compare gains, copy the session -- see
+        ``tests/GPKv3/t26_gastroc_emg_scale`` in the Powerlifting project.
+
+    ``channels`` is the set of channel names actually present in the data. A
+    gain naming a channel that is not there RAISES, because a typo is otherwise
+    invisible: the run finishes normally hours later with the unscaled signal,
+    which is exactly the failure this key exists to rule out.
+    """
+    raw = raw_emg_gain(cfg)
+    if not raw:
+        return {}
+    gains, bad = {}, []
+    for ch, v in raw.items():
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            bad.append("%s: %r is not a number" % (ch, v))
+            continue
+        if not (f > 0.0):
+            bad.append("%s: gain must be > 0, got %g" % (ch, f))
+            continue
+        gains[str(ch)] = f
+    if channels is not None:
+        known = {str(c) for c in channels}
+        absent = sorted(c for c in gains if c not in known)
+        if absent:
+            shown = sorted(known)
+            bad.append("no such EMG channel: %s. present: %s%s"
+                       % (", ".join(absent), ", ".join(shown[:8]),
+                          " ..." if len(shown) > 8 else ""))
+    if bad:
+        msg = "session.yaml emg_gain is invalid:\n  " + "\n  ".join(bad)
+        if strict:
+            raise ValueError(msg)
+        print("[warn] " + msg)
+        if channels is not None:
+            known = {str(c) for c in channels}
+            gains = {c: g for c, g in gains.items() if c in known}
+    return gains
+
+
+# ---------------------------------------------------------------------------
+# calibration: CEINMS parameter bounds, one flat block or several NAMED ones
+# ---------------------------------------------------------------------------
+#: session.yaml key naming which calibration config iterations use by default.
+DEFAULT_CALIBRATION_KEY = "default_calibration"
+
+#: What CEINMS's calibrationCfg.xml calls each parameter, keyed by every
+#: spelling seen in the wild. `configs.py` reads the camelCase names while
+#: settings.py has always declared snake_case ones, so four of the six ranges
+#: were silently unreadable and editing them did nothing. Accept both here and
+#: emit the name CEINMS actually wants.
+CALIBRATION_PARAM_NAMES = {
+    "c1": "c1",
+    "c2": "c2",
+    "shapefactor": "shapefactor",
+    "shape_factor": "shapefactor",
+    "optimalfiberlength": "optimalFiberLength",
+    "optimal_fiber_length": "optimalFiberLength",
+    "optimalfibrelength": "optimalFiberLength",
+    "optimal_fibre_length": "optimalFiberLength",
+    "tendonslacklength": "tendonSlackLength",
+    "tendon_slack_length": "tendonSlackLength",
+    "strengthcoefficient": "strengthCoefficient",
+    "strength_coefficient": "strengthCoefficient",
+}
+
+#: The `<optimiser>` knobs a `calibration:` block may ALSO carry — how the
+#: search runs, rather than the bounds it runs inside. Added 2026-08-10 for
+#: t25 (calibration variance / learning rate): sweeping the learning rate used
+#: to mean monkeypatching `settings.CEINMSSettings` at runtime, which left no
+#: record in the session of which arm ran under which rate.
+#:
+#: `configs.py` owns the emission and the same alias table in
+#: `_OPTIMISER_ALIASES`; this mapping exists so `_check_calibration` does not
+#: warn about a key that IS honoured, and so both spellings survive
+#: canonicalisation. Keep the two in step.
+CALIBRATION_OPTIMISER_NAMES = {
+    "hybridcalibration": "hybridCalibration",
+    "hybrid_calibration": "hybridCalibration",
+    "learningrate": "learningRate",
+    "learning_rate": "learningRate",
+    "maxiterations": "maxIterations",
+    "max_iterations": "maxIterations",
+    "minimprovement": "minImprovement",
+    "early_stopping_min_improvement": "minImprovement",
+    "patience": "patience",
+    "early_stopping_patience": "patience",
+    "numberofsynergies": "numberOfSynergies",
+    "num_synergies": "numberOfSynergies",
+    "number_of_synergies": "numberOfSynergies",
+    # <learningRateDecay>'s two children. Unproven in this CEINMS build — the
+    # shipped reference cfg has the block commented out.
+    "decay": "decay",
+    "learningratedecay": "decay",
+    "learning_rate_decay": "decay",
+    "decayfactor": "decay",
+    "decay_factor": "decay",
+    "minlearningrate": "minLearningRate",
+    "min_learning_rate": "minLearningRate",
+}
+
+
+def _cal_param(key):
+    """Canonical calibrationCfg name for an authored key — bound or optimiser."""
+    k = str(key).strip().lower()
+    if k in CALIBRATION_PARAM_NAMES:
+        return CALIBRATION_PARAM_NAMES[k]
+    return CALIBRATION_OPTIMISER_NAMES.get(k, str(key))
+
+
+def _cal_value(v):
+    """``[0.5, 3]``, ``"0.5 3"`` and ``0.5`` all become the string CEINMS wants."""
+    if isinstance(v, (list, tuple)):
+        return " ".join(str(x) for x in v)
+    return str(v)
+
+
+def _raw_calibration(cfg):
+    if not isinstance(cfg, dict):
+        return {}
+    raw = cfg.get("calibration", cfg.get("calibration_params"))
+    return raw if isinstance(raw, dict) else {}
+
+
+def is_named_calibration(cfg) -> bool:
+    """True when `calibration` holds NAMED configs rather than bare parameters.
+
+        calibration: {optimalFiberLength: "0.5 3"}          -> flat
+        calibration: {tight: {optimalFiberLength: "0.75 1.25"}, ...}   -> named
+    """
+    return _is_named(_raw_calibration(cfg), "calibration", "parameter")
+
+
+def calibration_configs(cfg) -> Dict[str, Dict[str, str]]:
+    """``{name: {parameter: "min max"}}`` for every calibration config.
+
+    A flat block comes back under the name ``'default'``. Parameter names are
+    canonicalised, so `optimal_fiber_length` and `optimalFiberLength` are the
+    same knob and both actually reach the XML.
+    """
+    raw = _raw_calibration(cfg)
+    if not raw:
+        return {}
+    if not is_named_calibration(cfg):
+        return {"default": {_cal_param(k): _cal_value(v) for k, v in raw.items()}}
+    return {str(name): {_cal_param(k): _cal_value(v)
+                        for k, v in (block or {}).items()}
+            for name, block in raw.items()}
+
+
+def calibration_name_for(cfg, iteration=None) -> Optional[str]:
+    """Which named calibration config `iteration` runs with."""
+    return _select_name(cfg, iteration, blocks=calibration_configs(cfg),
+                        named=is_named_calibration(cfg), key="calibration",
+                        default_key=DEFAULT_CALIBRATION_KEY, what="config")
+
+
+def resolve_calibration(cfg, iteration=None, *, strict=True) -> Dict[str, str]:
+    """The CEINMS calibration parameter bounds one iteration should run with.
+
+    Same shape and the same rules as :func:`resolve_emg_map`: an iteration
+    names its config with ``calibration: <name>``, or the session names a
+    ``default_calibration``, or there is only one. Ambiguity raises.
+
+    Anything the config does not mention is left to settings.py — a config
+    naming only ``optimalFiberLength`` overrides that bound and nothing else.
+    """
+    try:
+        blocks = calibration_configs(cfg)
+        if not blocks:
+            return {}
+        name = calibration_name_for(cfg, iteration)
+    except Exception:
+        if strict:
+            raise
+        try:
+            raw = _raw_calibration(cfg)
+            vals = list(raw.values())
+            if not vals:
+                return {}
+            if all(isinstance(v, dict) for v in vals):
+                first = vals[0]
+            elif not any(isinstance(v, dict) for v in vals):
+                first = raw
+            else:
+                first = next(v for v in vals if isinstance(v, dict))
+            return {_cal_param(k): _cal_value(v)
+                    for k, v in (first or {}).items()}
+        except Exception:
+            return {}
+    return dict(blocks.get(name) or {})
+
+
+def iteration_is_calibrated(cfg, iteration=None) -> bool:
+    """Does `iteration` calibrate at all?
+
+    `calibrated: false` on the iteration, or session-wide, means execution runs
+    against `subjectUncalibrated.xml` and no calibration happens — so the
+    iteration has no calibration CONFIG to name, and demanding one would force
+    a selector that is never read into every uncalibrated arm.
+    """
+    if not isinstance(cfg, dict):
+        return True
+    it = _iteration_blocks(cfg).get(iteration) or {} if iteration else {}
+    ce = cfg.get("ceinms") or {}
+    return yaml_bool(it.get("calibrated", ce.get("calibrated", True)))
+
+
+def _check_calibration(data, path):
+    """Load-time validation of `calibration` and every iteration's selector."""
+    try:
+        blocks = calibration_configs(data)
+    except ValueError as e:
+        raise ValueError(f"{e} (in {path})") from None
+    if not blocks:
+        return {}
+    seen = {}
+    for n in blocks:
+        key = str(n).strip().lower()
+        if key in seen:
+            raise ValueError(
+                f"calibration names {seen[key]!r} and {n!r} in {path} differ "
+                "only by case or whitespace — pick distinct names.")
+        seen[key] = n
+    known = (set(CALIBRATION_PARAM_NAMES.values())
+             | set(CALIBRATION_OPTIMISER_NAMES.values()))
+    unknown = {p for b in blocks.values() for p in b if p not in known}
+    if unknown:
+        # Not fatal -- CEINMS may grow parameters -- but a typo'd bound that
+        # silently does nothing is the exact bug this feature exists to end.
+        print(f"[session.yaml] WARNING: calibration parameter(s) "
+              f"{sorted(unknown)} in {path} are not ones bioscout writes to "
+              f"calibrationCfg.xml. Known bounds: "
+              f"{sorted(set(CALIBRATION_PARAM_NAMES.values()))}; optimiser: "
+              f"{sorted(set(CALIBRATION_OPTIMISER_NAMES.values()))}")
+    for name in _iteration_blocks(data):
+        if not iteration_is_calibrated(data, name):
+            continue          # nothing to calibrate -> nothing to select
+        try:
+            calibration_name_for(data, name)
+        except ValueError as e:
+            raise ValueError(f"{e} (in {path})") from None
+    if not _iteration_blocks(data):
+        try:
+            calibration_name_for(data)
+        except ValueError as e:
+            raise ValueError(f"{e} (in {path})") from None
+    return blocks
+
+
+def _check_emg_maps(data, path):
+    """Load-time validation of `emg_map` and every iteration's selector."""
+    try:
+        maps = emg_maps(data)
+    except ValueError as e:
+        raise ValueError(f"{e} (in {path})") from None
+    if not maps:
+        return {}
+    seen = {}
+    for n in maps:
+        key = str(n).strip().lower()
+        if key in seen:
+            raise ValueError(
+                f"emg_map names {seen[key]!r} and {n!r} in {path} differ only "
+                "by case or whitespace — pick distinct names.")
+        seen[key] = n
+    # every DECLARED iteration must resolve -- under either authored shape
+    # (mapping or list) and either key (`iterations` or the `models` alias).
+    for name in _iteration_blocks(data):
+        try:
+            emg_map_name_for(data, name)
+        except ValueError as e:
+            raise ValueError(f"{e} (in {path})") from None
+    if not _iteration_blocks(data):
+        # No iterations to pin a choice to. Only the session-level default can
+        # disambiguate, and without one every session-level reader would be
+        # guessing -- so say so here rather than in each of them.
+        try:
+            emg_map_name_for(data)
+        except ValueError as e:
+            raise ValueError(f"{e} (in {path})") from None
+    return maps
 
 
 # ---------------------------------------------------------------------------
@@ -479,10 +1105,27 @@ def read_session_yaml(path) -> SessionSpec:
             prescaled=bool(m.get("prescaled", False)),   # use session_model AS-IS (no scale/opt)
             mvic_factor=(float(m["mvic_factor"]) if m.get("mvic_factor") is not None else None),
             opt_neval=(int(m["opt_neval"]) if m.get("opt_neval") is not None else None),
+            emg_map=(str(m["emg_map"]) if m.get("emg_map") is not None else None),
+            calibration=(str(m["calibration"])
+                         if m.get("calibration") is not None else None),
         ))
 
-    spec.emg_muscle_mapping = {str(k): _as_list(v)
-                               for k, v in (data.get("emg_map", data.get("emg_muscle_mapping")) or {}).items()}
+    # emg_map is either one flat channel map or several named ones. Keep both
+    # views: `emg_muscle_mapping` stays the session DEFAULT so every existing
+    # caller is unaffected, `emg_muscle_mappings` holds the named set.
+    _named = emg_maps(data)
+    if is_named_emg_map(data):
+        spec.emg_muscle_mappings = _named
+        _dflt = data.get(DEFAULT_EMG_MAP_KEY)
+        spec.default_emg_map = str(_dflt) if _dflt is not None else None
+        spec.emg_muscle_mapping = resolve_emg_map(data, strict=False)
+    else:
+        spec.emg_muscle_mapping = dict(_named.get("default") or {})
+
+    if is_named_calibration(data):
+        spec.calibrations = calibration_configs(data)
+        _dc = data.get(DEFAULT_CALIBRATION_KEY)
+        spec.default_calibration = str(_dc) if _dc is not None else None
     spec.ceinms = {str(k): str(v) for k, v in (data.get("ceinms") or {}).items()}
     spec.normalisation_trials = _as_list(data.get("normalisation_trials"))
     spec.calibration_trials = _as_list(data.get("calibration_trials"))
@@ -514,8 +1157,17 @@ def _spec_to_dict(spec: SessionSpec) -> dict:
     if spec.c3d_source:   d["c3d_source"] = spec.c3d_source
     if spec.calibration_trials:   d["calibration_trials"] = list(spec.calibration_trials)
     if spec.normalisation_trials: d["normalisation_trials"] = list(spec.normalisation_trials)
-    if spec.emg_muscle_mapping:
+    if spec.emg_muscle_mappings:
+        d["emg_map"] = {name: {k: list(v) for k, v in (block or {}).items()}
+                        for name, block in spec.emg_muscle_mappings.items()}
+        if spec.default_emg_map:
+            d[DEFAULT_EMG_MAP_KEY] = spec.default_emg_map
+    elif spec.emg_muscle_mapping:
         d["emg_map"] = {k: list(v) for k, v in spec.emg_muscle_mapping.items()}
+    if spec.calibrations:
+        d["calibration"] = {n: dict(b or {}) for n, b in spec.calibrations.items()}
+        if spec.default_calibration:
+            d[DEFAULT_CALIBRATION_KEY] = spec.default_calibration
     if spec.ceinms:
         d["ceinms"] = dict(spec.ceinms)
     if spec.trials:
@@ -541,6 +1193,8 @@ def _spec_to_dict(spec: SessionSpec) -> dict:
             if m.marker_weights: it["marker_weights"] = dict(m.marker_weights)
             if not m.preserve_mass_distribution:
                 it["preserve_mass_distribution"] = False
+            if m.emg_map:      it["emg_map"] = m.emg_map
+            if m.calibration:  it["calibration"] = m.calibration
             if m.model_ceinms: it["ceinms_model"] = m.model_ceinms
             if m.model:        it["so_model"] = m.model
             if m.label and m.label != m.name: it["label"] = m.label
@@ -548,6 +1202,27 @@ def _spec_to_dict(spec: SessionSpec) -> dict:
             if m.group:         it["group"] = m.group
             d["iterations"][m.name] = it
     return d
+
+
+def _yamlable(v):
+    """Coerce values PyYAML's SafeDumper refuses into ones it accepts.
+
+    A project's settings.py holds paths as ``pathlib.Path``, which is the right
+    type there and an unrepresentable object here. Coercing at the boundary is
+    better than making every caller remember to str() — the failure mode
+    otherwise is a half-written session.yaml and a traceback from deep inside
+    the yaml library, which is what it was.
+    """
+    import pathlib
+    if isinstance(v, pathlib.PurePath):
+        return str(v)
+    if isinstance(v, dict):
+        return {str(k): _yamlable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple, set)):
+        return [_yamlable(x) for x in v]
+    if isinstance(v, (bool, int, float, str)) or v is None:
+        return v
+    return str(v)
 
 
 def write_session_yaml(spec: SessionSpec, path=None) -> str:
@@ -558,11 +1233,231 @@ def write_session_yaml(spec: SessionSpec, path=None) -> str:
     elif os.path.isdir(path):
         path = os.path.join(path, "session.yaml")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # Serialise FIRST, write second. Dumping straight to an open file left a
+    # truncated session.yaml behind when the dump raised — and a zero-byte
+    # session.yaml is worse than none, because the next command believes it.
+    text = yaml.safe_dump(_yamlable(_spec_to_dict(spec)), sort_keys=False,
+                          default_flow_style=False, allow_unicode=True)
     with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(_spec_to_dict(spec), f, sort_keys=False, default_flow_style=False,
-                       allow_unicode=True)
+        f.write(text)
     return path
 
+
+
+def _find_project_settings(start_dir, levels=6):
+    """The nearest ``settings.py`` above ``start_dir``, or None."""
+    d = os.path.abspath(start_dir)
+    for _ in range(levels):
+        p = os.path.join(d, "settings.py")
+        if os.path.isfile(p):
+            return p
+        up = os.path.dirname(d)
+        if up == d:
+            break
+        d = up
+    return None
+
+
+def _load_batch_settings(settings_py):
+    """Import a project's ``settings.py`` and hand back its ``BatchSettings``.
+
+    Imported under a private module name so it cannot collide with anything
+    the caller has already loaded, and failures are reported rather than
+    raised — a scaffold that dies because a project file has an unrelated
+    problem is worse than one that falls back to defaults.
+    """
+    try:
+        import importlib.util as _ilu, sys as _sys
+        spec_ = _ilu.spec_from_file_location("_bs_project_settings", settings_py)
+        mod = _ilu.module_from_spec(spec_)
+        _d = os.path.dirname(settings_py)
+        if _d not in _sys.path:
+            _sys.path.insert(0, _d)
+        spec_.loader.exec_module(mod)
+        return getattr(mod, "BatchSettings", None)
+    except Exception as e:
+        print(f"[new-session] {settings_py} not usable "
+              f"({type(e).__name__}: {e}); using defaults")
+        return None
+
+
+def body_mass_from_static(session_dir, static_trial=None, gravity=9.80665):
+    """Body mass in kg, weighed on the force plates during the static trial.
+
+    The scale in the corner of the lab and the plates under the participant
+    disagree — on Athlete_03 by 2.6% (617 N measured against 601 N from the
+    entered 61.3 kg), which was enough to double a computed jump height once
+    it had been integrated over a two-second task. Everything downstream is
+    normalised by this number, so it should come from the instrument the rest
+    of the analysis uses.
+
+    Needs the session exported (it reads ``2_experimental/<trial>/grf.mot``).
+    When ``static_trial`` is not given, the trial with the steadiest total
+    vertical force is used — which is what a static trial IS.
+    Returns None when there is nothing to weigh.
+    """
+    import glob as _glob
+    import numpy as _np
+    from ..movement_detector.mocap import read_grf, _quiet_body_weight
+
+    exp = os.path.join(session_dir, "2_experimental")
+    if not os.path.isdir(exp):
+        return None
+
+    def _total(trial):
+        gm = os.path.join(exp, trial, "grf.mot")
+        if not os.path.isfile(gm):
+            return None, None
+        gt, cols = read_grf(gm)
+        vy = [v for c, v in cols.items() if c.endswith("_vy")]
+        if not gt.size or not vy:
+            return None, None
+        return gt, _np.nansum(_np.stack(vy, axis=0), axis=0)
+
+    cands = [static_trial] if static_trial else         sorted(os.path.basename(os.path.dirname(p))
+               for p in _glob.glob(os.path.join(exp, "*", "grf.mot")))
+    best, best_var = None, None
+    for tr in cands:
+        if not tr:
+            continue
+        gt, tot = _total(tr)
+        if tot is None or not _np.isfinite(tot).any():
+            continue
+        # a plate reading nothing is not a person standing on it
+        if float(_np.nanmedian(tot)) < 200.0:
+            continue
+        var = float(_np.nanstd(tot))
+        if best_var is None or var < best_var:
+            best, best_var = (tr, gt, tot), var
+    if best is None:
+        return None
+    tr, gt, tot = best
+    bw = _quiet_body_weight(gt, tot, float(_np.nanmedian(tot)))
+    mass = float(bw) / gravity
+    print(f"[body-mass] weighed on the plates during {tr!r}: "
+          f"{bw:.1f} N -> {mass:.1f} kg")
+    return round(mass, 1)
+
+
+def scaffold_session_yaml(session_dir, template=None, body_mass=None,
+                          static_trial=None, overwrite=False):
+    """Write a first ``session.yaml`` for a session that has only c3d files.
+
+    A new session arrives as a folder of ``1_c3dfiles/*.c3d`` and nothing else,
+    and every downstream step — export included — needs a ``session.yaml`` to
+    exist. Hand-writing one invites the small errors that are expensive later
+    (a trial missing from ``trials``, a static trial that is not the static
+    trial), so it is built here from what is actually on disk and written
+    through :func:`write_session_yaml`, the same serialiser the rest of
+    bioscout uses.
+
+    * trial names come from the c3d FILENAMES
+    * ``static_trial`` is the trial whose name starts with "static", unless
+      given
+    * ``template`` is an existing session.yaml (or its folder) to copy the
+      lab-constant parts from — markerset, EMG map, CEINMS weights. These are
+      properties of the laboratory, not of the participant, so copying them is
+      right; ``body_mass`` is deliberately NOT copied.
+
+    Trial ``type`` is left unset. Guessing it from the filename would put a
+    guess where the pipeline expects a fact — run
+    ``bioscout --classifier <session> --write-session-yaml`` afterwards and
+    the types come from the data instead.
+
+    Returns the path written, or None if a session.yaml already exists and
+    ``overwrite`` is False.
+    """
+    import glob as _glob
+    from .session_layout import c3d_root
+
+    session_dir = os.path.abspath(session_dir)
+    dst = os.path.join(session_dir, "session.yaml")
+    # A zero-byte session.yaml is a crash leftover, not a session config, and
+    # refusing to overwrite it strands the folder: every later command believes
+    # a session.yaml exists and nothing can create a real one.
+    if os.path.exists(dst) and os.path.getsize(dst) == 0:
+        print(f"[new-session] {dst} is empty (a previous run died) — replacing it.")
+        overwrite = True
+    if os.path.exists(dst) and not overwrite:
+        print(f"[new-session] {dst} already exists — not overwriting.")
+        return None
+
+    c3d_dir = c3d_root(session_dir)
+    c3ds = sorted(_glob.glob(os.path.join(c3d_dir, "*.c3d")))
+    if not c3ds:
+        print(f"[new-session] no .c3d files under {c3d_dir}")
+        return None
+    trials = [os.path.splitext(os.path.basename(p))[0] for p in c3ds]
+
+    if static_trial is None:
+        static_trial = next((t for t in trials if t.lower().startswith("static")),
+                            None)
+        if static_trial is None:
+            print("[new-session] no trial named Static* — set --static-trial, or "
+                  "edit static_trial afterwards. Scaling needs it.")
+
+    spec = SessionSpec(
+        subject=os.path.basename(os.path.dirname(session_dir)),
+        session=os.path.basename(session_dir),
+        path=session_dir,
+        body_mass=body_mass,
+        static_trial=static_trial,
+        trials={t: {} for t in trials},
+    )
+
+    # Lab constants — markerset, EMG map, CEINMS weights — are properties of
+    # the LABORATORY, and the project already states them in settings.py. Read
+    # them from there first; needing a sibling session to copy from is an
+    # accident of history, not a requirement.
+    if not template:
+        _proj = _find_project_settings(session_dir)
+        if _proj:
+            _bs = _load_batch_settings(_proj)
+            if _bs is not None:
+                spec.markerset = getattr(_bs, "markerset", None) or spec.markerset
+                spec.setup_folder = (getattr(_bs, "setup_files_folder", None)
+                                     or spec.setup_folder)
+                _emg = getattr(_bs, "emg_muscle_mapping", None)
+                if _emg:
+                    spec.emg_muscle_mapping = dict(_emg)
+                print(f"[new-session] lab constants from {_proj}")
+
+    if template:
+        tpl = template if os.path.isfile(template) \
+            else os.path.join(template, "session.yaml")
+        if os.path.isfile(tpl):
+            src = read_session_yaml(tpl)
+            # Lab constants only. Body mass, static trial and trial list belong
+            # to THIS session and are never inherited.
+            spec.markerset = src.markerset
+            spec.setup_folder = src.setup_folder
+            spec.emg_muscle_mapping = {k: list(v) for k, v in
+                                       (src.emg_muscle_mapping or {}).items()}
+            spec.emg_muscle_mappings = {
+                n: {k: list(v) for k, v in (b or {}).items()}
+                for n, b in (src.emg_muscle_mappings or {}).items()}
+            # The template's iterations are NOT copied, so a template with
+            # several maps and no default would scaffold a session that cannot
+            # be loaded. Pin the template's own default (its first map when it
+            # has none) so the new file is valid before any iteration exists.
+            spec.default_emg_map = src.default_emg_map
+            if spec.emg_muscle_mappings and not spec.default_emg_map:
+                spec.default_emg_map = next(iter(spec.emg_muscle_mappings))
+            spec.ceinms = dict(src.ceinms or {})
+            spec.normalisation_trials = list(src.normalisation_trials or [])
+            print(f"[new-session] copied markerset/EMG map/CEINMS from {tpl}")
+        else:
+            print(f"[new-session] template not found: {tpl} — continuing without")
+
+    path = write_session_yaml(spec, dst)
+    print(f"[new-session] wrote {path}")
+    print(f"[new-session] {len(trials)} trial(s); static_trial={static_trial!r}; "
+          f"body_mass={body_mass!r}")
+    if body_mass is None:
+        print("[new-session] SET body_mass — anything normalised to body weight "
+              "is wrong until you do.")
+    print(f"[new-session] next:  bioscout --c3d-export \"{session_dir}\"")
+    return path
 
 # ---------------------------------------------------------------------------
 # migration helper
@@ -598,7 +1493,13 @@ def read_session(path) -> SessionSpec:
 
 
 __all__ = ["read_session_yaml", "write_session_yaml",
-           "convert_session_xml_to_yaml", "read_session"]
+           "convert_session_xml_to_yaml", "read_session",
+           "emg_maps", "resolve_emg_map", "emg_map_name_for",
+           "is_named_emg_map", "DEFAULT_EMG_MAP_KEY",
+           "calibration_configs", "resolve_calibration",
+           "calibration_name_for", "is_named_calibration",
+           "DEFAULT_CALIBRATION_KEY", "CALIBRATION_PARAM_NAMES",
+           "CALIBRATION_OPTIMISER_NAMES", "yaml_bool"]
 
 # canonical reader alias (fixes a broken import in the old session_layout)
 read_session = read_session_yaml
@@ -827,11 +1728,17 @@ def load_session_yaml(path):
       * iteration names differing only by case (`GPK` and `gpk`) — distinct in
         YAML but the same folder on Windows, so they overwrite each other's
         results.
+
+    It also resolves every iteration's `emg_map` selector, so a typo'd or
+    ambiguous mapping name fails here rather than several hours into a run
+    with the wrong electrode set.
     """
     _require_yaml()
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.load(f, Loader=_StrictLoader) or {}
     _check_iteration_names(data, path)
+    _check_emg_maps(data, path)
+    _check_calibration(data, path)
     return data
 
 
@@ -1461,13 +2368,75 @@ class Iteration:
         # Channel -> muscles for THIS session's electrode set. Sessions captured
         # months apart label and place channels differently, so the session file
         # outranks the project-wide settings.BatchSettings.emg_muscle_mapping.
-        _em = self._cfg.get("emg_map", self._cfg.get("emg_muscle_mapping"))
-        if _em:
-            cfg["emg_map"] = {str(k): list(v) for k, v in dict(_em).items()}
+        # A session may carry SEVERAL named maps (`emg_map: {narrow: {...}}`)
+        # with each iteration naming the one it runs with — that is how three
+        # electrode-grouping variants share one set of experimental inputs
+        # instead of three copied sessions.
+        try:
+            _emn = emg_map_name_for(self._cfg, self.iteration)
+        except ValueError as e:
+            if self.iteration in _iteration_blocks(self._cfg):
+                raise
+            raise ValueError(
+                f"{e} (iteration {self.iteration!r} is a folder on disk but is "
+                "not declared in session.yaml, so it has no emg_map selector "
+                "-- add it to `iterations:`)") from None
+        if _emn is not None:
+            # set even when the selected map is EMPTY: "this iteration has no
+            # channels" must not silently fall back to the project-wide map.
+            cfg["emg_map"] = resolve_emg_map(self._cfg, self.iteration)
+            cfg["emg_map_name"] = _emn
+        # CEINMS calibration bounds, same shape as emg_map: several named
+        # configs with each iteration naming one, so a bound sweep becomes
+        # iterations of one session rather than copied sessions plus a runtime
+        # monkeypatch of settings.CEINMSSettings.
+        _caln = None
+        try:
+            if iteration_is_calibrated(self._cfg, self.iteration):
+                _caln = calibration_name_for(self._cfg, self.iteration)
+        except ValueError as e:
+            if self.iteration in _iteration_blocks(self._cfg):
+                raise
+            raise ValueError(
+                f"{e} (iteration {self.iteration!r} is a folder on disk but is "
+                "not declared in session.yaml, so it has no calibration "
+                "selector -- add it to `iterations:`)") from None
+        if _caln is not None:
+            cfg["calibration_params"] = resolve_calibration(self._cfg,
+                                                            self.iteration)
+            cfg["calibration_name"] = _caln
+        # Execution weights, and everything the CEINMS execution MODE needs.
+        # `mode` is copied under the name `ceinms_mode`: a trial already has a
+        # `mode` attribute in other contexts, and a silent collision here would
+        # select the wrong execution strategy without raising.
         for k in ("alpha", "beta", "gamma"):
             if ce.get(k) is not None:
                 cfg[k] = ce[k]
-        it = (self._cfg.get("iterations") or {}).get(self.iteration) or {}
+        if ce.get("mode") is not None:
+            cfg["ceinms_mode"] = str(ce["mode"])
+        # `calibrated: false` drives EXECUTION with the UNCALIBRATED subject
+        # model (subjectUncalibrated.xml, written straight from the .osim).
+        # Declared in session.yaml rather than passed at the call site so the
+        # session that produced a result records which subject model made it --
+        # the same reason `calibration:` and `emg_map` live there.
+        if ce.get("calibrated") is not None:
+            cfg["ceinms_calibrated"] = yaml_bool(ce["calibrated"])
+        # ...and per ITERATION, so an uncalibrated CONTROL can sit in the same
+        # session as the calibrated arms it is the control for. Session-level
+        # `ceinms.calibrated` sets the default; the iteration overrides it. A
+        # separate copied session for the control would reintroduce exactly the
+        # drift `emg_map` and `calibration:` were moved into the file to end.
+        _itb = _iteration_blocks(self._cfg).get(self.iteration) or {}
+        if _itb.get("calibrated") is not None:
+            cfg["ceinms_calibrated"] = yaml_bool(_itb["calibrated"])
+        for k in ("gamma_bounds", "alpha_range", "beta_range", "gamma_range",
+                  "lcurve_betas", "lcurve_gammas"):
+            if ce.get(k) is not None:
+                cfg[k] = ce[k]
+        # _iteration_blocks, not a raw .get: `iterations` may be authored as a
+        # LIST of blocks, which read_session_yaml accepts and this line used to
+        # crash on with AttributeError before reaching any model file.
+        it = _itb
         mkey = "ceinms_model" if str(force_type).upper().startswith("C") else "so_model"
         # Prefer the requested model; fall back to the other, then the plain
         # marker-registered scaled.osim — enough for external biomechanics
@@ -1551,13 +2520,23 @@ class Iteration:
         (name or list) restricts distribution to those c3d (matched by file stem), so
         only the selected trials' folders are touched; default: every loose ``*.c3d``."""
         import shutil
+        from .session_layout import c3d_root as _c3d_root
         src = source or self.session_dir
         _tset = ({trials} if isinstance(trials, str) else set(trials)) if trials else None
+        # In the session-centric layout the c3d already lives at its canonical
+        # address, 1_c3dfiles/<trial>.c3d, and the trial reads it from there.
+        # Copying it into <iteration>/<trial>/inputs/ is pure duplication.
+        try:
+            _canon = _c3d_root(self.session_dir)
+        except Exception:
+            _canon = None
         made = []
         for c in sorted(glob.glob(os.path.join(src, "*.c3d"))):
             stem = os.path.splitext(os.path.basename(c))[0]
             if _tset is not None and stem not in _tset:
                 continue
+            if _canon and os.path.isfile(os.path.join(_canon, stem + ".c3d")):
+                continue                      # already canonical — do not copy
             dst = os.path.join(self.path, stem, "inputs", "c3dfile.c3d")
             if os.path.exists(dst):
                 continue
@@ -1566,8 +2545,10 @@ class Iteration:
                 continue
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(c, dst)
-        print(f"[Session] {self.label}: {'would ingest' if dry_run else 'ingested'} "
-              f"{len(made)} c3d -> trial folders")
+        if made:
+            print(f"[Session] {self.label}: "
+                  f"{'would ingest' if dry_run else 'ingested'} "
+                  f"{len(made)} c3d -> trial folders")
         return made
 
     def run_emg_normalise(self, replace=None, write_trials=None):
@@ -1608,6 +2589,13 @@ class Iteration:
             session_max_trial[c] = best_t
         done = []
         chans_sorted = sorted(chans)      # canonical EMG order for CEINMS
+        # session.yaml `emg_gain`, applied AFTER the session-max division --
+        # scaling the RAW signal would be an exact no-op (see resolve_emg_gain).
+        # Raises on a channel name that is not in the data.
+        gains = resolve_emg_gain(self._cfg, channels=chans)
+        if gains:
+            print(f"[Session] {self.label}: emg_gain "
+                  + ", ".join(f"{c} x{g:g}" for c, g in sorted(gains.items())))
         for t, env in envelopes.items():
             if _wset is not None and os.path.basename(t.path) not in _wset:
                 continue                  # reference-only: feeds session-max, not (re)written
@@ -1617,6 +2605,11 @@ class Iteration:
             for c in chans_sorted:
                 if c in env:
                     out[c] = (env[c] / session_max[c]).clip(0.0, 1.0)
+                    g = gains.get(c, 1.0)
+                    if g != 1.0:
+                        # clipped again: CEINMS only accepts [0, 1], and a gain
+                        # above 1 would otherwise hand it excitations > 1.
+                        out[c] = (out[c] * g).clip(0.0, 1.0)
             try:
                 _exc_rel = t.emg_filtered_normalised
                 _exc_abs = os.path.join(t.path, _exc_rel)
@@ -1685,6 +2678,43 @@ class Iteration:
         self.normalise_emg(replace=replace)
         return self.calibrate(replace=replace, calibration_trials=calibration_trials)
 
+    def prepare_uncalibrated_ceinms(self, replace=None, host_trial=None):
+        """Everything CEINMS execution needs EXCEPT a calibration.
+
+        Calibration produces three things execution depends on: the session's
+        normalised EMG, the excitation generator, and a subject XML. An
+        UNCALIBRATED run still needs the first two -- excitations are what
+        execution solves against, calibrated or not. The third is the
+        uncalibrated subject: optimal fibre lengths, tendon slack lengths,
+        pennation angles and max isometric forces exactly as the OpenSim model
+        states them, nothing fitted.
+
+        This builds those three and stops. No calibration executable runs, so
+        an uncalibrated arm costs execution time only.
+
+        -> the uncalibrated subject XML path, or None.
+        """
+        self.normalise_emg(replace=replace)
+        here = self._trial_names()
+        order = ([host_trial] if host_trial else []) \
+            + list(self._resolve_calibration_trials() or []) + here
+        names = [n for n in order if n in here]
+        if not names:
+            print(f"[Session] {self.label}: no trials to build an uncalibrated "
+                  f"CEINMS model from.")
+            return None
+        host = self.trial(names[0], force_type="CEINMS")
+        if host is None:
+            print(f"[Session] {self.label}: could not load {names[0]!r}.")
+            return None
+        if replace is not None:
+            host.update_trial_attribute("replace", replace)
+        print(f"[Session] {self.label}: building UNCALIBRATED CEINMS subject "
+              f"model (driver={names[0]})")
+        host.create_ceinms_model()
+        host.create_excitation_generator()
+        return host.ceinms_uncalibrated_model
+
     # -- model scaling ------------------------------------------------------
     def _resolve_model_file(self, rel):
         """Resolve a session.yaml model path (models/ , generic models/ , project root)."""
@@ -1700,6 +2730,55 @@ class Iteration:
             if os.path.exists(cand):
                 return cand
         return rel
+
+    def link_geometry(self, generic_model_path, name="Geometry"):
+        """Link the generic model's ``Geometry/`` beside the scaled model.
+
+        A scaled .osim keeps the generic's relative mesh references
+        (``r_femur.vtp`` ...), but it is written into the iteration folder,
+        which has no ``Geometry/``. OpenSim's GUI then loads the model with no
+        bones and no muscle paths — "Couldn't find file 'r_femur.vtp'" — and
+        the model looks broken when it is fine.
+
+        A LINK, not a copy: the mesh set is tens of megabytes and identical for
+        every iteration and every subject that shares the generic, so copying
+        it would multiply it across the whole simulations tree. On Windows this
+        is a directory JUNCTION, which needs no elevation and no developer
+        mode, unlike a true symlink. Never fails the scaling — if the link
+        cannot be made, it says so and moves on, because a missing mesh affects
+        only what you can SEE, never what is computed.
+
+        Returns the link path, or None.
+        """
+        if not generic_model_path:
+            return None
+        src_geo = os.path.join(os.path.dirname(os.path.abspath(generic_model_path)), name)
+        if not os.path.isdir(src_geo):
+            # Some model families keep the meshes one level up, shared by
+            # several .osim in sibling folders.
+            _up = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(generic_model_path))), name)
+            if os.path.isdir(_up):
+                src_geo = _up
+            else:
+                return None
+        dst = os.path.join(self.path, name)
+        if os.path.isdir(dst) or os.path.islink(dst):
+            return dst                      # already linked (or a real folder)
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(src_geo, dst)
+            else:
+                os.symlink(src_geo, dst, target_is_directory=True)
+            print(f"[Session] {self.label}: linked {name}/ -> {src_geo}")
+            return dst
+        except Exception as e:
+            print(f"[Session] {self.label}: could not link {name}/ "
+                  f"({type(e).__name__}: {e}). The model still runs; the GUI "
+                  f"will show it without bones. Link it by hand with:\n"
+                  f'    mklink /J "{dst}" "{src_geo}"')
+            return None
 
     def scale_model(self, static_trial="Static_01", n_eval=None, mvic_factor=None,
                     mass=None, replace=True, muscle_opt=True, marker_placer=None,
@@ -1840,6 +2919,9 @@ class Iteration:
         #    if linear_scaling).
         print(f"[Session] {self.label}: scale {os.path.basename(generic)} "
               f"(linear_scaling={linear}, marker_placer={mplace}) + static '{static_trial}'")
+        # Make the meshes reachable from the iteration folder before anything
+        # tries to open the scaled model.
+        self.link_geometry(generic)
         _os.scale_model(generic, trc, scaled, scale_setup_output_dir=self.path,
                         mass=(float(mass) if mass else None), marker_set_file=markerset,
                         linear_scaling=linear, marker_placer=mplace)
@@ -1991,9 +3073,18 @@ class Iteration:
         ``replace`` overwrites existing outputs. ``trials`` defaults to all trials.
         ``calibrate`` (default True) — when do_ceinms is on, calibrate once first;
         set ``calibrate=False`` to SKIP calibration and run only execution -> JRA
-        against the existing ``ceinms_calibration/subjectCalibrated.xml``. Unknown
-        keyword arguments are ignored (forward-compat). Returns a dict of trials
-        that completed each stage.
+        against the existing ``ceinms_calibration/subjectCalibrated.xml``.
+
+        ``ceinms: {calibrated: false}`` in session.yaml overrides both: the
+        iteration executes against ``subjectUncalibrated.xml`` (built straight
+        from the .osim, nothing fitted), no calibration runs whatever
+        ``calibrate`` says, and every execution folder is tagged ``_uncal`` so
+        it cannot be mistaken for — or overwrite — a calibrated result. The same
+        key on an ITERATION overrides the session-wide one, so an uncalibrated
+        control can live beside the calibrated arms it is the control for.
+
+        Unknown keyword arguments are ignored (forward-compat). Returns a dict
+        of trials that completed each stage.
         """
         # Back-compat: this parameter was misspelled `do_muscle_analsysis` until
         # 2.0.1. Because unknown kwargs land in **_ignored, callers passing the
@@ -2183,7 +3274,10 @@ class Iteration:
                     _log_inputs(tn, t, "MA")
                     t.run_ma(replace=replace)
                     res["muscle_analysis"].append(tn)
-                    log(f"  [MA ok] {tn}")
+                    # Say WHERE, per trial. The old line was just "[MA ok] <trial>",
+                    # so a stage that wrote eight folders named none of them.
+                    _ma_dir = os.path.abspath(os.path.join(t.path, t.ma))
+                    log(f"  [MA ok] {tn} -> {_ma_dir}")
                     _close_figs()
                 except Exception as e:
                     log(f"  [MA ERROR] {tn}: {e}")
@@ -2215,6 +3309,26 @@ class Iteration:
 
         if do_ceinms:
             try:
+                # An UNCALIBRATED iteration has nothing to calibrate. `calibrate`
+                # is forced off HERE rather than left to the caller because
+                # calibrating and then executing against subjectUncalibrated.xml
+                # would burn the calibration entirely -- ten minutes producing a
+                # file nothing downstream reads, and a run that looks like a
+                # calibrated one in every log.
+                # the iteration's own flag wins over the session default
+                _uncal = not yaml_bool(
+                    _itc.get("calibrated", _ce.get("calibrated", True)))
+                if _uncal:
+                    if calibrate:
+                        log("  [CEINMS] ceinms.calibrated=false — SKIPPING "
+                            "calibration; execution uses the uncalibrated "
+                            "subject model")
+                    calibrate = False
+                    _stage("CEINMS uncalibrated setup (session level)",
+                           ceinms_model=_model_disp(_itc.get("ceinms_model"),
+                                                    _itc.get("so_model"), "scaled.osim"),
+                           subject="subjectUncalibrated.xml")
+                    self.prepare_uncalibrated_ceinms(replace=replace)
                 if calibrate:
                     cal = (list(calibration_trials) if calibration_trials
                            else (self._resolve_calibration_trials() or []))
@@ -2283,6 +3397,16 @@ class Iteration:
                               "CEINMS_AUTOPREP = True.")
                     log(f"  [CEINMS] calibrating (trials={calibration_trials or cal}) — slow ...")
                     self.prepare_ceinms(replace=replace, calibration_trials=calibration_trials)
+                elif _uncal:
+                    _unc_subj = os.path.join(self.path, "ceinms_calibration",
+                                             "subjectUncalibrated.xml")
+                    if not os.path.exists(_unc_subj):
+                        log(f"  [CEINMS ERROR] uncalibrated run but no subject at "
+                            f"{_unc_subj}; the model could not be built from the .osim.")
+                        os.chdir(_cwd0)
+                        return res
+                    log(f"  [CEINMS] executing against the UNCALIBRATED "
+                        f"{os.path.basename(_unc_subj)} — output folders are tagged _uncal")
                 else:
                     _cal_subj = os.path.join(self.path, "ceinms_calibration", "subjectCalibrated.xml")
                     if not os.path.exists(_cal_subj):
@@ -2386,27 +3510,58 @@ class Session:
         (``experimental``, ``logs``) and dotfiles. ``session.yaml`` need not list
         every iteration; the folders do."""
         root = _layout.iterations_root(self.session_dir)
-        on_disk = {d for d in os.listdir(root)
-                   if os.path.isdir(os.path.join(root, d))
-                   and d not in self._NON_ITERATION_DIRS and not d.startswith(".")
-                   and "_backup_" not in d}
+        # A session that has only just been ingested has no 3_iterations yet —
+        # it is created when the first model is scaled. Listing it raised
+        # FileNotFoundError and took export down with it, which is backwards:
+        # the raw export is model-INDEPENDENT and is exactly the step you run
+        # before there is any model at all.
+        if not os.path.isdir(root):
+            on_disk = set()
+        else:
+            on_disk = {d for d in os.listdir(root)
+                       if os.path.isdir(os.path.join(root, d))
+                       and d not in self._NON_ITERATION_DIRS
+                       and not d.startswith(".")
+                       and "_backup_" not in d}
         # A half-migrated session may still have iterations directly under the
         # session folder; pick those up too rather than silently losing them.
-        if root != self.session_dir:
+        # But ONLY when the session is not already in the numbered layout: a
+        # numbered session keeps its iterations in 3_iterations by definition,
+        # so scanning its top level just collects whatever else is lying there.
+        # It collected `_to_delete`, called it an iteration, and exported 11
+        # trials into it.
+        if root != self.session_dir and not _layout.is_numbered_layout(self.session_dir):
             on_disk |= {d for d in os.listdir(self.session_dir)
                         if os.path.isdir(os.path.join(self.session_dir, d))
                         and d not in self._NON_ITERATION_DIRS
-                        and not d.startswith(".") and "_backup_" not in d}
+                        and not d.startswith(".") and not d.startswith("_")
+                        and "_backup_" not in d}
         cfg = {it for it in (self._cfg.get("iterations") or {})
                if os.path.isdir(_layout.iteration_path(self.session_dir, it))}
         return sorted(on_disk | cfg)
 
     def iteration(self, name):
-        """Return the runnable :class:`Iteration` for model ``name``."""
-        if not os.path.isdir(_layout.iteration_path(self.session_dir, name)):
-            raise FileNotFoundError(
-                f"iteration {name!r} not found under {self.session_dir}. "
-                f"available: {self.iterations}")
+        """Return the runnable :class:`Iteration` for model ``name``.
+
+        An iteration DECLARED in session.yaml but not yet on disk is created
+        here. Declaring it was previously not enough — the folder only appeared
+        as a side effect of some earlier step, so adding a model to session.yaml
+        and calling ``s.iteration(name)`` raised FileNotFoundError and listed
+        the very name you had just declared as "available". A name that is not
+        declared still raises, so a typo is still an error.
+        """
+        _p = _layout.iteration_path(self.session_dir, name)
+        if not os.path.isdir(_p):
+            _declared = (self._cfg.get("iterations") or {})
+            if name in _declared:
+                os.makedirs(_p, exist_ok=True)
+                print(f"[Session] {self.name}: created iteration folder "
+                      f"{os.path.relpath(_p, self.session_dir)} "
+                      f"(declared in session.yaml)")
+            else:
+                raise FileNotFoundError(
+                    f"iteration {name!r} not found under {self.session_dir} and "
+                    f"not declared in session.yaml. available: {self.iterations}")
         return Iteration(self.session_dir, name)
 
     def run(self, iterations=None, *, do_scale=False, **kw):
@@ -2439,8 +3594,37 @@ class Session:
         """
         its = self.iterations
         if not its:
-            print(f"[Session] {self.name}: no iterations to anchor the export.")
-            return []
+            # Export writes markers/GRF/EMG into 2_experimental/, which no model
+            # owns. The Iteration object is only being borrowed for its file
+            # plumbing, so borrow a scratch one rather than refusing to run.
+            _scratch = "_export"
+            _p = _layout.iteration_path(self.session_dir, _scratch)
+            os.makedirs(_p, exist_ok=True)
+            print(f"[Session] {self.name}: no model iterations yet — exporting "
+                  f"the raw trials anyway (they are model-independent).")
+            try:
+                return Iteration(self.session_dir, _scratch).export_trials(
+                    trials=trials, export_src=export_src, replace=replace,
+                    normalise=normalise)
+            finally:
+                # Remove the scratch anchor completely. Deleting it only when
+                # empty left `3_iterations/_export/<trial>/{ceinms,inputs,...}`
+                # behind, which then LOOKS like a model iteration on the next
+                # run. Only empty scaffolding is removed — if anything actually
+                # wrote a file in there, keep it and say so, because that means
+                # an output landed somewhere it should not have.
+                try:
+                    _files = [os.path.join(_r, _f)
+                              for _r, _, _fs in os.walk(_p) for _f in _fs]
+                    if not _files:
+                        import shutil as _sh
+                        _sh.rmtree(_p, ignore_errors=True)
+                    else:
+                        print(f"[Session] {self.name}: scratch export folder "
+                              f"{_p} holds {len(_files)} file(s) — kept for "
+                              f"inspection, delete it once checked.")
+                except OSError:
+                    pass
         return self.iteration(its[0]).export_trials(
             trials=trials, export_src=export_src, replace=replace, normalise=normalise)
 

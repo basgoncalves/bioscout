@@ -30,6 +30,7 @@ import tkinter as tk
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config.config_manager import ConfigManager
 from utils.logger import logger
+from .. import simulations_root as _simulations_root
 
 try:
     import matplotlib
@@ -218,6 +219,38 @@ def _layout():
     return _L
 
 
+#: Folders that live INSIDE an iteration but are not trials. CEINMS calibration
+#: is a session-level step — it consumes several trials and writes one result —
+#: so its folder sat next to the trials and the Trial dropdown offered
+#: "ceinms_calibration" and two dated backups of it as things you could select
+#: and run Muscle Analysis on. They have no c3d, no markers and no session.yaml
+#: entry, so picking one could only ever fail.
+_NON_TRIAL_DIRS = {"ceinms_calibration", "ceinms_calibration_session",
+                   "setup", "setupFiles", "logs", "figures", "_export",
+                   # The mesh folder linked beside the scaled model. It is a
+                   # junction created by Iteration.link_geometry(), so it sits
+                   # among the trial folders and looked like one.
+                   "geometry", "meshes"}
+_NON_TRIAL_PREFIXES = ("ceinms_calibration", "_", ".")
+
+
+def _is_trial_dir(d):
+    """Is this iteration sub-folder a TRIAL, rather than a session-level output?"""
+    n = d.name
+    if n.lower() in _NON_TRIAL_DIRS or n.startswith(_NON_TRIAL_PREFIXES):
+        return False
+    if "_backup_" in n:
+        return False
+    # A junction/symlink is never a trial — trials are made by the pipeline,
+    # links are made to point at shared assets like the mesh folder.
+    try:
+        if d.is_symlink():
+            return False
+    except OSError:
+        return False
+    return True
+
+
 def _layout_trials(sess_dir):
     """Trial names for a session, from the c3d files and from what is on disk.
 
@@ -246,7 +279,8 @@ def _layout_trials(sess_dir):
         if itr.is_dir():
             for it in itr.iterdir():
                 if it.is_dir() and it.name not in L.NON_ITERATION_DIRS:
-                    names |= {d.name for d in it.iterdir() if d.is_dir()}
+                    names |= {d.name for d in it.iterdir()
+                              if d.is_dir() and _is_trial_dir(d)}
     except Exception:
         pass
     return sorted(names)
@@ -620,7 +654,8 @@ class ResultsViewerTab(ctk.CTkFrame):
     def _sims_dir(self) -> Optional[Path]:
         if not self._project_root:
             return None
-        p = self._project_root / "simulations"
+        p = _simulations_root(self._project_root,
+                              getattr(self, 'config_manager', None))
         return p if p.exists() else None
 
     # ── cascading dropdowns ──────────────────────────────────────────────────

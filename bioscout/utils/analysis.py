@@ -1836,6 +1836,21 @@ class Analyse:
             for _attr, _fn in _raw.items():
                 if hasattr(self, _attr):
                     setattr(self, _attr, os.path.join(exp, _fn))
+            # The c3d itself is raw input too, and it already lives ONCE in
+            # 1_c3dfiles/<trial>.c3d. Leaving it pointing at
+            # <iteration>/<trial>/inputs/c3dfile.c3d meant every export copied
+            # a multi-megabyte file per model per trial into a folder nothing
+            # downstream reads — the same duplication prune_legacy_inputs was
+            # written to clean up after the fact. Point at the original.
+            try:
+                from .session_layout import c3d_root as _c3d_root
+                _sd = os.path.dirname(os.path.dirname(os.path.normpath(exp)))
+                _cand = os.path.join(_c3d_root(_sd),
+                                     os.path.basename(os.path.normpath(exp)) + ".c3d")
+                if os.path.isfile(_cand):
+                    self.c3d = _cand
+            except Exception:
+                pass
         # setup_dir is a layout field reset to "" above; in the session-centric
         # layout it must point at the shared setup templates (setup_JRA.xml, etc.).
         # Restore a pinned value so it survives every load_settings.
@@ -3131,7 +3146,8 @@ class Analyse:
         # actual MA output file instead, or we'd always skip.
         _ma_len = os.path.join(self.path, self.ma, "_MuscleAnalysis_Length.sto")
         if os.path.exists(_ma_len) and not self.replace:
-            self._log(f'Muscle Analysis output already exists: {_ma_len}')
+            self._log(f'[skip] Muscle Analysis output already exists: '
+                      f'{os.path.abspath(_ma_len)}', terminal=True)
             return
 
         _os = self._get_openSim()
@@ -3140,7 +3156,10 @@ class Analyse:
                         ik_output=os.path.join(self.path, self.ik),
                         grf_xml=os.path.join(self.path, self.setup_grf),
                         results_dir=os.path.join(self.path, self.ma))
-            self._log(f'[Success] Muscle Analysis completed. Results are saved in {self.ma}')
+            _ma_abs = os.path.abspath(os.path.join(self.path, self.ma))
+            self._log(f'[Success] Muscle Analysis completed. Results saved in:\n'
+                      f'   dir   : {_ma_abs}\n'
+                      f'   length: {os.path.abspath(_ma_len)}', terminal=True)
         except Exception as e:
             self._log(f'[Error] during Muscle Analysis: {e}')
             raise
@@ -3366,9 +3385,33 @@ class Analyse:
         # balance, else the contact force blows up ~100x. Idempotent (only adds
         # columns that are missing), so it's safe even if execution already did it.
         try:
-            self.add_so_columns_to_ceinms_results()
+            _balanced = self.add_so_columns_to_ceinms_results()
         except Exception as e:
             self._log(f'[Warning] could not add SO residual columns before CEINMS JRA: {e}', terminal=True)
+            _balanced = False
+        # REFUSE rather than write a JRA that is known to be wrong. Without the
+        # residual/reserve/GRF columns the JointReaction cannot balance: the
+        # contact force blows up ~100x AND stops depending on the muscle forces
+        # at all, so every arm of a comparison gets the SAME wrong answer and
+        # the file looks perfectly ordinary. That has now cost two tests
+        # (t14's 353 BW hip; t25's 32 BW, byte-identical across four arms).
+        # No file is recoverable; a plausible wrong file is not.
+        if not _balanced and not getattr(self, 'jra_allow_unbalanced', False):
+            # Remove any earlier output too: a stale file here is worse than a
+            # missing one, because everything downstream reads it happily.
+            _prev = self.jra_ceinms
+            if _prev:
+                _prev = _prev if os.path.isabs(_prev) else os.path.join(self.path, _prev)
+                if os.path.exists(_prev):
+                    os.remove(_prev)
+            self._log('[Error] REFUSING to run CEINMS JRA: the SO '
+                      'residual/reserve/GRF columns could not be added, so the '
+                      'contact force would be unbalanced (~100x) and identical '
+                      'whatever the muscle forces. Copy '
+                      'static_optimisation/SO_StaticOptimization_force.sto into '
+                      'this trial, or set jra_allow_unbalanced=True if you '
+                      'really want the unbalanced number.', terminal=True)
+            return
 
         try:
             _u.openSim.run_jra(osim_modelPath=self.model_dir,
@@ -4412,6 +4455,10 @@ class Analyse:
         external_biomechanics folder as ``kinematics_moments.png``. Replaces the
         old joint_angles.png / inverse_dynamics.png / inverse_dynamics_summary.png."""
         os.chdir(self.path)
+        # Name the model this figure describes. Four printBasicInfo blocks used
+        # to sit here saying it in 52 lines; one line says it better, and says
+        # WHICH model -- which is the part that actually varies between runs.
+        print(f"    kinematics+moments running with: {self.model_dir}", flush=True)
         if dofs is None:
             dofs = list(getattr(_u.settings.SummarySettings, 'dofs', []))
         if not dofs:
@@ -4671,6 +4718,10 @@ class Analyse:
         Session._apply_session_config) wins, then CEINMSSettings, then
         BatchSettings. The session must win: two sessions of the same study can
         have different electrode sets and channel names.
+
+        When the session defines several NAMED maps, ``self.emg_map`` is
+        already the one THIS iteration selected — the resolution happens in
+        ``Iteration.trial_config``, so every consumer here sees one flat map.
         """
         own = getattr(self, 'emg_map', None)
         if own:
@@ -5223,7 +5274,12 @@ class Analyse:
                 return pd.DataFrame(cols, index=muscle_forces.index)
         
         def plot_emg_vs_activations(ax, analysis: Analyse, emg, muscle_activations_so, muscle_activations_ceinms, dof, colors):
-                emg_mapping = _u.settings.EMG_muscle_mapping
+                # THIS iteration's channel map (session.yaml emg_map, resolved
+                # per iteration when the session defines several named maps).
+                # It used to read `_u.settings.EMG_muscle_mapping`, which no
+                # settings.py has ever defined -- so this panel raised, was
+                # swallowed upstream, and silently drew nothing.
+                emg_mapping = analysis.emg_channel_map()
 
                 try:
                         muscles = analysis.muscles_per_coordinate(coord_name=dof)
@@ -5238,38 +5294,49 @@ class Analyse:
                         if (filtered := [m for m in muscle_list if m in muscles_for_coord])
                 }
 
-                # Plot relevant EMG envelope columns
-                if emg is not None:
-                    for emg_col, mapped_muscles in filtered_emg_mapping.items():
-                        
+                # Channels actually present in this trial's EMG file. A DOF can
+                # legitimately have none (pelvis_tilt, lumbar_extension, any
+                # un-instrumented joint) -- then there is nothing to draw and,
+                # below, nothing to score against.
+                emg_cols = ([c for c in filtered_emg_mapping if c in emg.columns]
+                            if emg is not None else [])
 
-                        
-                        # Plot EMG col
-                        emg_line, = ax.plot(emg['time'], emg[emg_col], label=f'EMG {emg_col}', color=colors['EMG'], alpha=0.6)
+                def _present(df, muscles):
+                    if df is None:
+                        return []
+                    return [m for m in muscles if m in df.columns]
 
-                        # Plot SO activations per muscle for this DOF
-                        so_act_line = ax.plot(so_activations['time'], so_activations[mapped_muscles].mean(axis=1), label='SO Activations', color=colors['SO'], alpha=0.6, linestyle='-')  # placeholder for legend
-
-                        # Plot CEINMS activations per muscle for this DOF
-                        ceinms_act_line = ax.plot(ceinms_activations['time'], ceinms_activations[mapped_muscles].mean(axis=1), label='CEINMS Activations', color=colors['CEINMS'], alpha=0.6, linestyle='-')  # placeholder for legend
+                for emg_col in emg_cols:
+                    mapped_muscles = filtered_emg_mapping[emg_col]
+                    ax.plot(emg['time'], emg[emg_col], label=f'EMG {emg_col}',
+                            color=colors['EMG'], alpha=0.6)
+                    for _act, _key, _lab in ((so_activations, 'SO', 'SO Activations'),
+                                             (ceinms_activations, 'CEINMS', 'CEINMS Activations')):
+                        _cols = _present(_act, mapped_muscles)
+                        if _cols:
+                            ax.plot(_act['time'], _act[_cols].mean(axis=1),
+                                    label=_lab, color=colors[_key], alpha=0.6, linestyle='-')
 
                 # Add space in the y axis to display metrics RMSE and R2
                 y_min, y_max = ax.get_ylim()
                 ax.set_ylim(y_min, y_max + abs(y_max - y_min)*0.5)
-                if emg is not None and (muscle_activations_so is not None or muscle_activations_ceinms is not None):
-                    if muscle_activations_so is not None:
-                        total_activation_so = muscle_activations_so[[m for m in muscles_for_coord if m in muscle_activations_so.columns]].mean(axis=1)
-                        rmse_so = rmse(emg[emg_col], total_activation_so)
-                        r2_so = _u.rsquared(emg[emg_col], total_activation_so)
-                        rmse_percentage_so = (rmse_so / (y_max - y_min)) * 100 if (y_max - y_min) != 0 else 0
-                        ax.text(0.05, 0.90, f'SO Activations vs EMG\nRMSE: {rmse_so:.2f} (% {rmse_percentage_so:.2f})\nR2: {r2_so:.2f}', transform=ax.transAxes, fontsize=6, verticalalignment='top')
-
-                    if muscle_activations_ceinms is not None:
-                        total_activation_ceinms = muscle_activations_ceinms[[m for m in muscles_for_coord if m in muscle_activations_ceinms.columns]].mean(axis=1)
-                        rmse_ceinms = rmse(emg[emg_col], total_activation_ceinms)
-                        r2_ceinms = _u.rsquared(emg[emg_col], total_activation_ceinms)
-                        rmse_percentage_ceinms = (rmse_ceinms / (y_max - y_min)) * 100 if (y_max - y_min) != 0 else 0
-                        ax.text(0.05, 0.80, f'CEINMS Activations vs EMG\nRMSE: {rmse_ceinms:.2f} (% {rmse_percentage_ceinms:.2f})\nR2: {r2_ceinms:.2f}', transform=ax.transAxes, fontsize=6, verticalalignment='top')
+                if emg_cols:
+                    # Score against the MEAN of every mapped channel, not the
+                    # last one the plotting loop happened to leave behind.
+                    emg_ref = emg[emg_cols].mean(axis=1)
+                    for _act, _key, _lab, _y in (
+                            (muscle_activations_so, 'SO', 'SO Activations vs EMG', 0.90),
+                            (muscle_activations_ceinms, 'CEINMS', 'CEINMS Activations vs EMG', 0.80)):
+                        _cols = _present(_act, muscles_for_coord)
+                        if not _cols:
+                            continue
+                        total = _act[_cols].mean(axis=1)
+                        _rmse = rmse(emg_ref, total)
+                        _r2 = _u.rsquared(emg_ref, total)
+                        _pct = (_rmse / (y_max - y_min)) * 100 if (y_max - y_min) != 0 else 0
+                        ax.text(0.05, _y,
+                                f'{_lab}\nRMSE: {_rmse:.2f} (% {_pct:.2f})\nR2: {_r2:.2f}',
+                                transform=ax.transAxes, fontsize=6, verticalalignment='top')
         
         dofs = _u.settings.BatchSettings.dof_list
         n_rows = 5
@@ -5610,9 +5677,14 @@ class Analyse:
             filepath = os.path.join(self.parentdir, trial_name, _ceinms_input_rel)
             inputPaths.append(os.path.relpath(filepath, _cfg_dir))
 
+        # This ITERATION's calibration bounds, if session.yaml named a
+        # `calibration:` config for it (injected as `calibration_params` by
+        # Iteration.trial_config). Absent, settings.py decides as before.
         _u.ceinms.create_calibrationCfg(osimModelPath=self.model_dir,
                                      inputPaths=inputPaths,
-                                     outputPath=self.ceinms_calibration_cfg)
+                                     outputPath=self.ceinms_calibration_cfg,
+                                     params_override=getattr(
+                                         self, 'calibration_params', None))
 
     def create_excitation_generator(self):
         import traceback as _tb
@@ -6009,6 +6081,41 @@ class Analyse:
             self._log(f'[WARNING] CEINMS calibration may have failed: calibrated model not updated.')
             
     def run_ceinms_exe(self):
+        """Run CEINMS execution in whatever MODE this session asks for.
+
+        The mode decides how many solves happen and what the result IS -- one
+        curve, a curve plus a sensitivity band, a range with a median, or a
+        weighting taken from an L-curve knee. See
+        ``bioscout.utils.ceinms.modes`` for the definitions and
+        ``ceinms.mode`` in session.yaml for how to pick one.
+
+        This is a dispatcher only. `single` (the default, and what every
+        project did before modes existed) calls straight through to
+        ``run_ceinms_exe_single`` -- same solve, same folder name, same
+        outputs. Every other mode drives that same method once per arm, so
+        there is exactly one code path that actually runs CEINMS.
+        """
+        try:
+            from bioscout.utils.ceinms import modes as _modes
+        except ImportError:                                  # pragma: no cover
+            return self.run_ceinms_exe_single()
+        mode = str(getattr(self, "ceinms_mode", None)
+                   or getattr(self, "mode", None)
+                   or _modes.DEFAULT_MODE).strip().lower()
+        if mode in ("single", "optimise"):
+            # `optimise` is executed by the CEINMSoptimise path, not here; a
+            # trial that reaches execution under that mode still needs its one
+            # solve, so it behaves as `single` rather than silently doing
+            # nothing.
+            return self.run_ceinms_exe_single()
+        try:
+            return _modes.run(self, self.run_ceinms_exe_single,
+                              log=lambda m: self._log(m, terminal=True))
+        except _modes.ModeError as e:
+            self._log("[Error] CEINMS mode: %s" % e, terminal=True)
+            raise
+
+    def run_ceinms_exe_single(self):
         os.chdir(self.path)
         self.load_settings(settingsXML=self.settingsXML)
         # Tag execution logs distinctly from calibration ("CEINMS-exe <trial>"
@@ -6253,11 +6360,11 @@ class Analyse:
             ceinms_forces = _u.load_any_data_file(_abs(self.jra_forces_ceinms))
         except Exception as e:
             self._log(f'[Error] loading SO or CEINMS forces for adding columns: {e}', terminal=True)
-            return
+            return False
         if so_forces is None or ceinms_forces is None:
             self._log(f'[Error] SO ({_abs(self.so_forces)}) or CEINMS forces not readable; '
                       f'JRA residual/reserve columns NOT added (JCF will be wrong).', terminal=True)
-            return
+            return False
 
         # Non-muscle SO columns missing from the CEINMS forces (residuals/reserves/GRF).
         missing_columns = [c for c in so_forces.columns
@@ -6270,6 +6377,7 @@ class Analyse:
         _u.write_sto_file(updated_forces, _abs(self.jra_forces_ceinms))
         self._log(f'[Success] added {len(missing_columns)} SO reserve/residual/GRF columns '
                   f'to CEINMS forces (for balanced JRA)', terminal=True)
+        return True
 
     def plot_ceinms_execution_comparison(self):
         """CEINMS-vs-SO muscle results in the SO_results.png layout.

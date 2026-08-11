@@ -1,30 +1,64 @@
-# CEINMS executables and DLLs — this directory holds the binary files.
-#
-# There is also a sibling module ``utils/ceinms.py`` with the Python CEINMS
-# helpers (create_input_data, create_ceinms_cfg, create_ceinms_model, calibrate,
-# …). Because a *package* shadows a same-named *module* on import, anything that
-# ends up doing ``import ceinms`` (directly or indirectly) resolves to THIS
-# package and would be missing those helpers — which is exactly what produced
-# errors like ``module 'ceinms' has no attribute 'create_input_data'``.
-#
-# To make the package and the .py interchangeable, load the sibling .py by file
-# path and re-export its public names here. Whichever object callers reach as
-# ``ceinms``, the helpers are present. The load is degrade-safe: if OpenSim
-# isn't importable (the .py imports it at module top), the package falls back to
-# binary-only rather than failing the import.
-import os as _os
-import importlib.util as _ilu
+"""bioscout.utils.ceinms — the CEINMS toolbox: Python helpers AND the binaries.
 
-_impl_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "ceinms.py")
-try:
-    _spec = _ilu.spec_from_file_location("bioscout.utils._ceinms_impl", _impl_path)
-    _impl = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_impl)
-    for _name in dir(_impl):
-        if not _name.startswith("_"):
-            globals()[_name] = getattr(_impl, _name)
-    del _name
-    HAS_CEINMS_HELPERS = True
-except Exception as _exc:  # OpenSim missing, etc. — keep package usable for its exes
-    HAS_CEINMS_HELPERS = False
-    print(f"[bioscout.utils.ceinms] Python helpers unavailable ({_exc}); binary package only.")
+    from bioscout.utils import ceinms
+    ceinms.create_ceinms_cfg(...)          # configs.py
+    ceinms.executable(...)                 # commands.py
+    ceinms.ExecutionMode(trial).run(fn)    # modes.py
+    ceinms.plot_ceinms_muscle_forces(...)  # plot.py
+
+WHY THIS IS A PACKAGE NOW
+    It used to be a 331 MB directory of .exe/.dll files with a single
+    `__init__.py` whose only job was to work around a name collision: a
+    *package* shadows a same-named *module*, so `import ceinms` reached the
+    binaries and missed the helpers in the sibling `utils/ceinms.py`. That shim
+    loaded the .py by file path inside `try/except Exception` and fell back to
+    "binary package only" on any failure — so a missing OpenSim DLL silently
+    removed every helper instead of raising.
+
+    There is now one `ceinms`, and it is this package. The helpers are real
+    submodules; the binaries live under `bin/`. Nothing is loaded by file path
+    and nothing is swallowed.
+
+LAYOUT
+    shared.py    header, the live `settings` proxy, small shared helpers
+    configs.py   every CEINMS XML builder (model, generator, cfgs, setups)
+    commands.py  running the executables (terminal, calibrate, execute, loop,
+                 optimise)
+    modes.py     execution MODES — how many solves, and what the result IS
+                 (single / bounds / full_loop / lcurve / optimise)
+    plot.py      figures from CEINMS output
+    bin/         CEINMS.exe, CEINMSoptimise.exe, ceinms-nn-calibrate.exe, DLLs
+
+    `modes.py` deliberately imports only the standard library. Mode SELECTION
+    must not depend on OpenSim importing: if it did, a missing DLL would turn a
+    three-arm `bounds` run into a one-arm run with no error — a config option
+    silently ignored, which is worse than one that fails.
+
+        from bioscout.utils.ceinms.modes import ExecutionMode   # no OpenSim
+"""
+import os as _os
+
+# --- the binaries ----------------------------------------------------------
+# Kept beside the code but in their own directory, so `package_data` globs for
+# *.exe / *.dll never sweep up source files.
+BIN_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "bin")
+if not _os.path.isdir(BIN_DIR):          # pre-move layout: binaries at the root
+    BIN_DIR = _os.path.dirname(_os.path.abspath(__file__))
+
+CEINMS_EXE = _os.path.join(BIN_DIR, "CEINMS.exe")
+CEINMS_OPTIMISE_EXE = _os.path.join(BIN_DIR, "CEINMSoptimise.exe")
+CEINMS_CALIBRATION_EXE = _os.path.join(BIN_DIR, "ceinms-nn-calibrate.exe")
+
+# --- modes first: no heavy dependencies, so it is importable even when the
+#     OpenSim-dependent halves below are not.
+from .modes import (                                          # noqa: E402,F401
+    ExecutionMode, ModeError, MODES as EXECUTION_MODES,
+    aggregate_band, lcurve_knee, resolve as resolve_mode)
+
+from .shared import *      # noqa: E402,F401,F403
+from .configs import *         # noqa: E402,F401,F403
+from .commands import *    # noqa: E402,F401,F403
+from .plot import *        # noqa: E402,F401,F403
+
+from . import shared, commands, plot, modes                   # noqa: E402,F401
+from . import configs                                       # noqa: E402,F401

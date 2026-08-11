@@ -72,6 +72,13 @@ _KEEP_MINIMAL = re.compile(
     # the answer, so dropping it in "minimal" makes the command look like it
     # did nothing at all — which is exactly how prune/reset reports vanished.
     r"\[prune\]|\[reset\]|\[settings\]|\[tps\]|\[ma\]|\[model-edit\]|"
+    # Per-trial stage progress: "[MA] <trial> - running", "[MA ok] <trial>
+    # -> <dir>", "[SO ok] ...", and the indented "inputs -" line. These were
+    # dropped in "minimal", so a stage that ran eight trials showed ONE line
+    # (the first, and only because it followed the kept banner) and never said
+    # where anything was written.
+    r"\[(?:MA|SO|IK|ID|JRA|exbiomec|CEINMS)[^\]]*\]|\binputs\s+[\u2014-]|"
+
     # [Session]/[Iteration] carry scale_model's and export_trials' verdicts —
     # including "static TRC not found", the one line that explains a whole run
     # of IK/MA/SO/CEINMS failures. [export is per-trial export progress.
@@ -79,7 +86,8 @@ _KEEP_MINIMAL = re.compile(
     r"\[bioscout\]|^BioScout |PIPELINE DONE|SESSIONS DONE|CEINMS-ONLY DONE|"
     r"^\s*={3,}|^\s*-{3,}\s)")
 # Progress-only markers dropped further in "quiet".
-_QUIET_DROP = re.compile(r"(\[ok\]|\[skip\]|\[Success\]|^\s*-{3,}\s|\[Warning\])")
+_QUIET_DROP = re.compile(r"(\[ok\]|\[skip\]|\[Success\]|^\s*-{3,}\s|\[Warning\]|"
+                         r"\[(?:MA|SO|IK|ID|JRA|exbiomec) ok\]|\binputs\s+[\u2014-])")
 
 
 def _log_verbosity():

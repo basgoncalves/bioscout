@@ -66,7 +66,14 @@ setup(
         'bioscout.tps_personalise': ['data/*.xml', 'data/*.yaml', '*.md'],
         'bioscout.change_moment_arms': ['*.md'],
         'bioscout.utils': ['*.jpg', '*.png'],
-        'bioscout.utils.ceinms': ['*.exe', '*.dll', '*.txt'],
+        # *.zip is torch_cpu.zip; torch_cpu.dll is excluded below.
+        'bioscout.utils.ceinms.bin': ['*.exe', '*.dll', '*.txt', '*.zip'],
+    },
+    # package_data globs cannot express "every dll EXCEPT this one", and the one
+    # exception is 252 MB — the difference between a publishable wheel and a
+    # rejected upload. ceinms.py unzips it on first run.
+    exclude_package_data={
+        'bioscout.utils.ceinms.bin': ['torch_cpu.dll'],
     },
     entry_points={
         'console_scripts': [

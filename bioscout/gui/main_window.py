@@ -2,6 +2,7 @@
 
 import customtkinter as ctk
 from tkinter import messagebox
+import io
 from pathlib import Path
 import sys
 import platform
@@ -61,7 +62,9 @@ from gui.widgets.trial_analysis import TrialAnalysisTab
 from gui.widgets.emg_analysis_tab import EMGAnalysisTab
 from gui.widgets.training_tracking import TrainingTrackingTab
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
-from gui.widgets.configuration import ConfigurationTab
+# Settings tab removed in 2.0.0b12 — every key it wrote was read by nothing
+# except itself. The one live setting (simulations folder) now lives in the
+# top bar. The widget file is kept for reference; nothing imports it.
 from gui.widgets.console_terminal import ResizablePanelSplitter
 
 # File Editor is new in 2.0.0b9. Guarded like the other optional tabs so a
@@ -110,6 +113,31 @@ except ImportError:
         pass  # Will fall back to other methods
 
 
+def _guess_project_dir() -> str:
+    """The current directory, if it looks like a bioscout project.
+
+    "Looks like" = it has a settings.py naming bioscout, or the folder pair a
+    project always has. Deliberately conservative: a wrong path pre-filled is
+    worse than an empty box, because Load would then act on it.
+    """
+    import os as _os
+    cwd = _os.path.abspath(_os.getcwd())
+    for cand in (cwd, _os.path.dirname(cwd)):
+        st = _os.path.join(cand, "settings.py")
+        if _os.path.isfile(st):
+            try:
+                _t = io.open(st, encoding="utf-8", errors="replace").read(4000)
+            except Exception:
+                _t = ""
+            if "bioscout" in _t.lower() or "BatchSettings" in _t:
+                return cand
+        if any(_os.path.isdir(_os.path.join(cand, d))
+               for d in ("simulations", "simulations_test")) and \
+           _os.path.isdir(_os.path.join(cand, "setupFiles")):
+            return cand
+    return ""
+
+
 class MainWindow(ctk.CTk):
     """Main application window."""
 
@@ -128,17 +156,43 @@ class MainWindow(ctk.CTk):
         # The version belongs in the title bar: every screenshot of a bug
         # then carries the build it came from.
         self.title(f"BioScout  v{_bs_ver}")
-        # Set window / taskbar icon
+        # Set window / TASKBAR icon.
+        #
+        # iconbitmap() alone sets the title-bar icon but NOT the taskbar
+        # button: Windows groups taskbar buttons by AppUserModelID, and a
+        # Python process inherits python.exe's, so the taskbar showed the
+        # generic Python icon however good the .ico was. Claiming an explicit
+        # AppUserModelID first is what makes Windows treat this as its own
+        # application and use our icon.
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "Anthropic.BioScout.GUI")     # any stable unique string
+        except Exception:                                          # noqa: BLE001
+            pass
         try:
             from PIL import Image as _PILImg
-            import tempfile, os
+            import tempfile
             _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
             if _logo_path.exists():
                 _img = _PILImg.open(_logo_path).convert("RGBA")
                 _ico_path = Path(tempfile.gettempdir()) / "bioscout_icon.ico"
-                _img.save(str(_ico_path), format="ICO", sizes=[(32, 32), (48, 48), (64, 64)])
-                self.iconbitmap(str(_ico_path))
-        except Exception:
+                if not _ico_path.exists():
+                    _img.save(str(_ico_path), format="ICO",
+                              sizes=[(16, 16), (24, 24), (32, 32),
+                                     (48, 48), (64, 64), (128, 128), (256, 256)])
+                # default=True so every dialog and child window inherits it.
+                self.iconbitmap(default=str(_ico_path))
+                # And a PhotoImage too: on Linux/macOS iconbitmap is ignored
+                # and wm_iconphoto is what the window manager reads.
+                try:
+                    from PIL import ImageTk as _PILTk
+                    self._icon_img = _PILTk.PhotoImage(_img.resize((64, 64)))
+                    self.wm_iconphoto(True, self._icon_img)
+                except Exception:                                  # noqa: BLE001
+                    pass
+        except Exception:                                          # noqa: BLE001
             pass
         self.fullscreen = fullscreen
         self.target_x = 0
@@ -395,7 +449,6 @@ class MainWindow(ctk.CTk):
             ("Results",            None),
             ("Training Tracking",  None),
             ("File Editor",        None),
-            ("Settings",           None),
         ]
         tabs = [(name, i + 1) for i, (name, _r) in enumerate(_all_tabs)
                 if (name != "File Editor" or FileEditorTab is not None)
@@ -487,7 +540,6 @@ class MainWindow(ctk.CTk):
             "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
             "Training Tracking": {"class": TrainingTrackingTab, "args": (self.config_manager, self.update_status)},
-            "Settings": {"class": ConfigurationTab, "args": (self.config_manager, self.update_status)},
         })
         if EMGProcessingTab is not None:
             self.tab_definitions["EMG Processing"] = {
@@ -550,6 +602,18 @@ class MainWindow(ctk.CTk):
                     self.tabs[tab_name] = tab_class(self.tab_container, *tab_args)
                     self.tabs_loaded.add(tab_name)
                     logger.info(f"Tab created successfully: {tab_name}")
+                    # A tab created after the project was broadcast missed it.
+                    _proj = ""
+                    try:
+                        _proj = (self._project_dir.get() or "").strip()
+                    except Exception:                              # noqa: BLE001
+                        _proj = ""
+                    if _proj and hasattr(self.tabs[tab_name], "set_project_dir"):
+                        try:
+                            self.tabs[tab_name].set_project_dir(_proj)
+                        except Exception as _e:                    # noqa: BLE001
+                            logger.error(
+                                f"Error setting project dir for {tab_name}: {_e}")
                 except AttributeError as ae:
                     # Handle CustomTkinter initialization issues
                     if "_last_geometry_manager_call" in str(ae) or "_canvas" in str(ae):
@@ -612,7 +676,13 @@ class MainWindow(ctk.CTk):
 
         from tkinter import filedialog
 
-        self._project_dir = ctk.StringVar(value="")
+        # Pre-fill from where the GUI was launched. `python -m bioscout` is
+        # almost always run FROM the project, so starting with an empty box and
+        # making the user Browse to the folder they are already standing in is
+        # a step that never had to exist. Only a folder that actually looks
+        # like a bioscout project is offered, so launching from elsewhere still
+        # opens blank rather than pointing at something wrong.
+        self._project_dir = ctk.StringVar(value=_guess_project_dir())
         proj_entry = ctk.CTkEntry(
             proj_frame,
             textvariable=self._project_dir,
@@ -635,6 +705,28 @@ class MainWindow(ctk.CTk):
 
         ctk.CTkButton(proj_frame, text="Browse", width=76,
                       command=_browse_project).pack(side="left", padx=3)
+
+        # ── Simulations folder ─────────────────────────────────────────────
+        # Which folder under the project holds <subject>/<session>. Part of
+        # ADDRESSING the project, like the path itself — not a preference — so
+        # it belongs here rather than behind a Settings tab, and takes effect
+        # on Refresh instead of on Save.
+        ctk.CTkLabel(proj_frame, text="Simulations:",
+                     font=("Segoe UI", 11, "bold")).pack(side="left", padx=(14, 6))
+        self._sims_dir = ctk.StringVar(
+            value=str(self.config_manager.get("project.simulations_dir", "")
+                      or "simulations"))
+        _sims_entry = ctk.CTkEntry(proj_frame, textvariable=self._sims_dir,
+                                   width=150,
+                                   placeholder_text="simulations")
+        _sims_entry.pack(side="left", padx=4)
+        _sims_entry.bind("<Return>", lambda _e: self._refresh_simulations())
+        ctk.CTkButton(proj_frame, text="⟳ Refresh", width=86,
+                      command=self._refresh_simulations).pack(side="left", padx=3)
+        self._sims_status = ctk.CTkLabel(proj_frame, text="",
+                                         font=("Segoe UI", 10), width=150,
+                                         anchor="w")
+        self._sims_status.pack(side="left", padx=(4, 6))
         ctk.CTkButton(proj_frame, text="Load", width=56,
                       command=lambda: self._load_project(self._project_dir.get())
                       ).pack(side="left", padx=3)
@@ -647,6 +739,60 @@ class MainWindow(ctk.CTk):
             state="disabled",
         )
         self._update_settings_btn.pack(side="left", padx=(8, 3))
+
+    def _autoload_project(self) -> None:
+        """Load the pre-filled project, if there is one, once the tabs exist."""
+        _p = self._project_dir.get()
+        if _p:
+            try:
+                self._load_project(_p)
+            except Exception as _e:                                # noqa: BLE001
+                logger.warning(f"could not auto-load project {_p}: {_e}")
+
+    def _refresh_simulations(self) -> None:
+        """Persist the simulations folder and re-scan the project with it.
+
+        Reports what it found next to the box: a folder name that does not
+        exist used to be accepted silently, leaving every Subject list empty
+        with nothing on screen to say why.
+        """
+        name = (self._sims_dir.get() or "").strip()
+        self.config_manager.set("project.simulations_dir", name)
+        try:
+            self.config_manager.save()
+        except Exception:                                          # noqa: BLE001
+            pass
+
+        proj = (self._project_dir.get() or "").strip()
+        if not proj:
+            self._sims_status.configure(text="load a project first",
+                                        text_color="#c9a227")
+            return
+        try:
+            from . import simulations_root as _sim_root
+            p = _sim_root(proj, self.config_manager)
+        except Exception as _e:                                    # noqa: BLE001
+            self._sims_status.configure(text=f"error: {_e}", text_color="#dc3545")
+            return
+
+        if p is None or not p.is_dir():
+            self._sims_status.configure(text=f"{name}: not found",
+                                        text_color="#dc3545")
+            return
+        try:
+            n = sum(1 for d in p.iterdir() if d.is_dir())
+        except Exception:                                          # noqa: BLE001
+            n = 0
+        # Say the folder actually used — a name that does not exist falls back
+        # to settings.py, and you should be able to see that it happened.
+        used = p.name
+        if name and used != name:
+            self._sims_status.configure(
+                text=f"{name} missing -> {used} ({n})", text_color="#c9a227")
+        else:
+            self._sims_status.configure(text=f"{used}: {n} subject(s)",
+                                        text_color="#28a745")
+        self.broadcast_project_dir(proj)
 
     def _load_project(self, project_dir: str) -> None:
         """Validate project settings.py version and broadcast to tabs."""
@@ -714,6 +860,10 @@ class MainWindow(ctk.CTk):
             logger.set_project_log_dir(p / "logs")
 
         self.broadcast_project_dir(project_dir)
+        try:
+            self._refresh_simulations()
+        except Exception:                                          # noqa: BLE001
+            pass
 
     def _update_project_settings(self) -> None:
         """Preview and apply a settings.py migration for the current project."""
@@ -952,6 +1102,13 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
         _tb.print_exc()
         return
     print(f"[main_window] MainWindow created OK, state={app.state()}", flush=True)
+    # Load the pre-filled project AFTER the tabs are registered, so the
+    # broadcast reaches them; deferred with after() so the window paints first
+    # and a slow project scan cannot look like a hung launch.
+    try:
+        app.after(50, app._autoload_project)
+    except Exception:                                              # noqa: BLE001
+        pass
 
     # If custom screen position provided, use it
     if screen_x is not None and screen_y is not None:

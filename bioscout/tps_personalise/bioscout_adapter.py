@@ -238,7 +238,10 @@ def inspect_model(model_path, *, coords=None, muscle_filter=None, n=None,
 
     stem = model_path.stem
     info["corrected"] = str(model_path.with_name(f"{stem}_modWO.osim"))
-    info["figures"] = str(model_path.parent / f"muscle_inspect_{stem}")
+    # Must agree with run_moment_arm_inspection's own default, hence the shared
+    # helper rather than a second copy of the naming rule.
+    from bioscout.muscle_inspect.paths import validation_dir
+    info["figures"] = validation_dir(model_path, base=stem)
 
     argv = ["--model", str(model_path)]
     if coords:

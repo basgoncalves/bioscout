@@ -13,6 +13,18 @@ from pathlib import Path
 __all__ = ["run"]
 
 
+def _is_report_path(path):
+    """True if ``path`` lives inside a report folder rather than beside models.
+
+    Reports go to ``<model_dir>/validation/<model>/`` (and, before 2.0.0b11,
+    ``muscle_inspect_*/`` / ``moment_arm_change_*/``). A model picker that does
+    not skip these offers a figure folder as something to edit.
+    """
+    from bioscout.muscle_inspect.paths import is_report_dir
+    from pathlib import Path as _P
+    return any(is_report_dir(part) for part in _P(path).parts)
+
+
 def _ask(prompt, default=None, choices=None):
     while True:
         suffix = f" [{default}]" if default is not None else ""
@@ -186,7 +198,7 @@ def _run_all(project, model, by_coord) -> int:
     out_path = Path(rep["model"])
     siblings = sorted(p_ for p_ in model.parent.glob("*.osim")
                       if p_ != model and p_ != out_path
-                      and "muscle_inspect" not in str(p_)
+                      and not _is_report_path(p_)
                       and "_ma" not in p_.stem)
     if siblings:
         print()
@@ -250,7 +262,7 @@ def run(project_path=None) -> int:
                 "simulations/*/*/3_iterations/*/*.osim",
                 "simulations/*/*/*/*.osim"):
         models += glob.glob(str(project / pat), recursive=True)
-    models = sorted({m for m in models if "muscle_inspect" not in m
+    models = sorted({m for m in models if not _is_report_path(m)
                      and "_backup_" not in m})
     if not models:
         print(f"[ma] no .osim found under {project}")
@@ -383,7 +395,7 @@ def run(project_path=None) -> int:
     # is the whole point of the study — so offer the siblings explicitly.
     siblings = sorted(p for p in model.parent.glob("*.osim")
                       if p != model and p != out_path
-                      and "muscle_inspect" not in str(p))
+                      and not _is_report_path(p))
     if siblings:
         print()
         print("  Other models in the same folder — an iteration's SO and CEINMS")

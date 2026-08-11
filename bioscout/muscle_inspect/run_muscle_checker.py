@@ -8,7 +8,7 @@ Edit the CONFIG block, then run:
 Outputs:
   - corrected model  <model_dir>/<model>_modWO.osim      (next to the ORIGINAL model)
   - log              <model_dir>/<model>_modWO_log.txt    (next to the ORIGINAL model)
-  - figures          <model_dir>/muscle_inspect_<model>/
+  - figures          <model_dir>/validation/<model>/
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import time
 CONFIG = {
     "model":  "scaled.osim",
     "motion": "joint_angles.mot",          # a path, or a list of .mot paths
-    "out":    None,                        # None = muscle_inspect_<model> next to the model
+    "out":    None,                        # None = validation/<model>/ next to the model
 
     # analysis settings (MATLAB defaults if left as None)
     "coordinate_names": None,              # None = MATLAB default 12 lower-limb coords
@@ -61,9 +61,8 @@ def main():
 
     model_dir = os.path.dirname(model)
     base = os.path.splitext(os.path.basename(model))[0]
-    out = c["out"] or os.path.join(model_dir, f"muscle_inspect_{base}")
-    if not os.path.isabs(out):
-        out = _abs(out)
+    from .paths import validation_dir
+    out = validation_dir(model, out=c["out"], base=base)
     os.makedirs(out, exist_ok=True)
     add_file_handler(os.path.join(out, "run_log.txt"), log)
     log.info("run log -> %s", os.path.join(out, "run_log.txt"))

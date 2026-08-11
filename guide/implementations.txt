@@ -1,4 +1,0 @@
-to implement:
-
-- batch processing
-

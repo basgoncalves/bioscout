@@ -172,7 +172,8 @@ def inspect_change(before_model, after_model, coordinates, *, n: int = 40,
     info = {"ok": False, "figures": [], "csv": None, "discontinuous": [],
             "lost": [], "out_dir": None, "full": None, "reason": None}
 
-    out_dir = after_model.parent / f"moment_arm_change_{after_model.stem}"
+    from bioscout.muscle_inspect.paths import validation_dir
+    out_dir = Path(validation_dir(after_model, kind="moment_arm_change"))
     info["out_dir"] = str(out_dir)
 
     try:
@@ -206,7 +207,8 @@ def inspect_change(before_model, after_model, coordinates, *, n: int = 40,
         log(f"[ma] discontinuity check failed: {type(exc).__name__}: {exc}")
 
     log(f"[ma] inspect: {n_changed} muscle-coordinate curve(s) moved; "
-        f"{len(info['figures'])} figure(s) in {out_dir.name}")
+        f"{len(info['figures'])} figure(s) in "
+        f"{'/'.join(out_dir.parts[-3:])}")
     if info["csv"]:
         log(f"[ma] inspect: {Path(info['csv']).name}")
     if info["lost"]:

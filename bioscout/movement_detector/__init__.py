@@ -33,6 +33,7 @@ from .mocap import (
     foot_events_from_markers,
     plot_trial_tasks,
     TASK_COLOURS,
+    FOOT_COLOURS,
     MOCAP_TASK_LABELS,
     MocapConfig,
     TrialFeatures,
@@ -52,6 +53,7 @@ __all__ = [
     # marker-based mocap
     "MOCAP_TASK_LABELS",
     "MocapConfig",
+    "classify_session",
     "TrialFeatures",
     "classify_trial",
     "classify_features",
@@ -63,6 +65,13 @@ __all__ = [
     "foot_events_from_markers",
     "plot_trial_tasks",
     "TASK_COLOURS",
+    "FOOT_COLOURS",
     "read_trc",
     "read_grf",
 ]
+
+
+def classify_session(*a, **k):
+    """Lazy re-export; see bioscout.movement_detector.session."""
+    from .session import classify_session as _f
+    return _f(*a, **k)

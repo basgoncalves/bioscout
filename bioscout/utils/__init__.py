@@ -183,7 +183,7 @@ SIMULATIONS_DIR  = _dir_from_settings('SIMULATIONS_DIR')
 RESULTS_DIR      = _dir_from_settings('RESULTS_DIR')
 TASK_FIGURES_DIR = os.path.join(RESULTS_DIR, 'task_figures') if RESULTS_DIR else None
 
-CEINMS_DIR = os.path.join(UTILS_DIR, 'ceinms')
+CEINMS_DIR = os.path.join(UTILS_DIR, 'ceinms', 'bin')
 CEINMS_EXE = os.path.join(CEINMS_DIR, 'CEINMS.exe')
 CEINMS_OPTIMISE_EXE = os.path.join(CEINMS_DIR, 'CEINMSoptimise.exe')
 CEINMS_CALIBRATION_EXE = os.path.join(CEINMS_DIR, 'ceinms-nn-calibrate.exe')
@@ -429,4 +429,12 @@ from .analysis import Analyse
 # utils/ceinms.py holds the Python helpers (create_input_data, create_ceinms_cfg,
 # create_ceinms_model, calibrate, …); the sibling binary package utils/ceinms/
 # shadows it on import. The package __init__ re-exports the .py helpers, so the
-# package object carries both helpers and the .exe paths. Import
+# `ceinms` is an ordinary sub-package now (utils/ceinms/ with
+# shared/configs/commands/modes/plot and the binaries under bin/),
+# so there is nothing to shim: it imports like anything else and
+# raises like anything else if OpenSim is missing.
+#
+# It is still bound lazily rather than here, because ceinms.configs
+# imports `utils`, and importing it mid-init would re-enter this
+# module before it is complete. analysis._force_load_helper binds it
+# at first use.

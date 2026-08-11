@@ -318,6 +318,14 @@ def explain_missing(exc: BaseException) -> str:
     expected = expected_env_name()
     req = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "requirements.txt")
+    # Quoted, always. On Windows this path has backslashes, and git-bash /
+    # MINGW64 eat them as escapes when it is bare:
+    #   uv pip install -r C:\Git\bioscout\requirements.txt
+    #   -> error: File not found: `C:Gitbioscoutrequirements.txt`
+    # Double quotes are literal in bash, cmd and PowerShell alike, so one form
+    # is copy-pasteable from every shell someone might be in. Spaces in the
+    # path (Program Files, OneDrive) need them regardless.
+    req_q = f'"{req}"' 
     lines = [
         "",
         "=" * 72,
@@ -330,8 +338,8 @@ def explain_missing(exc: BaseException) -> str:
         "",
         f"  Or install into the environment you are in right now:",
         "",
-        f"      uv pip install -r {req}",
-        f"      python -m pip install -r {req}      (if uv is not available)",
+        f"      uv pip install -r {req_q}",
+        f"      python -m pip install -r {req_q}      (if uv is not available)",
         "",
         "  OpenSim is NOT on that list — it is not installable from PyPI on",
         "  every platform:",

@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+from .. import simulations_root as _simulations_root
 
 try:
     import matplotlib
@@ -193,9 +194,42 @@ class TrialAnalysisTab(ctk.CTkFrame):
         self._grf_canvas_frame.grid(row=0, column=0, sticky="nsew")
         self._grf_canvas_frame.grid_rowconfigure(0, weight=1)
         self._grf_canvas_frame.grid_columnconfigure(0, weight=1)
+        # Sliders, because dragging a span is fine for roughing out a window
+        # and useless for nudging an edge 20 ms. Each one moves its dashed line
+        # live, so the number, the slider and the plot can never disagree.
+        sliders = ctk.CTkFrame(self._grf_pane, fg_color="transparent")
+        sliders.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        sliders.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(sliders, text="start", font=("Segoe UI", 11),
+                     text_color="#4cc46a", width=40, anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(2, 6))
+        self._t0_slider = ctk.CTkSlider(
+            sliders, from_=0.0, to=1.0, number_of_steps=1000,
+            progress_color="#2f6f4f", button_color="#4cc46a",
+            button_hover_color="#6cd486",
+            command=lambda v: self._on_slider("start", v))
+        self._t0_slider.grid(row=0, column=1, sticky="ew", pady=2)
+        self._t0_read = ctk.CTkLabel(sliders, text="—", font=("Consolas", 11),
+                                     width=90, anchor="e")
+        self._t0_read.grid(row=0, column=2, sticky="e", padx=(6, 2))
+
+        ctk.CTkLabel(sliders, text="end", font=("Segoe UI", 11),
+                     text_color="#e06c75", width=40, anchor="w").grid(
+            row=1, column=0, sticky="w", padx=(2, 6))
+        self._t1_slider = ctk.CTkSlider(
+            sliders, from_=0.0, to=1.0, number_of_steps=1000,
+            progress_color="#6f3f3f", button_color="#e06c75",
+            button_hover_color="#f08c95",
+            command=lambda v: self._on_slider("end", v))
+        self._t1_slider.grid(row=1, column=1, sticky="ew", pady=2)
+        self._t1_read = ctk.CTkLabel(sliders, text="—", font=("Consolas", 11),
+                                     width=90, anchor="e")
+        self._t1_read.grid(row=1, column=2, sticky="e", padx=(6, 2))
+
         grfbar = ctk.CTkFrame(self._grf_pane, fg_color="transparent")
-        grfbar.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        grfbar.grid_columnconfigure(2, weight=1)
+        grfbar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        grfbar.grid_columnconfigure(3, weight=1)
         ctk.CTkButton(grfbar, text="Use dragged window", width=150, height=26,
                       font=("Segoe UI", 11), command=self._apply_span
                       ).grid(row=0, column=0, padx=(0, 6))
@@ -203,6 +237,13 @@ class TrialAnalysisTab(ctk.CTkFrame):
                       font=("Segoe UI", 11), fg_color="#3a3a4a",
                       hover_color="#4a4a5a", command=self._span_full
                       ).grid(row=0, column=1, padx=(0, 6))
+        # Save is here as well as in the settings panel: the window is chosen
+        # on this plot, and having to look away to commit it is how you end up
+        # running a trial on numbers you thought you had saved.
+        ctk.CTkButton(grfbar, text="✓ Update session.yaml", width=170, height=26,
+                      font=("Segoe UI", 11), fg_color="#28a745",
+                      hover_color="#218838", command=self._save_trial_settings
+                      ).grid(row=0, column=2, padx=(0, 6))
         self._grf_note = ctk.CTkLabel(grfbar, text="Drag across the plot to pick "
                                                    "a window.",
                                       font=("Segoe UI", 10), text_color="#8a8a8a",
@@ -346,7 +387,8 @@ class TrialAnalysisTab(ctk.CTkFrame):
     def _sims(self) -> Optional[Path]:
         if not self._project_root:
             return None
-        p = self._project_root / "simulations"
+        p = _simulations_root(self._project_root,
+                              getattr(self, 'config_manager', None))
         return p if p.is_dir() else None
 
     def _on_subject(self, *_):
@@ -631,18 +673,40 @@ class TrialAnalysisTab(ctk.CTkFrame):
                       labelcolor="#cccccc", edgecolor="#333344")
 
         # Show the window currently in the fields, so the plot and the numbers
-        # never disagree about what is configured.
-        for var, colour in ((self._t0_var, "#4cc46a"), (self._t1_var, "#e06c75")):
-            try:
-                ax.axvline(float(var.get()), color=colour, linewidth=1.2,
-                           linestyle="--", alpha=0.9)
-            except (TypeError, ValueError):
-                pass
+        # never disagree about what is configured. Keep the Line2D handles: a
+        # slider then moves them with set_xdata + draw_idle instead of
+        # rebuilding the whole figure on every pixel of drag.
+        tmin, tmax = float(t[0]), float(t[-1])
+        self._grf_tmin, self._grf_tmax = tmin, tmax
+        try:
+            a = float(self._t0_var.get())
+        except (TypeError, ValueError):
+            a = tmin
+        try:
+            b = float(self._t1_var.get())
+        except (TypeError, ValueError):
+            b = tmax
+        a = min(max(a, tmin), tmax)
+        b = min(max(b, tmin), tmax)
+        self._grf_line0 = ax.axvline(a, color="#4cc46a", linewidth=1.4,
+                                     linestyle="--", alpha=0.95)
+        self._grf_line1 = ax.axvline(b, color="#e06c75", linewidth=1.4,
+                                     linestyle="--", alpha=0.95)
+        self._grf_shade = ax.axvspan(a, b, color="#4cc46a", alpha=0.08)
 
         canvas = FigureCanvasTkAgg(fig, master=self._grf_canvas_frame)
         canvas.draw()
         canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._grf_canvas, self._grf_ax = canvas, ax
         self._grf_span = None
+
+        # Slider travel is the capture; 1 ms steps unless that needs more than
+        # 4000 of them, which is finer than anyone can aim anyway.
+        span_s = max(tmax - tmin, 1e-6)
+        steps = int(min(max(span_s / 0.001, 50), 4000))
+        for sl in (self._t0_slider, self._t1_slider):
+            sl.configure(from_=tmin, to=tmax, number_of_steps=steps)
+        self._sync_sliders()
 
         def on_select(a, b):
             self._grf_span = (float(a), float(b))
@@ -660,6 +724,100 @@ class TrialAnalysisTab(ctk.CTkFrame):
         self._grf_note.configure(text=f"{len(vy)} vertical force channel(s). "
                                       f"Drag across the plot to pick a window.")
 
+    def _sync_sliders(self):
+        """Push the entry values onto the sliders, lines and readouts."""
+        if getattr(self, "_slider_busy", False):
+            return
+        tmin = getattr(self, "_grf_tmin", None)
+        if tmin is None:
+            return
+        tmax = self._grf_tmax
+        try:
+            a = float(self._t0_var.get())
+        except (TypeError, ValueError):
+            a = tmin
+        try:
+            b = float(self._t1_var.get())
+        except (TypeError, ValueError):
+            b = tmax
+        a = min(max(a, tmin), tmax)
+        b = min(max(b, tmin), tmax)
+        self._slider_busy = True
+        try:
+            self._t0_slider.set(a)
+            self._t1_slider.set(b)
+        finally:
+            self._slider_busy = False
+        self._redraw_window(a, b)
+
+    def _on_slider(self, which: str, value):
+        """Move one edge. The other is pushed along rather than crossed."""
+        if getattr(self, "_slider_busy", False):
+            return
+        tmin = getattr(self, "_grf_tmin", None)
+        if tmin is None:
+            return
+        v = float(value)
+        try:
+            a = float(self._t0_var.get())
+        except (TypeError, ValueError):
+            a = tmin
+        try:
+            b = float(self._t1_var.get())
+        except (TypeError, ValueError):
+            b = self._grf_tmax
+        # A zero-length window is not a window; keep at least one slider step
+        # between the edges so end is always strictly after start.
+        gap = max((self._grf_tmax - tmin) / 1000.0, 1e-3)
+        if which == "start":
+            a = v
+            if b - a < gap:
+                b = min(a + gap, self._grf_tmax)
+        else:
+            b = v
+            if b - a < gap:
+                a = max(b - gap, tmin)
+
+        self._slider_busy = True
+        try:
+            self._t0_var.set(f"{a:.3f}")
+            self._t1_var.set(f"{b:.3f}")
+            self._t0_slider.set(a)
+            self._t1_slider.set(b)
+        finally:
+            self._slider_busy = False
+        self._redraw_window(a, b)
+        self._detect_note.configure(
+            text=f"{b - a:.2f}s selected — press Update session.yaml to keep")
+
+    def _redraw_window(self, a: float, b: float):
+        """Move the two dashed lines and the shaded band, cheaply."""
+        try:
+            self._t0_read.configure(text=f"{a:8.3f} s")
+            self._t1_read.configure(text=f"{b:8.3f} s")
+        except Exception:
+            pass
+        line0 = getattr(self, "_grf_line0", None)
+        if line0 is None:
+            return
+        try:
+            self._grf_line0.set_xdata([a, a])
+            self._grf_line1.set_xdata([b, b])
+            shade = getattr(self, "_grf_shade", None)
+            if shade is not None:
+                # axvspan returns a Rectangle on matplotlib >= 3.10 and a
+                # Polygon before it. Rectangle.set_xy takes a 2-tuple corner, so
+                # handing it a polygon path raised "too many values to unpack",
+                # and because this whole block is defensive the exception was
+                # swallowed — the numbers moved and the lines silently did not.
+                if hasattr(shade, "set_bounds"):
+                    shade.set_bounds(a, 0, b - a, 1)          # Rectangle
+                else:
+                    shade.set_xy([[a, 0], [a, 1], [b, 1], [b, 0], [a, 0]])
+            self._grf_canvas.draw_idle()
+        except Exception:
+            pass
+
     def _apply_span(self):
         span = getattr(self, "_grf_span", None)
         if not span:
@@ -668,8 +826,10 @@ class TrialAnalysisTab(ctk.CTkFrame):
         a, b = span
         self._t0_var.set(f"{a:.3f}")
         self._t1_var.set(f"{b:.3f}")
+        self._sync_sliders()
         self._detect_note.configure(
-            text=f"{b - a:.2f}s from the GRF plot — press Save to keep")
+            text=f"{b - a:.2f}s from the GRF plot — press Update session.yaml "
+                 f"to keep")
         self.status_callback(f"Window {a:.3f}–{b:.3f}s — not saved yet", "info")
 
     def _span_full(self):
@@ -678,7 +838,9 @@ class TrialAnalysisTab(ctk.CTkFrame):
         t = self._grf_df[self._grf_df.columns[0]].values
         self._t0_var.set(f"{float(t[0]):.3f}")
         self._t1_var.set(f"{float(t[-1]):.3f}")
-        self._detect_note.configure(text="Whole capture — press Save to keep")
+        self._sync_sliders()
+        self._detect_note.configure(text="Whole capture — press Update "
+                                         "session.yaml to keep")
 
     # -------------------------------------------------- trial settings I/O
     def _session_yaml(self) -> Optional[Path]:
@@ -741,6 +903,7 @@ class TrialAnalysisTab(ctk.CTkFrame):
         tr = detect_time_range(exp)
         self._t0_var.set(f"{tr.start:.3f}")
         self._t1_var.set(f"{tr.end:.3f}")
+        self._sync_sliders()
         if tr.detected:
             self._detect_note.configure(
                 text=f"{tr.duration:.2f}s via {tr.method} ({tr.reference}) — "
@@ -857,6 +1020,17 @@ class TrialAnalysisTab(ctk.CTkFrame):
                 doc.duplicate_entry(iters, copy_from, name)
             else:
                 blk = dict(NEW_ITERATION_TEMPLATE, label=name)
+                # A session with several NAMED emg_maps and no
+                # `default_emg_map` refuses to load the moment an iteration
+                # exists that picks none -- so a blank template has to pick.
+                try:
+                    from bioscout.utils import session as _sess
+                    _cfg = _sess.load_session_yaml(str(f))
+                    if _sess.is_named_emg_map(_cfg) and not _cfg.get(
+                            _sess.DEFAULT_EMG_MAP_KEY):
+                        blk["emg_map"] = next(iter(_sess.emg_maps(_cfg)))
+                except Exception:
+                    pass
                 doc.set_entry_source(iters, name, flow_map(blk))
             doc.save()
         except Exception as exc:

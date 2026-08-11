@@ -17,47 +17,42 @@ see <a href="LICENSE">License</a>
 
 ---
 
-## Session-centric YAML layout (2.x)
+## Why BioScout
 
-A session owns its raw data **once** and one or more model **iterations** compared
-over the same trials. Config is a single `session.yaml`; raw inputs are exported
-once into `experimental/` and shared by every iteration.
+Getting from a motion-capture session to a defensible muscle-force number takes a
+dozen tools that do not agree on where files live. A typical study ends up with
+one folder per attempt, paths hard-coded into scripts, and no way to answer the
+question the study is actually about: **does this modelling choice change the
+answer?**
 
-```
-simulations/<subject>/<session>/
-  c3dfiles/<trial>.c3d                 # raw captures
-  experimental/<trial>/                # processed inputs, model-independent, once
-    marker_experimental.trc  grf.mot  GRF.xml
-    emg.mot  emg_filtered.mot  emg_filtered_normalised.mot
-    grf_events.png  emg_processing.png
-  session.yaml                         # subject/session, static_trial, emg map,
-                                       # calibration/normalisation trials, iterations[]
-  <iteration>/                         # model-dependent outputs only
-    scaled_opt_N10.osim  scaled_opt_N10_mvicx3.00.osim
-    ceinms_calibration/output/
-    <trial>/ external_biomechanics/ muscle_analysis/ static_optimisation/ ceinms/ joint_contact_forces/
-  ../results/<session>/comparison/     # cross-model JCF figures
-```
+BioScout is built around that question. A **session** owns its raw captures once.
+On top of it you define as many model **iterations** as you want to compare —
+a generically scaled model, an MRI-personalised one, one with tuned moment arms —
+and every iteration runs the same trials through the same pipeline. Because the
+inputs are shared and the outputs are separated, the difference between two
+iterations *is* the effect of the modelling choice, not of a path or a re-export.
 
-Run it with the `Session` / `Iteration` API (`bioscout.utils.session`):
+Everything a run needs is declared in one `session.yaml`. There are no arguments
+to remember and no state hidden in a notebook: the same file drives the Python
+API, the command line and the GUI, so a session someone else hands you runs the
+same way yours does.
 
 ```python
 from bioscout import Session
-s  = Session.open("simulations/Athlete_03/25_03_31")   # reads session.yaml
-it = s.iteration("gpk_mri")                             # one runnable model iteration
+
+s  = Session.open("simulations/Athlete_03/25_03_31")  # reads session.yaml
+it = s.iteration("gpk_mri")                            # one runnable model variant
+
 it.scale_model(muscle_opt=False)                       # generic -> scaled (+ MVIC for SO)
 it.run(trials=["Squat_BW_01", "Walking_02"],
-       do_exbiomec=True, do_so=True, do_ceinms=True, calibrate=True, replace=True)
-s.run(do_so=True, do_ceinms=True)                      # every iteration in the session
-s.summarise()                                          # cross-model comparison plots
+       do_exbiomec=True, do_so=True, do_ceinms=True, calibrate=True)
 
-# whole project — every simulations/<subject>/<session>/session.yaml:
-Session.batch_sessions(".", do_so=True, do_ceinms=True)
+s.run(do_so=True, do_ceinms=True)   # every iteration in the session
+s.summarise()                        # cross-model comparison figures
 ```
 
-`session.yaml` is the single source of truth for per-trial config (time windows,
-sides, CEINMS α/β/γ, model names). `s.reset()` / `Session.reset_project()` strip a
-session back to inputs-only (timestamped backup) — pass `dry_run=True` to preview.
+See [Project structure](#project-structure) for the folder layout and what
+`session.yaml` controls.
 
 ---
 
@@ -122,37 +117,117 @@ python -m bioscout --install     # prints a dependency status table
 
 ---
 
-## Project layout
+## Project structure
 
-A project is a folder with a `settings.py` and a `simulations/` tree organised
-**subject → session → trial**. Each trial keeps its raw inputs and every stage's
-outputs in dedicated subfolders:
+A project is a folder holding a `settings.py` and a `simulations/` tree organised
+**subject → session → iteration → trial**.
 
 ```
 my_project/
-├── settings.py                     ← subjects, session, trials, DOFs, JRA columns
-├── models/
-│   └── <Subject>/<Session>/scaled.osim ...
+├── settings.py                    ← project config AND the runner (see below)
+├── generic models/                ← unscaled .osim models shared by every subject
 └── simulations/
-    └── <Subject>/<Session>/<Trial>/
-        ├── inputs/                 ← c3d, marker_experimental.trc, grf.mot, GRF.xml, emg*.mot, grf_events.png
-        ├── trial_settings.xml      ← per-trial paths, body_mass, time window, trial_type + <events>
-        ├── external_biomechanics/  ← IK + ID (.sto) + kinematics_moments.png, residuals.png
-        ├── muscle_analysis/        ← muscle lengths / moment arms
-        ├── static_optimisation/    ← SO forces + activations + SO_results.png, SO_muscle_groups.png, SO_reserves_inspection.png
-        ├── ceinms/                 ← CEINMS execution outputs (+ emg_vs_activations.png, SO/CEINMS/EMG comparison)
-        └── joint_contact_forces/   ← JRA (SO & CEINMS) + JRA_SO_vs_CEINMS.png with literature bands
+    └── <Subject>/<Session>/
+        ├── session.yaml           ← the source of truth for this session
+        ├── 1_c3dfiles/            ← raw captures, flat: <Trial>.c3d
+        ├── 2_experimental/        ← model-INDEPENDENT exports, written once
+        │   └── <Trial>/  marker_experimental.trc  grf.mot  GRF.xml
+        │                 emg.mot  emg_filtered.mot  emg_filtered_normalised.mot
+        │                 grf_events.png  emg_processing.png
+        ├── 3_iterations/          ← model-DEPENDENT outputs, one folder per variant
+        │   ├── cateli/
+        │   ├── gpk/
+        │   └── gpk_mri/
+        │       ├── scaled_opt_N10.osim  scaled_opt_N10_mvicx3.00.osim
+        │       ├── ceinms_calibration/  ← calibrated subject, per ITERATION
+        │       ├── validation/          ← muscle_inspect reports for this model
+        │       └── <Trial>/
+        │           ├── external_biomechanics/  IK + ID (.sto), kinematics_moments.png
+        │           ├── muscle_analysis/        muscle lengths / moment arms
+        │           ├── static_optimisation/    SO forces + activations + figures
+        │           ├── ceinms/                 CEINMS execution outputs
+        │           └── joint_contact_forces/   JRA (SO & CEINMS) + literature bands
+        ├── logs/
+        └── results/               ← cross-iteration comparison figures
 ```
 
-Session-level CEINMS calibration lives in `simulations/<Subject>/<Session>/ceinms_calibration/`.
+### The three levels, and why they are separate
 
-**Trial layout & attribute names.** As of 2.0 there is no `Inputs` class — the
-canonical folder layout is owned by `Analyse` itself
-(`bioscout.utils.analysis._default_layout_paths`). A project only needs to define
-its own `Inputs` class in `settings.py` if it wants to *override* the default
-paths (`Analyse` uses it automatically when present, else the inline default). On
-an `Analyse`/trial object the terse layout fields have readable aliases
-(read/write proxies onto the same value):
+**Session** — one visit to the lab. It owns the raw `.c3d` captures and the
+model-independent exports derived from them (markers, ground reaction forces,
+EMG). These depend only on what the participant did, so they are computed **once**
+and every iteration reads the same files. Re-exporting per model is the single
+most common way to make two models look different for the wrong reason.
+
+**Iteration** — one model variant. Everything downstream of a scaled `.osim`
+lives here: the model itself, its CEINMS calibration, its validation reports and
+its per-trial results. Two iterations of the same session differ *only* in the
+model, which is what makes them comparable.
+
+**Trial** — one movement, with one folder per pipeline stage. Stages are
+idempotent: a stage whose output already exists is skipped unless you pass
+`replace=True`, so an interrupted run resumes rather than restarting.
+
+`ceinms_calibration/` sits **inside** the iteration, not at the session root. The
+calibrated subject is a property of one model variant — `cateli`, `gpk` and
+`gpk_mri` each have their own — so a session-level folder would claim one
+calibration covers all of them.
+
+### `session.yaml` is the source of truth
+
+One file per session defines the iterations and their labels, colours and groups;
+the static trial and body mass; per-trial time windows and events; the EMG
+channel-to-muscle map; and the CEINMS α/β/γ weights.
+
+**It outranks `settings.py` at run time.** Where the two disagree, `settings.py`
+is the one silently doing nothing — that is the first thing to check when a
+setting appears to have no effect.
+
+It is parsed strictly: duplicate keys and iteration names differing only in case
+are errors, not last-wins. `Session.open` requires exactly `session.yaml` (not
+`.yml`), and `Session.iterations` only reports an iteration whose folder exists
+on disk.
+
+Create one from the captures rather than by hand — the trial list comes from the
+c3d filenames, so a trial cannot go missing:
+
+```bash
+bioscout --new-session "simulations/<Subject>/<Session>" --body-mass 82.5
+bioscout --c3d-export  "simulations/<Subject>/<Session>"
+bioscout --classifier  "simulations/<Subject>/<Session>" --write-session-yaml
+```
+
+The full walkthrough, including what `--new-session` deliberately does *not*
+guess, is in [docs/SESSION_LAYOUT.md](docs/SESSION_LAYOUT.md).
+
+### Resolving folder names — never join them by hand
+
+Two layouts are supported. The numbered one above is current; the older flat one
+(`c3dfiles/`, `experimental/`, iterations directly under the session) still works,
+and existing sessions are never renamed behind your back. The resolvers in
+`bioscout.utils.session_layout` answer from **what is on disk**, preferring the
+numbered names only when creating something new:
+
+| call | returns |
+|---|---|
+| `c3d_root(session)` | `1_c3dfiles/` |
+| `experimental_root(session)` | `2_experimental/` |
+| `iterations_root(session)` | `3_iterations/` |
+| `iteration_path(session, name)` | `3_iterations/<name>/` |
+| `is_numbered_layout(session)` | `True` once the session is numbered |
+
+Because they read the disk, a resolver must be called **after** the folders exist.
+Caching one in a module-level constant returns the wrong answer on a session that
+is half-migrated — the mistake to watch for.
+
+### Trial layout & attribute names
+
+As of 2.0 there is no `Inputs` class — the canonical folder layout is owned by
+`Analyse` itself (`bioscout.utils.analysis._default_layout_paths`). A project only
+needs its own `Inputs` class in `settings.py` if it wants to *override* the
+default paths (`Analyse` picks it up automatically when present). On an
+`Analyse`/trial object the terse layout fields have readable aliases (read/write
+proxies onto the same value):
 
 | alias | field | | alias | field |
 |---|---|---|---|---|
@@ -162,6 +237,12 @@ an `Analyse`/trial object the terse layout fields have readable aliases
 | `static_optimisation_forces` | `so_forces` | | `static_optimisation_activations` | `so_activations` |
 
 The short names remain the canonical keys serialised into `trial_settings.xml`.
+
+### Resetting
+
+`s.reset()` and `Session.reset_project()` strip a session back to inputs-only,
+keeping a timestamped backup. Pass `dry_run=True` to see what would go first — a
+dry run that reports nothing removed is correct behaviour, not a failure.
 
 ---
 
@@ -195,8 +276,26 @@ class SummarySettings:
     dofs = ["pelvis_tilt", "hip_flexion_r", "hip_flexion_l", "knee_angle_r", ...]
 ```
 
-Put each trial's raw data under `simulations/<Subject>/<Session>/<Trial>/inputs/`
-(a `--export` run can also regenerate these from the C3D).
+Raw captures go in `simulations/<Subject>/<Session>/1_c3dfiles/` as flat
+`<Trial>.c3d`; `bioscout --c3d-export` turns them into the shared
+`2_experimental/` inputs. See [Project structure](#project-structure).
+
+---
+
+### `settings.py` is also the runner
+
+The project's `settings.py` doubles as the runner: edit the CONFIG block at the
+bottom (which iterations, trials, and stages to run) and launch it directly. It
+opens the session and drives `Iteration.run` / `Session.summarise` for you:
+
+```bash
+conda activate bioscout_env
+python settings.py
+```
+
+Toggle `DO_SCALE` / `DO_EXBIOMEC` / `DO_SO` / `DO_CEINMS` / `DO_SUMMARY` and
+`REPLACE` there; per-trial config (time windows, sides, CEINMS α/β/γ, model names)
+lives in each session's `session.yaml`.
 
 ---
 
@@ -311,6 +410,267 @@ plus the SO outputs (`run_ma run_so`). It writes the CEINMS execution outputs
 plus the SO-vs-CEINMS-vs-EMG comparison figures
 (`ceinms/emg_vs_activations.png`: gray = EMG, red = SO, blue = CEINMS).
 
+### CEINMS execution modes
+
+CEINMS execution minimises a weighted objective (Sartori et al. 2014, Eq. 1):
+
+```
+F_obj = α · E_trackMOM  +  β · E_sumEXC  +  γ · E_trackEMG
+```
+
+| term | weight | what it penalises |
+|:--|:--|:--|
+| `E_trackMOM` | **α** | difference between CEINMS and inverse-dynamics joint moments |
+| `E_sumEXC` | **β** | sum of squared excitations — an **effort** penalty, not an EMG term |
+| `E_trackEMG` | **γ** | difference between adjusted and measured excitations — the **EMG-tracking** weight |
+
+Only the **ratios** `β/α` and `γ/α` are identifiable: scaling an objective
+cannot move its minimum, so `(α, β, γ)` and `(1, β/α, γ/α)` are the same
+problem. That is why α is conventionally fixed at 1, and why
+`α10 β1 γ1000` and `α1 β0.1 γ100` are the same run.
+
+Choosing γ is not settled, and it is not cosmetic — on a powerlifting dataset
+γ moved hip contact force by several body weights. So bioscout does not assume
+one way of running CEINMS. Pick a **mode**, and the mode decides both how many
+solves happen and *what the result is*.
+
+```yaml
+# simulations/<subject>/<session>/session.yaml
+ceinms:
+  mode: bounds          # single | bounds | full_loop | lcurve | optimise
+  alpha: 1
+  beta: 1
+  gamma: 30             # the PRODUCTION weighting
+  gamma_bounds: [10, 100]
+```
+
+Default is `single`, so a project that never sets `mode` behaves exactly as
+before.
+
+| mode | solves | the result is | use it when |
+|:--|:--|:--|:--|
+| **`single`** | 1 | one curve | the weighting is already justified; you want the cheapest correct run |
+| **`bounds`** | 3 | production estimate **+ a sensitivity band** | you must show how much the weighting moved the answer, without paying for a grid |
+| **`full_loop`** | ∏ ranges | a **range with a median** | you want the distribution over a grid, not a bracket |
+| **`lcurve`** | β × γ grid, +1 | production taken from the **knee** | you want the published tuning procedure — read the caveat below |
+| **`optimise`** | — | CEINMSoptimise picks the weights | you would rather search than choose; far the slowest |
+
+#### `single`
+
+```yaml
+ceinms: {mode: single, alpha: 1, beta: 1, gamma: 30}
+```
+
+One solve into `ceinms/Execution_a1_b1_g30/`. Identical to pre-mode behaviour.
+
+#### `bounds`
+
+```yaml
+ceinms:
+  mode: bounds
+  alpha: 1
+  beta: 1
+  gamma: 30
+  gamma_bounds: [10, 100]     # must bracket gamma
+```
+
+Three solves — lower, upper, then **production last**. Report γ = 30 as the
+estimate and γ = 10–100 as a band around it. The band is *not* a confidence
+interval and its middle is *not* a median: the brackets are chosen to expose a
+sensitivity, so averaging them would invent a central tendency. bioscout
+refuses bounds that do not bracket γ, because a band that excludes the estimate
+cannot be read as a sensitivity around it.
+
+#### `full_loop`
+
+```yaml
+ceinms:
+  mode: full_loop
+  alpha_range: [1]
+  beta_range:  [0.2, 1, 3]
+  gamma_range: [1, 3, 10, 30, 100, 300]
+```
+
+Every combination, production last. Here the median *is* descriptive, because
+the grid is dense enough for it to mean something. Cost is the product of the
+range lengths — 18 solves per trial above.
+
+#### `lcurve`
+
+```yaml
+ceinms:
+  mode: lcurve
+  lcurve_betas:  [0, 0.2, 1, 3, 10, 30, 100, 300]
+  lcurve_gammas: [0, 1, 3, 10, 30, 100, 300, 1000, 3000]
+```
+
+Sweeps the grid, normalises each objective term to its own maximum, builds the
+best curve (at each γ the lowest `Ê_trackMOM`, breaking ties toward the lowest
+`Ê_sumEXC` as Sartori do — without that tie-break β = 0 wins every point by
+construction), locates the knee by the L-method, and then re-solves at the knee
+so production is the knee.
+
+> **Check the knee before you trust it.** The L-method finds the corner of a
+> *normalised* picture. When the curve is nearly flat past the elbow, both axes
+> are normalised to their own extremes and the knee tracks the **range you
+> swept** rather than the data. On this project's squat trials the knee came
+> out at exactly one tenth of the top of the γ range, in five nested ranges out
+> of five.
+>
+> The manifest reports two diagnostics:
+> - `elbow_ratio` — two-segment fit RMSE ÷ single-line RMSE. Below about 2 there
+>   is no real elbow and the "knee" is just the best place to break a line.
+> - `knee_gamma_over_range_top` — run two different γ ranges. If this is
+>   unchanged, the knee is a property of your grid. Use `bounds` or
+>   `full_loop` and report a band instead.
+
+#### `optimise`
+
+CEINMSoptimise searches the weight space itself. Nothing to configure, but it
+is far the slowest, and it builds its **own** cfg — check that the dofSet it
+tracks matches your execution cfg, since a silently dropped coordinate (knee
+adduction, typically) changes predicted hip contact force substantially.
+
+#### What lands on disk
+
+Every mode writes one folder per solve,
+`ceinms/Execution_a<α>_b<β>_g<γ>/`, plus a manifest:
+
+```
+ceinms/ceinms_modes_manifest.json
+  {"mode": "bounds",
+   "arms": [{"alpha":1,"beta":1,"gamma":10,"tag":"a1_b1_g10","production":false,
+             "output_dir":"...","ok":true}, ...],
+   "production": {...},
+   "knee": null}
+```
+
+**The production arm is always solved last**, and its outputs keep the plain
+untagged filenames — so downstream code that knows nothing about modes reads
+the production result by default, and a run that dies half way leaves a tree
+that is incomplete rather than one quietly describing the wrong weighting.
+
+#### The API
+
+```python
+from bioscout.utils import ceinms
+m = ceinms.ExecutionMode(trial)      # reads session.yaml via the trial
+print(m.mode, m.n_solves, m.arms)    # inspect before committing the compute
+manifest = m.run(trial.run_ceinms_exe_single)
+
+ceinms.ExecutionMode.describe()      # {mode: one-line definition}
+```
+
+The implementation lives in `bioscout/utils/ceinms/modes.py` and is re-exported
+above, so there is one name to remember. It is a separate module on purpose:
+`ceinms.py` imports OpenSim, scipy, matplotlib and pandas at its top and is
+loaded inside a `try/except` that degrades to "binary package only" when any of
+those is missing. If mode *selection* lived there, a missing OpenSim DLL would
+turn a three-arm `bounds` run into a one-arm run **with no error** — the config
+option would be silently ignored. `ceinms.modes` imports only the standard
+library, so `mode` is parsed and validated identically whether or not the
+solver can start:
+
+```python
+from bioscout.utils.ceinms.modes import ExecutionMode   # no OpenSim needed
+```
+
+To turn per-arm results into a band:
+
+```python
+band = ceinms.ExecutionMode.aggregate({"a1_b1_g10": jcf_low,
+                                       "production": jcf_prod,
+                                       "a1_b1_g100": jcf_high})
+# -> {"production", "low", "high", "median", "n"}
+```
+
+Quote `production`. Plot `low`–`high` as the band.
+
+
+### Several EMG maps in one session
+
+Which model muscles an electrode is taken to drive is a modelling assumption,
+and a consequential one — widening the gastrocnemius channel to the whole
+triceps surae changes what CEINMS is fitting. So `emg_map` can hold **named**
+maps, and each iteration names the one it runs with:
+
+```yaml
+# simulations/<subject>/<session>/session.yaml
+emg_map:
+  narrow:
+    EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l]
+    # ... the session's other channels
+  triceps:
+    EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l, soleus_l]
+  wide:
+    EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l, soleus_l, perlong_l]
+
+default_emg_map: narrow          # optional: what a silent iteration gets
+
+iterations:
+  cateli_narrow:  {generic: Catelli.osim, emg_map: narrow,  ...}
+  cateli_triceps: {generic: Catelli.osim, emg_map: triceps, ...}
+  gpk_wide:       {generic: GPK_v3.osim,  emg_map: wide,    ...}
+```
+
+The alternative was one COPIED session per grouping — same subject, same
+trials, same windows, same exported inputs, differing in one dict, and three
+places to keep a time range in step. As iterations they share all of that and
+compare in the same tables and figures.
+
+A single flat `emg_map` (the original form) still works exactly as before: the
+two are told apart by value type — a channel maps to a **list** of muscles, a
+named map to a **mapping** of channels.
+
+Ambiguity is an error rather than a default. With more than one map and no way
+to choose — no iteration selector, no `default_emg_map`, no map called
+`default` — the session refuses to load, as does a selector naming a map that
+does not exist. The failure being avoided is a run that completes normally
+several hours later having used the wrong electrode set, with nothing in the
+output to show it.
+
+```python
+from bioscout.utils.session import emg_maps, resolve_emg_map
+emg_maps(cfg)                        # {'narrow': {...}, 'triceps': {...}, ...}
+resolve_emg_map(cfg, "cateli_wide")  # the flat {channel: [muscles]} it runs with
+```
+
+
+### Several calibration configs in one session
+
+CEINMS's calibration bounds were one global value in `settings.py`, so sweeping
+one meant copied sessions and a runtime monkeypatch. `calibration` is a
+session.yaml block with the same shape as `emg_map`:
+
+```yaml
+calibration:
+  wide:  {optimalFiberLength: "0.5 3",        tendonSlackLength: "0.5 3"}
+  tight: {optimal_fiber_length: [0.75, 1.25], tendon_slack_length: "0.75 1.25"}
+
+default_calibration: wide
+
+iterations:
+  cateli__wide:  {generic: Catelli.osim, calibration: wide,  ...}
+  cateli__tight: {generic: Catelli.osim, calibration: tight, ...}
+```
+
+Same rules throughout: one flat block or several named ones, told apart by
+value type; ambiguity refuses to load. An override is **partial** — a config
+naming only `optimalFiberLength` leaves every other bound to `settings.py`.
+
+**Both spellings of every parameter now work.** `settings.py` has always
+declared `optimal_fiber_length`, `tendon_slack_length`, `shape_factor` and
+`strength_coefficient`, while the XML writer read the camelCase names — so four
+of the six ranges were unreachable and editing them in `settings.py` silently
+did nothing. Only `c1` and `c2` were ever live. Both spellings are canonicalised
+now, in `settings.py` and in `calibration:` alike.
+
+```python
+from bioscout.utils.session import calibration_configs, resolve_calibration
+resolve_calibration(cfg, "cateli__tight")   # {'optimalFiberLength': '0.75 1.25', ...}
+```
+
+
 ### Re-cropping to edited gait events (no re-export)
 
 Editing the `<events>` in a trial's `trial_settings.xml` does **not** by itself
@@ -415,6 +775,45 @@ Session.reset_project(".", sessions="25_03_31", dry_run=True)  # whole project, 
 
 ---
 
+## Muscle ranking across models — `--collings`
+
+Which muscles a model leans on, ranked, with every model side by side and the
+disagreement drawn on:
+
+```bash
+python -m bioscout --collings "simulations/Athlete_03/25_03_31"
+python -m bioscout --collings "simulations/Athlete_03/25_03_31" --skip gpk_mri cateli_mri
+python -m bioscout --collings . --trial Walking_03 --metric impulse --top 15 --side _l
+```
+
+One ranked panel per model iteration, ordered by **peak muscle force** of each
+functional group (`--metric impulse` for the time-integral instead). Static
+optimisation is the leftmost panel wherever it exists — it uses no EMG, so it is
+the same whatever the EMG-informed columns do, which is what makes it the right
+reference to anchor on.
+
+**Read the colours, not the lines.** Each muscle is coloured by its rank in the
+leftmost panel and keeps that colour all the way right, so the left panel is
+always a clean dark→pale ramp and *any* colour disorder further right is a
+re-ranking. Connectors then tell you the direction: blue = ranked higher by the
+panel on its right, red = lower, dotted = dropped out of the top N.
+
+| flag | meaning |
+|---|---|
+| `--collings [SESSION]` | session folder (the one holding `session.yaml`); defaults to `.`. Pointing at a project or subject folder works too if exactly one session sits below it. |
+| `--skip A B ...` | iterations to leave out, case-insensitive |
+| `--trial NAME[,NAME]` | restrict to these trials (default: all) |
+| `--metric peak\|impulse` | rank by peak force (default) or force impulse |
+| `--side _r\|_l` | which limb (default right) |
+| `--top N` | how many muscle groups (default 12) |
+| `-o DIR` | output folder (default `<session>/4_outputs/collings`) |
+
+After Collings et al. (2025), *Med Sci Sports Exerc*, who use this layout to
+compare exercise rankings by peak muscle force against peak EMG. The layout and
+the colour anchoring are theirs; the columns here are **models**, not two
+measures of one model, so output from this flag is not a replication of their
+result.
+
 ## Figures & validation
 
 Every stage writes its figures into the trial subfolders, and any figure can be
@@ -471,23 +870,6 @@ time="…"/>` is numbered in time order). The event schema per type determines t
 
 To re-derive the analysis window after editing the events, without re-exporting,
 use `recrop_to_events` (see "Re-cropping to edited gait events" above).
-
----
-
-## Running a project — `settings.py`
-
-The project's `settings.py` doubles as the runner: edit the CONFIG block at the
-bottom (which iterations, trials, and stages to run) and launch it directly. It
-opens the session and drives `Iteration.run` / `Session.summarise` for you:
-
-```bash
-conda activate bioscout_env
-python settings.py
-```
-
-Toggle `DO_SCALE` / `DO_EXBIOMEC` / `DO_SO` / `DO_CEINMS` / `DO_SUMMARY` and
-`REPLACE` there; per-trial config (time windows, sides, CEINMS α/β/γ, model names)
-lives in each session's `session.yaml`.
 
 ---
 

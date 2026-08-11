@@ -4,7 +4,7 @@ EDIT THE `CONFIG` BLOCK BELOW, then run:
 
     python run_moment_arm_inspection.py
 
-Outputs (all under <model_dir>/muscle_inspect_<model>/):
+Outputs (all under <model_dir>/validation/<model>/):
   - corrected model  <model_dir>/<model>_modWO.osim   (next to the ORIGINAL model)
   - momentarm_<coord>.png / length_<coord>.png  before vs after grids
         (literature bands overlaid on hip-flexion moment-arm panels where available)
@@ -26,7 +26,7 @@ import time
 # =====================================================================
 CONFIG = {
     "model": "scaled.osim",
-    "out":   None,                     # None = muscle_inspect_<model> next to the model
+    "out":   None,                     # None = validation/<model>/ next to the model
 
     "coords": None,                    # None = default lower-limb set
     "muscle_filter": None,
@@ -99,9 +99,8 @@ def main(argv=None):
     model_dir = os.path.dirname(model)
     base = os.path.splitext(os.path.basename(model))[0]
     corrected = os.path.join(model_dir, f"{base}_modWO.osim")
-    out = args.out or os.path.join(model_dir, f"muscle_inspect_{base}")
-    if not os.path.isabs(out):
-        out = os.path.join(here, out)
+    from .paths import validation_dir
+    out = validation_dir(model, out=args.out, base=base)
     os.makedirs(out, exist_ok=True)
     add_file_handler(os.path.join(out, "run_log.txt"), log)
     log.info("run log -> %s", os.path.join(out, "run_log.txt"))

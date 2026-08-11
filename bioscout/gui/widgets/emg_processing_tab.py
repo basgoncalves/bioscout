@@ -30,6 +30,7 @@ from typing import Dict, List, Optional
 
 import customtkinter as ctk
 from tkinter import filedialog
+from .. import simulations_root as _simulations_root
 
 try:
     import matplotlib
@@ -409,7 +410,8 @@ class EMGProcessingTab(ctk.CTkFrame):
 
     def _autopick_session(self):
         """Use the first session under simulations/ so the tab is never blank."""
-        sims = (self._project_root / "simulations") if self._project_root else None
+        sims = _simulations_root(self._project_root,
+                                 getattr(self, 'config_manager', None))
         if not sims or not sims.is_dir():
             return
         for subj in sorted(p for p in sims.iterdir() if p.is_dir()):

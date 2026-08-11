@@ -118,7 +118,72 @@ def _dofs():
     return list(getattr(_S().BatchSettings, "dof_list", []) or [])
 
 
-def _emg_mapping():
+_SESSION_EMG_CACHE = {}
+
+
+def _session_emg_mapping(td):
+    """This trial's channel -> muscles from its own session.yaml, or None.
+
+    Walks up from the trial folder to the session.yaml, then resolves the map
+    for the ITERATION the trial sits in — a session may define several named
+    maps (``emg_map: {narrow: {...}, wide: {...}}``) with each iteration naming
+    one, and a summary drawn with a sibling iteration's electrode grouping is
+    wrong in a way nothing in the figure would show.
+    """
+    if not td:
+        return None
+    key = os.path.abspath(td)
+    if key in _SESSION_EMG_CACHE:
+        return _SESSION_EMG_CACHE[key]
+
+    def _yaml_in(d):
+        for fn in ("session.yaml", "session.yml"):
+            p = os.path.join(d, fn)
+            if os.path.isfile(p):
+                return p
+        return None
+
+    # Folder names between the session and the iteration, in either layout:
+    #   <session>/<iteration>/<trial>                 (flat)
+    #   <session>/3_iterations/<iteration>/<trial>    (numbered)
+    # Miss this and every trial on the numbered layout infers no iteration and
+    # silently falls back to the session default map.
+    WRAPPERS = {"3_iterations", "iterations", "models"}
+    result, seen, cur = None, [], key
+    for _ in range(7):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        seen.append(os.path.basename(cur))
+        sy = _yaml_in(parent)
+        if sy:
+            try:
+                from bioscout.utils import session as _sess
+                cfg = _sess.load_session_yaml(sy)
+                names = set(cfg.get("iterations") or cfg.get("models") or {})
+                # `seen` is trial-first; the iteration is the deepest folder
+                # under the session that is not a wrapper level.
+                it = next((n for n in reversed(seen) if n not in WRAPPERS), None)
+                result = _sess.resolve_emg_map(
+                    cfg, it if it in names else None, strict=False) or None
+            except Exception as exc:                       # noqa: BLE001
+                # load_session_yaml raises on a malformed emg_map ON PURPOSE.
+                # Swallowing it silently here would draw the figure with some
+                # other session's channel names and say nothing.
+                print(f"[summary] could not read {sy} ({exc}); "
+                      "falling back to settings.py's emg_muscle_mapping")
+                result = None
+            break
+        cur = parent
+    _SESSION_EMG_CACHE[key] = result
+    return result
+
+
+def _emg_mapping(td=None):
+    """Channel -> muscles: this trial's session.yaml first, settings.py after."""
+    own = _session_emg_mapping(td)
+    if own:
+        return own
     return getattr(_S().BatchSettings, "emg_muscle_mapping", {}) or {}
 
 
@@ -329,16 +394,16 @@ def _find_ceinms_forces(td):
     return hits[0] if hits else None
 
 
-def _emg_channels_for(emg, muscles):
+def _emg_channels_for(emg, muscles, td=None):
     if emg is None or not muscles:
         return []
-    mapping = _emg_mapping()
+    mapping = _emg_mapping(td)
     return [ch for ch, muscs in mapping.items()
             if ch in emg.columns and any(m in muscles for m in muscs)]
 
 
-def _emg_envelope(emg, muscles, normalise=True):
-    chans = _emg_channels_for(emg, muscles)
+def _emg_envelope(emg, muscles, normalise=True, td=None):
+    chans = _emg_channels_for(emg, muscles, td)
     if not chans:
         return None
     env = emg[chans].mean(axis=1).values.astype(float)
@@ -504,7 +569,7 @@ def plot_trial(info, save_dir=None):
                            bbox=dict(boxstyle="round", fc="wheat", alpha=0.6))
 
             elif key == "emg":
-                chans = _emg_channels_for(emg, joint_muscles)
+                chans = _emg_channels_for(emg, joint_muscles, td)
                 for i, ch in enumerate(chans):
                     a.plot(emg["pct"], emg[ch], lw=1,
                            color=matplotlib.colormaps["tab10"](i % 10), label=ch)
@@ -565,7 +630,7 @@ def plot_trial(info, save_dir=None):
                         a.plot(pct, nv, color=sc, ls="--", lw=1.5, label=f"{S} (-MA)".strip())
                         drew = True
                 if key == "activations":
-                    env = _emg_envelope(emg, joint_muscles, normalise=True)
+                    env = _emg_envelope(emg, joint_muscles, normalise=True, td=td)
                     if env is not None:
                         a.fill_between(emg["pct"], 0, env, color="gray", alpha=0.2, label="EMG")
                         drew = True
@@ -623,7 +688,7 @@ def _trial_series(td, dof):
     col = _ik_col(ik, dof)
     if col is not None:
         out["angle"] = mk(ik[col].values)
-    env = _emg_envelope(emg, set(nz), normalise=True)
+    env = _emg_envelope(emg, set(nz), normalise=True, td=td)
     if env is not None:
         out["emg"] = mk(env)
     if idm is not None and f"{dof}_moment" in idm.columns:

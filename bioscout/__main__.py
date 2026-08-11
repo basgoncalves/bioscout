@@ -102,6 +102,23 @@ parser.add_argument('--ingest-c3d', dest='ingest_c3d', type=str, default=None,
                          "simulations tree: each <trial>.c3d in C3D_FOLDER becomes "
                          "simulations/<subject>/<session>/<trial>/inputs/c3dfile.c3d. Requires "
                          "--subject and --session. Follow with --run_subject … --export to build.")
+parser.add_argument('--new-session', dest='new_session', type=str, default=None,
+                    metavar='SESSION_PATH',
+                    help="Scaffold session.yaml for a session folder that already "
+                         "holds 1_c3dfiles/*.c3d. Trial names and the static trial "
+                         "come from the c3d filenames; --from-session copies the "
+                         "markerset/EMG map from an existing session.")
+parser.add_argument('--from-session', dest='from_session', type=str, default=None,
+                    metavar='SESSION_PATH',
+                    help="With --new-session: an existing session.yaml to copy the "
+                         "lab-constant parts from (markerset, emg_map, ceinms).")
+parser.add_argument('--body-mass', dest='body_mass', type=float, default=None,
+                    metavar='KG', help="With --new-session: the subject's mass.")
+parser.add_argument('--c3d-export', '--export-session', dest='c3d_export',
+                    type=str, default=None, metavar='SESSION_PATH',
+                    help="Export a session's 1_c3dfiles/*.c3d into "
+                         "2_experimental/<trial>/ (markers, GRF, EMG). Works before "
+                         "any model exists — the export is model-independent.")
 parser.add_argument('--classifier', '--classify', dest='classifier',
                     type=str, default=None, metavar='SESSION_PATH',
                     help="Classify every trial in a session from its markers/GRF "
@@ -189,6 +206,14 @@ parser.add_argument('--scale-setups', '--scale_setups', dest='scale_setups',
                     help="With --compare-models: ScaleTool setup XMLs to report the "
                          "scaling INTENT (preserve_mass_distribution, scaling_order, "
                          "manual ScaleSet overrides) that explains the differences.")
+parser.add_argument('--joint-centres', '--joint-centers', '--jc',
+                    dest='joint_centres', type=str, default=None, metavar='TRC',
+                    help="Write a copy of a TRC with the joint centres added "
+                         "(Harrington hips, midpoint knees/ankles) as *WK markers. "
+                         "These exist in the model but in no motion-capture file, so "
+                         "without them ScaleTool has nothing to measure the femur and "
+                         "tibia between. Defaults to <name>_jc.trc next to the input; "
+                         "use -o for another path.")
 parser.add_argument('-o', '--out', dest='out', type=str, default=None, metavar='FILE',
                     help="With --compare-models: write the tables to .xlsx (one sheet "
                          "each) or .csv (one file per table).")
@@ -206,6 +231,36 @@ parser.add_argument('--tps', nargs='?', const='', default=None, metavar='PROJECT
 parser.add_argument('--summary', nargs='?', const='', default=None, metavar='SETTINGS_OR_PROJECT',
                     help="Build kinematics/kinetics summaries. Optionally pass a settings.py "
                          "or project path; defaults to ./settings.py then the package settings.")
+parser.add_argument('--collings', nargs='?', const='', default=None, metavar='SESSION_PATH',
+                    help="Collings-style muscle ranking figure: one ranked bar panel per "
+                         "model iteration, connectors showing what each one re-ranks, bar "
+                         "colour anchored on the leftmost panel. Pass a SESSION folder (the "
+                         "one holding session.yaml); defaults to the current folder. "
+                         "After Collings et al. 2025, Med Sci Sports Exerc.")
+parser.add_argument('--md2pdf', nargs='+', default=None, metavar='FILE.md',
+                    help="Convert markdown to PDF (markdown -> .docx via pandoc "
+                         "-> .pdf via LibreOffice, so no LaTeX install is needed). "
+                         "Takes one or more files; the PDF lands beside each source "
+                         "unless --outdir is given.")
+parser.add_argument('--outdir', dest='outdir', default=None, metavar='DIR',
+                    help="With --md2pdf: write the PDFs here instead of beside the source.")
+parser.add_argument('--toc', dest='toc', action='store_true',
+                    help="With --md2pdf: prepend a table of contents.")
+parser.add_argument('--bib', dest='bib', default=None, metavar='FILE.bib',
+                    help="With --md2pdf: resolve [@key] citations against this bibliography.")
+parser.add_argument('--keep-docx', dest='keep_docx', action='store_true',
+                    help="With --md2pdf: keep the intermediate .docx.")
+parser.add_argument('--skip', dest='skip', nargs='*', default=None, metavar='ITERATION',
+                    help="With --collings: iterations to leave out of the figure "
+                         "(e.g. --skip gpk_mri lernagopal). Matched case-insensitively.")
+parser.add_argument('--metric', dest='metric', default='peak',
+                    choices=['peak', 'impulse'], metavar='PEAK|IMPULSE',
+                    help="With --collings: rank by peak force (default, as in Collings "
+                         "et al.) or by force impulse over the trial.")
+parser.add_argument('--side', dest='side', default='_r', choices=['_r', '_l'],
+                    help="With --collings: which limb to rank (default right).")
+parser.add_argument('--top', dest='top', type=int, default=12, metavar='N',
+                    help="With --collings: how many muscle groups to show (default 12).")
 parser.add_argument('-overall', '--overall', dest='overall', action='store_true',
                     help="With --summary: only (re)build the overall plots/metrics in <project>/summary")
 parser.add_argument('-s', '--subject', type=str, default=None, metavar='SUBJECT_ID',
@@ -414,153 +469,69 @@ if getattr(args, 'pylance_fix', None) is not None:
           "(or 'Python: Restart Language Server'). Subject/functions should colour now.")
     sys.exit(0)
 
+# --- --new-session : scaffold a session.yaml from the c3d files --------------
+if getattr(args, 'new_session', None):
+    from bioscout.utils.session import scaffold_session_yaml
+    _p = scaffold_session_yaml(args.new_session,
+                               template=getattr(args, 'from_session', None),
+                               body_mass=getattr(args, 'body_mass', None))
+    if _p and getattr(args, 'body_mass', None) is None:
+        print("[new-session] body_mass left unset on purpose — --c3d-export "
+              "weighs it from the static trial's force plates.")
+    sys.exit(0 if _p else 1)
+
+
+# --- --c3d-export : raw export, no model required ----------------------------
+if getattr(args, 'c3d_export', None):
+    from bioscout import Session
+    from bioscout.utils.session_layout import c3d_root
+    _sp = os.path.abspath(args.c3d_export)
+    if not os.path.isfile(os.path.join(_sp, "session.yaml")):
+        print(f"[c3d-export] no session.yaml in {_sp}\n"
+              f"[c3d-export] make one first:  bioscout --new-session \"{_sp}\"")
+        sys.exit(1)
+    _s = Session.open(_sp)
+    _trials = ([t.strip() for t in args.trial.split(',')] if getattr(args, 'trial', None)
+               else None)
+    _done = _s.export(trials=_trials, export_src=os.path.abspath(c3d_root(_sp)),
+                      replace=getattr(args, 'replace', False))
+    print(f"[c3d-export] exported {len(_done or [])} trial(s) -> "
+          f"{os.path.join(_sp, '2_experimental')}")
+
+    # Weigh the participant now that the static trial exists. This is the first
+    # moment it is possible, and leaving body_mass null is a trap: everything
+    # normalised to body weight is silently wrong until someone notices.
+    import yaml as _y
+    _yp = os.path.join(_sp, "session.yaml")
+    _c = _y.safe_load(open(_yp, encoding="utf-8")) or {}
+    if _c.get("body_mass") in (None, "", 0):
+        from bioscout.utils.session import body_mass_from_static
+        _m = body_mass_from_static(_sp, _c.get("static_trial"))
+        if _m:
+            # Put it with the other subject facts rather than appending it to
+            # the end of the file: body_mass belongs next to static_trial,
+            # which is the trial it was measured from.
+            _c["body_mass"] = _m
+            _ORDER = ["subject", "session", "static_trial", "body_mass"]
+            _ordered = {_k: _c[_k] for _k in _ORDER if _k in _c}
+            _ordered.update({_k: _v for _k, _v in _c.items() if _k not in _ordered})
+            with open(_yp, "w", encoding="utf-8") as _fh:
+                _y.safe_dump(_ordered, _fh, sort_keys=False, allow_unicode=True)
+            print(f"[c3d-export] body_mass was unset -> wrote {_m} kg into "
+                  f"session.yaml (measured, not entered)")
+        else:
+            print("[c3d-export] body_mass is still unset and could not be "
+                  "measured — set it by hand before anything normalises to BW.")
+    print(f"[c3d-export] next:  bioscout --classifier \"{_sp}\" --write-session-yaml")
+    sys.exit(0)
+
+
 # --- --classifier: movement detection over a whole session -------------------
 if getattr(args, 'classifier', None):
-    import csv as _csv
-    import yaml as _yaml
-    from bioscout.movement_detector import (classify_trial, segment_trial,
-                                            plot_trial_tasks)
-
-    _sess = os.path.abspath(args.classifier)
-    if not os.path.isdir(_sess):
-        print(f"[classifier] session folder not found: {_sess}"); sys.exit(1)
-
-    _exp = None
-    for _name in ("2_experimental", "experimental"):
-        if os.path.isdir(os.path.join(_sess, _name)):
-            _exp = os.path.join(_sess, _name); break
-    if _exp is None:
-        print(f"[classifier] no experimental folder under {_sess}\n"
-              f"[classifier] export the session first: it needs "
-              f"2_experimental/<trial>/marker_experimental.trc")
-        sys.exit(1)
-
-    _ypath = os.path.join(_sess, "session.yaml")
-    _cfg = {}
-    if os.path.isfile(_ypath):
-        try:
-            _cfg = _yaml.safe_load(open(_ypath, encoding="utf-8")) or {}
-        except Exception as _e:
-            print(f"[classifier] could not read session.yaml ({_e}); continuing")
-    _mass = _cfg.get("body_mass")
-    if _mass is None:
-        print("[classifier] no body_mass in session.yaml — force thresholds fall "
-              "back to a fraction of peak, which is less reliable.")
-
-    _trials = sorted(d for d in os.listdir(_exp)
-                     if os.path.isdir(os.path.join(_exp, d)))
-    # Everything this command produces lands together, beside the session it
-    # describes, so the detection travels with the data rather than living in
-    # whichever project happened to run it.
-    _det = os.path.join(_sess, "movement_detection")
-    _plots = os.path.join(_det, "plots")
-    _do_plots = not getattr(args, 'classifier_no_plots', False)
-    _out, _n_multi, _rows, _n_png = {}, 0, [], 0
-    for _t in _trials:
-        _d = os.path.join(_exp, _t)
-        try:
-            _lab, _conf, _why, _f = classify_trial(_d, body_mass=_mass)
-            _segs = segment_trial(_d, body_mass=_mass)
-        except Exception as _e:
-            print(f"  {_t:24} ERROR {type(_e).__name__}: {_e}")
-            continue
-        if len(_segs) > 1:
-            _n_multi += 1
-        _entry = {"type": _lab, "confidence": round(float(_conf), 2),
-                  "reason": _why}
-        if getattr(_f, "cut_direction", ""):
-            _entry["cut_direction"] = _f.cut_direction
-            _entry["cut_angle_deg"] = _f.cut_angle_deg
-        if getattr(_f, "single_support_side", ""):
-            _entry["side"] = _f.single_support_side
-        if getattr(_f, "window_consensus", ()):
-            _entry["time_range"] = list(_f.window_consensus)
-        if _segs:
-            _entry["tasks"] = [
-                {"task": _g.task, "time_range": [_g.t_start, _g.t_end],
-                 **({"side": _g.side} if _g.side else {}),
-                 **({"phases": [{"phase": _p.phase,
-                                 "time_range": [_p.t_start, _p.t_end],
-                                 **({"side": _p.side} if _p.side else {})}
-                                for _p in _g.phases]} if _g.phases else {})}
-                for _g in _segs]
-        _out[_t] = _entry
-
-        _yt = str(((_cfg.get("trials") or {}).get(_t) or {}).get("type", ""))
-        _row = {"trial": _t, "detected": _lab, "session_yaml_type": _yt,
-                "agrees": (_yt == "" or _yt == _lab),
-                "confidence": round(float(_conf), 2), "n_tasks": len(_segs),
-                "reason": _why,
-                "cut_direction": getattr(_f, "cut_direction", ""),
-                "cut_angle_deg": getattr(_f, "cut_angle_deg", ""),
-                "median_speed": getattr(_f, "median_speed", ""),
-                "vertical_rom_m": getattr(_f, "vertical_rom_m", ""),
-                "longest_flight_s": getattr(_f, "longest_flight_s", ""),
-                "peak_vgrf_bw": getattr(_f, "peak_vgrf_bw", ""),
-                "single_support_frac": getattr(_f, "single_support_frac", ""),
-                "tasks": "; ".join(f"{_g.task}[{_g.t_start:.2f}-{_g.t_end:.2f}]"
-                                   for _g in _segs)}
-        for _g, _sfx in zip(_segs, "abcdefghijklmnop"):
-            _row[f"task_{_sfx}"] = _g.task
-            _row[f"task_{_sfx}_start"] = _g.t_start
-            _row[f"task_{_sfx}_end"] = _g.t_end
-        _rows.append(_row)
-
-        if _do_plots:
-            try:
-                if plot_trial_tasks(_d, os.path.join(_plots, f"{_t}.png"),
-                                    body_mass=_mass, segments=_segs):
-                    _n_png += 1
-            except Exception as _e:
-                print(f"  [plot] {_t}: {type(_e).__name__}: {_e}")
-
-        _old = _yt
-        _flag = "" if not _old else ("  ==" if _old == _lab else f"  != session.yaml says {_old}")
-        print(f"  {_t:24} {_lab:18} {len(_segs)} task(s){_flag}")
-
-    _dst = os.path.join(_sess, "session_auto_detection.yaml")
-    _ver = getattr(__import__('bioscout'), '__version__', 'unknown')
-    _doc = {"generated_by": f"bioscout {_ver} --classifier",
-            "session": os.path.basename(_sess),
-            "body_mass": _mass,
-            "note": ("Detected from markers/GRF. This file is NEVER read by the "
-                     "pipeline and never overwrites session.yaml — it is a second "
-                     "opinion to diff against."),
-            "trials": _out}
-    with open(_dst, "w", encoding="utf-8") as _fh:
-        _yaml.safe_dump(_doc, _fh, sort_keys=False, default_flow_style=False)
-    _csv_path = os.path.join(_det, "classification.csv")
-    if _rows:
-        _keys = []
-        for _r in _rows:
-            for _k in _r:
-                if _k not in _keys:
-                    _keys.append(_k)
-        os.makedirs(_det, exist_ok=True)
-        with open(_csv_path, "w", newline="", encoding="utf-8") as _fh:
-            _w = _csv.DictWriter(_fh, fieldnames=_keys)
-            _w.writeheader(); _w.writerows(_rows)
-
-    _dis = [_r for _r in _rows if not _r["agrees"]]
-    print(f"\n[classifier] {len(_out)} trial(s), {_n_multi} with more than one task, "
-          f"{len(_dis)} disagreeing with session.yaml")
-    print(f"[classifier] wrote {_dst}")
-    if _rows:
-        print(f"[classifier] wrote {_csv_path}")
-    print(f"[classifier] wrote {_n_png} figures -> {_plots}" if _do_plots
-          else "[classifier] figures skipped (--no-plots)")
-
-    if not os.path.isfile(_ypath):
-        if getattr(args, 'write_session_yaml', False):
-            _seed = {"session": os.path.basename(_sess), "body_mass": _mass,
-                     "trials": {k: {"type": v["type"]} for k, v in _out.items()}}
-            with open(_ypath, "w", encoding="utf-8") as _fh:
-                _yaml.safe_dump(_seed, _fh, sort_keys=False)
-            print(f"[classifier] no session.yaml existed — seeded {_ypath}")
-            print("[classifier] REVIEW IT: detection is a starting point, not a source of truth.")
-        else:
-            print("[classifier] this session has no session.yaml. "
-                  "Re-run with --write-session-yaml to seed one from the detection.")
+    from bioscout.movement_detector.session import classify_session
+    classify_session(args.classifier,
+                     no_plots=getattr(args, 'classifier_no_plots', False),
+                     write_session_yaml=getattr(args, 'write_session_yaml', False))
     sys.exit(0)
 
 
@@ -1855,8 +1826,57 @@ def main() -> int:
         _models = args.compare_models[0] if len(args.compare_models) == 1 else args.compare_models
         _cmp(_models, out=args.out, setups=_setups, figures=args.figures)
         return 0
+    if args.joint_centres:
+        from bioscout.utils import scale_measurements as _sm
+        _in = os.path.abspath(args.joint_centres)
+        if not os.path.isfile(_in):
+            print(f"[bioscout] TRC not found: {_in}")
+            return 1
+        _out = _sm.augment_static_trc(_in, args.out, verbose=True)
+        if os.path.abspath(_out) == _in:
+            # Same path back means nothing was added — say so rather than let
+            # "done" imply joint centres are now in the file.
+            print(f"[bioscout] no joint centres added — the pelvis (LASI/RASI/"
+                  f"LPSI/RPSI) or knee/ankle markers are missing from {_in}")
+            return 1
+        print(f"[bioscout] wrote {_out}")
+        return 0
+    if getattr(args, 'md2pdf', None):
+        from bioscout.utils.md2pdf import md_to_pdf_many
+        _out = md_to_pdf_many(args.md2pdf, outdir=args.outdir, toc=args.toc,
+                              bibliography=args.bib, keep_docx=args.keep_docx)
+        return 0 if len(_out) == len(args.md2pdf) else 1
     if args.tps is not None:
         return run_tps_mode(args.tps or args.project or os.getcwd())
+    if args.collings is not None:
+        import glob                      # not imported at module scope
+        from bioscout.utils import collings as _collings
+        _sess = os.path.abspath(args.collings or args.project or os.getcwd())
+        # Accept either the session folder or a project/subject above it, and
+        # say which one was used -- passing the project by mistake and getting
+        # "no iterations" is the obvious first way to trip over this.
+        if not os.path.isfile(os.path.join(_sess, 'session.yaml')):
+            _hits = sorted(_g for _g in glob.glob(
+                os.path.join(_sess, '*', '*', 'session.yaml')) +
+                glob.glob(os.path.join(_sess, '*', 'session.yaml')))
+            if len(_hits) == 1:
+                _sess = os.path.dirname(_hits[0])
+                print(f"[collings] using session {_sess}")
+            elif len(_hits) > 1:
+                print("[collings] several sessions below that path -- name one:")
+                for _h in _hits:
+                    print("    " + os.path.dirname(_h))
+                return 1
+            else:
+                print(f"[collings] no session.yaml at or below {_sess}")
+                return 1
+        _trials = ([x.strip() for x in args.trial.split(',') if x.strip()]
+                   if args.trial else None)
+        _w = _collings.collings_session(
+            _sess, skip=args.skip or (), trials=_trials, metric=args.metric,
+            side=args.side, top=args.top,
+            out_dir=(os.path.abspath(args.out) if args.out else None))
+        return 0 if _w else 1
     if args.summary is not None:
         import bioscout
         _sum_project = args.summary or args.project or os.getcwd()

@@ -10,6 +10,507 @@ All notable changes to BioScout are documented here.
 > pipeline runs end to end on a clean session without hand-holding, move to
 > `2.0.0rc1`, then `2.0.0`.
 
+## [2.0.0b20] — 2026-08-11
+
+### Changed — the ghost test fixture is built on the ITERATIVE layout, by bioscout's own tools
+
+`bioscout/tests/_results/simulations/` was still the old shape: trials directly
+under the session, no iteration level, no `session.yaml`. It is now
+
+    KneeGhost/ghost_session/
+        session.yaml
+        1_c3dfiles/  2_experimental/  logs/
+        3_iterations/ghost/
+            knee.osim  ExtFlex_01/  ExtFlex_02/  ceinms_calibration/
+
+built by `build_ghost_session()` through `scaffold_session_yaml` and the
+`session_layout` resolvers rather than by joining folder names. That makes this
+the only coverage that session CREATION produces a session `Session.open` will
+accept, and a layout change can no longer pass here while breaking real
+projects. `ceinms_calibration/` moved INSIDE the iteration: the calibrated
+subject belongs to one model variant, not to the session.
+
+### Added — `TestGhostSessionLayout`, which does not skip
+
+Four checks — numbered layout, the iteration under `3_iterations/`, the
+`session.yaml` round-trip, and `Session.open` finding the iteration — with no
+OpenSim required, running first in the suite. Every other knee test self-skips
+without OpenSim, which is exactly why the layout assertions must not sit behind
+that skip.
+
+### Fixed — the fixture wipe failed silently and the next run built on top of it
+
+`shutil.rmtree(SIM_ROOT, ignore_errors=True)` is the obvious call and the wrong
+one: files copied from a read-only source carry the read-only bit, and on
+Windows the unlink then fails. With errors ignored nothing was reported, so a
+new-layout session was being written over the old flat-layout one — a fixture
+half old, half new, and passing. `_wipe()` clears the bit, retries, and asserts
+the path is gone.
+
+### Changed — the bundled `settings.py` template caught up with the project
+
+`muscle_opt_skip_coords` and `muscle_opt_ma_tol` (the Modenese grid is
+`N**nDOF`; two unlocked secondary DOFs were 34 of a 39-minute run), and an
+explicit `dof_set` literal with `knee_adduction` dropped per t23 — derived from
+`dof_list` it changed silently whenever `dof_list` did. Project run state
+(`ITERATIONS`, `TRIALS`, the `DO_*` switches) deliberately not ported.
+
+### Added — `docs/SESSION_LAYOUT.md`
+
+The layout, the resolver table, how to create a session end to end, which
+`settings.py` is which, and how the fixture proves it.
+
+### Changed — README restructured
+
+The README opened with a "Session-centric YAML layout (2.x)" block and then
+described a *different*, older layout under "Project layout" further down — two
+trees, neither matching what bioscout writes today. Both are gone, replaced by
+one **Project structure** section that documents the numbered layout
+(`1_c3dfiles/`, `2_experimental/`, `3_iterations/<iteration>/`), explains why the
+three levels are separate, states the `session.yaml`-outranks-`settings.py` rule,
+and carries the `session_layout` resolver table with the warning not to cache a
+resolver in a module constant.
+
+The hero is now a **Why BioScout** introduction — the comparison-of-model-variants
+problem the session/iteration split exists to solve — rather than a folder tree.
+
+Also merged the two near-identically named `settings.py` sections ("Configuring a
+project" and "Running a project") into one.
+
+### Removed — repository cleanup
+
+`documentation/` (122 tracked `.md` files from the GUI era —
+`ALL_FIXES_SUMMARY_MAY_20_2026.md`, `APP_FIXES_FINAL.md`,
+`BATCH_EXPORT_FIX_v2.md` and so on) archived to `_to_delete/`. Nothing
+referenced it: not `MANIFEST.in`, not `setup.py`, not the README. It is all in
+git history if it is ever wanted.
+
+`guide/` folded into `docs/` — `git_commands.md` → `GIT_COMMANDS.md`,
+`steps_to_upload_to_pip.md` → `RELEASING_TO_PIP.md`, `bops_issues.md` →
+`BOPS_ISSUES.md`. `docs/` is now the one documentation folder.
+
+The one-off CEINMS packaging script (`finish_ceinms_pkg.py`) and the `ceinms/`
+manifest folder it wrote were archived too.
+
+### Removed — backup-file litter
+
+The 17 `*.pre_*` / `*.bak_*` files and the stale gitignored root `settings.py`
+moved to `_to_delete/cleanup_2026-08-11/`. One of them,
+`bioscout/utils/session.py.bak_ceinmsprep`, was actually TRACKED — `.gitignore`
+never applied to it because it was already in the index.
+
+## [2.0.0b19] — 2026-08-11
+
+### Fixed — the Muscle Analysis stage logged one trial out of eight, and never a path
+
+An 8-trial MA stage wrote a single progress line (`[MA] Squat_35kg_01 -
+running`) and then nothing, while all eight trials ran to completion on disk.
+Two causes:
+
+- `settings.LOG_TYPE = "minimal"` is a WHITELIST and `_KEEP_MINIMAL` never
+  matched `[MA]` / `[MA ok]` / the indented `inputs -` line. The first line
+  survived only because `_Tee` keeps an indented line whose predecessor was
+  kept, and it followed the stage banner; the next unindented OpenSim print
+  broke that chain. `[SO]`, `[IK]`, `[ID]`, `[JRA]` and `[exbiomec]` were in
+  the same position.
+- `Analyse.run_ma` logged its success with `terminal=False`, so the line
+  naming the output folder reached `log.txt` only, never the run log —
+  `run_so` had already been fixed this way, `run_ma` had not.
+
+Now: those tags are whitelisted (`_QUIET_DROP` still drops the `... ok]`
+completions in `quiet`), `run_ma` logs its absolute output dir with
+`terminal=True`, and the session line is `[MA ok] <trial> -> <dir>`.
+
+Regression test: `tests/MAcost/t2_ma_log.py` in the Powerlifting project —
+pushes the stage's exact line sequence through the real `_Tee` at all three
+verbosities, no OpenSim needed.
+
+## [2.0.0b17] — 2026-08-10
+
+### Fixed — CEINMS JRA wrote a confidently wrong contact force when SO was absent
+
+`run_jra_ceinms` calls `add_so_columns_to_ceinms_results` first, which appends
+the SO force file's residual, reserve and GRF columns to the CEINMS forces so
+the JointReaction has the full actuator set. When the SO force file is missing
+that helper logged an error and returned — and the JRA ran anyway, on a forces
+file with muscles only.
+
+The result is not merely inaccurate. Without the residuals the JointReaction
+cannot balance the dynamics, so it reports the imbalance instead of the contact
+force: ~100x too large, **and no longer a function of the muscle forces at
+all**. Every arm of a comparison therefore gets the SAME wrong number, in a
+file that looks entirely ordinary. t25's variance smoke run produced hip
+32.36 BW and knee 32.23 BW byte-identical across four arms whose muscle forces
+differed by three orders of magnitude; t14's 353 BW hip was the same failure.
+
+It now refuses: no JRA is run, any earlier output is removed (a stale file is
+worse than a missing one, because everything downstream reads it happily), and
+the error names the file to copy. `Analyse.jra_allow_unbalanced = True` opts
+back in. `add_so_columns_to_ceinms_results` returns True/False instead of None.
+
+
+### Fixed — an UNCALIBRATED arm could not build its own excitation generator
+
+`save_pretty_xml` opened the file without creating its parent directory. For a
+calibrated iteration that never mattered: `run_ceinms_calibration` makes
+`ceinms_calibration/` before anything writes into it. An UNCALIBRATED
+iteration skips calibration entirely and goes straight to
+`create_excitation_generator`, so on a fresh arm the folder did not exist and
+the write died with `FileNotFoundError`.
+
+It failed loudly in the log and silently everywhere else: bioscout catches
+CEINMS errors and logs them, so `Iteration.run` returned normally and the
+caller reported **"ok 0.5 min"** for an arm that produced nothing at all. Every
+uncalibrated arm on a session that had not already calibrated hit this — which
+is every session where the uncalibrated model is used as the control it exists
+to be. `save_pretty_xml` now creates the parent directory; every XML writer in
+the package goes through it.
+
+
+### Added — `calibrated:` is an ITERATION key too, not only a session one
+
+b15 put `calibrated: false` in the session-wide `ceinms:` block, which makes an
+uncalibrated arm a whole separate session — the same drift `emg_map` and
+`calibration:` were moved into the file to end. It is now also an iteration
+key, so the control lives beside the arms it is the control for:
+
+```yaml
+ceinms: {alpha: 1, beta: 1, gamma: 30}
+iterations:
+  cateli__b0.75-1.25: {calibration: b0.75-1.25}
+  cateli__uncalibrated: {calibrated: false}    # the control, same session
+```
+
+The session-wide flag still sets the default for every iteration; the
+iteration overrides it, either way round. Everything else b15 built is
+unchanged — no calibration runs for that iteration whatever `calibrate=` says,
+and its output still lands in `Execution_uncal_*`.
+
+An uncalibrated iteration no longer has to name a `calibration:` config. With
+several configs defined, an iteration naming none normally refuses to load —
+correctly, because a silently-defaulted bound is invisible in the output. But
+an iteration that calibrates NOTHING has no bound to choose, and forcing a
+selector into it would put a value in the file that is never read. `load_session_yaml`
+skips those, `trial_config` omits `calibration_params` for them, and a
+CALIBRATED iteration still has to choose. New: `iteration_is_calibrated`.
+
+Covered by `bioscout/tests/test_uncalibrated_per_iteration.py` (14).
+
+### Fixed — `trial_config` crashed on the list form of `iterations:`
+
+`read_session_yaml` has always accepted `iterations` as a LIST of blocks each
+carrying a `name`. `Iteration.trial_config` read it with a raw
+`.get(self.iteration)`, so on a list-form session it raised
+`AttributeError: 'list' object has no attribute 'get'` before resolving any
+model file. It goes through `_iteration_blocks` now, like every other reader.
+
+## [2.0.0b16] — 2026-08-10
+
+### Added — the `calibration:` block now carries the OPTIMISER, not just the bounds
+
+`calibration:` has held the six parameter bounds since b14. It now also holds
+how the calibration *searches*:
+
+```yaml
+calibration:
+  lr0.020__r01: {learningRate: 0.02,  optimalFiberLength: "0.5 3"}
+  lr0.005__r01: {learningRate: 0.005, optimalFiberLength: "0.5 3"}
+iterations:
+  cateli__lr0.005__r01: {calibration: lr0.005__r01}
+```
+
+Accepted, in either spelling: `learningRate`/`learning_rate`,
+`maxIterations`/`max_iterations`, `patience`/`early_stopping_patience`,
+`minImprovement`/`early_stopping_min_improvement`,
+`numberOfSynergies`/`num_synergies`, plus `learningRateDecay`+`minLearningRate`
+(emitted only when asked for — the reference cfg ships that block commented
+out, so this build's support for it is unproven).
+
+Precedence is unchanged and partial: the iteration beats `settings.py` beats
+the built-in default, and a config naming only `learningRate` leaves every
+other optimiser setting alone.
+
+### Why
+
+`learning_rate` was a `settings.py` global, so comparing 0.02 with 0.005 meant
+monkeypatching `sys.modules["settings"].CEINMSSettings` between
+`Session.open()` and `run()` — a mutation that left **no trace in the session
+it produced**. The only record of which arm ran under which rate was the
+sweeping script's memory of what it had just set. That is precisely the defect
+`calibration:` was introduced to end for the bounds.
+
+### Fixed — an optimiser key could become a bound, silently
+
+Before this, an unrecognised key in `calibration:` was passed through to
+`parametersToCalibrate`. `{learningRate: 0.005}` therefore emitted
+`<parameter name="learningRate">0.005</parameter>`: CEINMS ignored it, the
+learning rate stayed at 0.02, and nothing anywhere said so. Optimiser keys are
+now filtered out of `calibration_param_ranges` by name and routed to
+`<optimiser>`; a genuine typo still falls through to the bounds and still
+raises the load-time warning, so a mistake stays visible instead of vanishing.
+
+### API
+
+`bioscout.utils.ceinms.configs.calibration_optimiser_settings(params, override)`
+and `is_optimiser_key(key)`; `bioscout.utils.session.CALIBRATION_OPTIMISER_NAMES`.
+`_OPTIMISER_ALIASES` in `configs.py` and `CALIBRATION_OPTIMISER_NAMES` in
+`session.py` are the two halves of one list — keep them in step, exactly as
+`_PARAM_ALIASES`/`CALIBRATION_PARAM_NAMES` already have to be.
+
+Tests: `bioscout/tests/test_calibration_optimiser.py`.
+Consumer: `tests/GPKv3/t25_calibration_variance` (Powerlifting) — the
+calibration-variance and learning-rate test this was written for.
+
+## [2.0.0b15] — 2026-08-10
+
+### Added — execute CEINMS against the UNCALIBRATED subject model
+
+CEINMS execution has only ever been driven by `subjectCalibrated.xml`. There
+was no way to ask for the other one — `subjectUncalibrated.xml`, the subject
+XML `create_ceinms_model()` writes straight from the .osim, carrying OpenSim's
+own optimal fibre lengths, tendon slack lengths, pennation angles and max
+isometric forces with nothing fitted to the subject.
+
+That file is the control a calibrated result has to beat. Without it,
+"calibration changed the forces" has no baseline: every arm of every test so
+far has been one calibration compared with another calibration.
+
+```yaml
+ceinms:
+  gamma: 30
+  calibrated: false          # execute against subjectUncalibrated.xml
+```
+
+Declared in session.yaml, like `emg_map` and `calibration`, so the session that
+produced a result RECORDS which subject model made it. What it does:
+
+- `Iteration.run(do_ceinms=True)` runs **no calibration at all** for that
+  iteration, whatever `calibrate=` says — calibrating and then executing
+  against the uncalibrated subject would burn ten minutes on a file nothing
+  reads, in a run that looks calibrated in every log.
+- `Session.prepare_uncalibrated_ceinms()` builds the three things execution
+  still needs — normalised EMG, the excitation generator, and the uncalibrated
+  subject XML — and stops. An uncalibrated arm therefore costs execution time
+  only.
+- Execution output goes to `Execution_uncal_a1_b1_g30`. A calibrated and an
+  uncalibrated solve of the same trial at the same weights would otherwise
+  write to the same folder and one would silently overwrite the other. The tag
+  still matches the `Execution_*` glob `ceinms.modes` finds solves by.
+- `run_ceinms_exe_single` rebuilds the cached cfg + setup when the setup on
+  disk names a **different** subject file, so a trial solved once as calibrated
+  cannot keep solving calibrated after the iteration switched.
+
+New on `Analyse`: `ceinms_is_calibrated`, `ceinms_execution_subject`,
+`ceinms_exe_tag`, `ceinms_exe_out_rel()`. The last one replaces two
+independent format strings that built the execution folder name — write it
+one way, read it the other, and a solve lands where nothing looks for it.
+New in `session`: `yaml_bool`, because a quoted `"false"` is a string and
+`bool("false")` is True.
+
+Nothing changes for a session that does not mention the flag: no key reaches
+the trial config and the folder names are unchanged.
+Covered by `bioscout/tests/test_uncalibrated_execution.py` (31).
+
+## [2.0.0b14] — 2026-08-10
+
+### Added — several NAMED `calibration` configs, picked per iteration
+
+Same shape as the named `emg_map`s below, for CEINMS's calibration parameter
+bounds. They were one global value in `settings.py`, so a bound sweep meant one
+copied session per bound plus a runtime monkeypatch of
+`sys.modules["settings"].CEINMSSettings` between `Session.open()` and `run()` —
+a mutation with no record in the session it produced.
+
+```yaml
+calibration:
+  wide:  {optimalFiberLength: "0.5 3",        tendonSlackLength: "0.5 3"}
+  tight: {optimal_fiber_length: [0.75, 1.25], tendon_slack_length: "0.75 1.25"}
+default_calibration: wide
+iterations:
+  cateli__tight: {generic: Catelli.osim, calibration: tight, ...}
+```
+
+One flat block or several named ones, told apart by value type; ambiguity
+refuses to load; the resolved bounds reach `Analyse` as `calibration_params`
+and `create_calibrationCfg` applies them over `settings.py`. The override is
+PARTIAL — a config naming one bound leaves the rest alone.
+
+Because both features now share `_is_named` and `_select_name`, the two cannot
+drift into behaving differently. New helpers: `calibration_configs`,
+`resolve_calibration`, `calibration_name_for`, `is_named_calibration`;
+`SessionSpec.calibrations` / `default_calibration`, `Model.calibration`.
+Covered by `bioscout/tests/test_calibration_configs.py`.
+
+### Fixed — four of six calibration ranges in `settings.py` were unreachable
+
+`create_calibrationCfg` read `optimalFiberLength`, `tendonSlackLength`,
+`shapefactor` and `strengthCoefficient`; every project `settings.py` declares
+`optimal_fiber_length`, `tendon_slack_length`, `shape_factor` and
+`strength_coefficient`. The `getattr` always missed and the hard-coded literal
+was used, so **editing those four in `settings.py` did nothing, silently** —
+only `c1` and `c2` were ever live. No number was wrong, because the literals
+happened to equal the declared values, which is exactly why it went unnoticed.
+Both spellings are now accepted and canonicalised, in `settings.py` and in the
+new `calibration:` block alike.
+
+## [2.0.0b13] — 2026-08-10
+
+### Added — several NAMED `emg_map`s in one session, picked per iteration
+
+How EMG channels are grouped onto model muscles is a modelling choice, but it
+was the one modelling choice that could not live in an iteration. Testing three
+electrode groupings of the same recording meant three whole COPIED sessions
+(`arms/A_narrow`, `arms/B_triceps`, `arms/C_wide`), each with the same subject,
+the same trials, the same windows and the same experimental inputs, differing
+in one dict. Three places to fix a time range, three chances to fix two of them.
+
+`emg_map` may now hold named sub-maps, with each iteration naming the one it
+runs with:
+
+```yaml
+emg_map:
+  narrow:  {EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l]}
+  triceps: {EMG_Channels_EMG09_gast_med_l: [gasmed_l, gaslat_l, soleus_l]}
+default_emg_map: narrow        # optional: what a silent iteration gets
+iterations:
+  cateli_narrow:  {generic: Catelli.osim, emg_map: narrow}
+  cateli_triceps: {generic: Catelli.osim, emg_map: triceps}
+```
+
+Nothing existing changes. The two forms are told apart by VALUE TYPE — a
+channel maps to a list of muscles, a named map to a mapping of channels — so
+every flat `emg_map` on disk parses exactly as before, and a flat file still
+writes back out flat. Resolution runs in `Iteration.trial_config`, so by the
+time `Analyse` sees `self.emg_map` it is one flat map, and everything
+downstream (`emg_channel_map`, the excitation generator, CEINMS calibration)
+is untouched. The iteration's resolved name also lands on the trial as
+`emg_map_name`.
+
+Ambiguity is an ERROR, not a default. With more than one map and no way to
+choose — no iteration selector, no `default_emg_map`, no map called `default` —
+`load_session_yaml` refuses the file. So does a selector naming a map that
+does not exist, a selector on a flat `emg_map`, an inline channel map inside an
+iteration, a block mixing named maps with bare channels, and two names
+differing only by case. All of them fail at load, because the alternative is a
+run that finishes normally hours later having used the wrong electrode set,
+with nothing in the output to say so.
+
+New public helpers in `bioscout.utils.session`: `emg_maps`, `resolve_emg_map`,
+`emg_map_name_for`, `is_named_emg_map`. `SessionSpec` gains
+`emg_muscle_mappings` / `default_emg_map` / `emg_map_for(model)` and `Model`
+gains `emg_map`; `SessionSpec.emg_muscle_mapping` still holds the session
+default, so existing readers are unaffected. `session.xml` carries the
+per-model selector but cannot hold the maps themselves — writing a multi-map
+session to XML now warns instead of quietly keeping one. Adding an iteration
+from the GUI pins a map when the session has several and no default, so the
+new block cannot make the file unloadable. Covered by
+`bioscout/tests/test_emg_maps.py`.
+
+### Fixed — two consumers never honoured `session.yaml`'s `emg_map` at all
+
+`plot_summary`'s EMG-vs-activation panel read `settings.EMG_muscle_mapping`,
+which no `settings.py` has ever defined — not the project's, not the bundled
+template. The panel raised on every call and the exception was swallowed
+upstream, so the row simply drew nothing and had done since it was written. It
+now calls `analysis.emg_channel_map()` like the rest of the pipeline. Getting
+past that first line exposed two more: the RMSE/R² box scored against
+`emg_col`, a leaked loop variable — undefined for any DOF with no mapped
+channel (`pelvis_tilt`, `lumbar_extension`), and otherwise whichever channel
+the loop happened to end on. It now scores against the mean of every mapped
+channel, and skips muscles the activation file does not contain.
+
+`summary.py` read only `settings.BatchSettings.emg_muscle_mapping`, so a
+per-session (let alone per-iteration) map never reached the trial summaries. It
+now walks up to the trial's own `session.yaml` and resolves the map for the
+iteration the trial sits in, falling back to `settings.py` when there is none.
+The walk skips the `3_iterations/` wrapper level, without which every trial on
+the numbered layout would infer no iteration and silently take the default map.
+
+## [2.0.0b11] — 2026-08-10
+
+### Fixed — the wheel could not be published at all (284 MB vs PyPI's 100 MB)
+
+`ceinms.py` ships `torch_cpu.zip` (76 MB) and extracts `torch_cpu.dll`
+(252 MB) from it on first run. But `package_data` listed `*.dll`, which swept up
+the EXTRACTED dll from whichever machine built the wheel, while `*.zip` was in
+neither `package_data` nor `MANIFEST.in` — so the wheel carried the huge file
+the zip existed to avoid AND omitted the zip, leaving the extraction with no
+input. Both wrong, and they cancelled into "cannot release".
+
+`MANIFEST.in` now includes `*.zip` and excludes `torch_cpu.dll`; `setup.py`
+gains `exclude_package_data`, because a package_data glob cannot say "every dll
+except this one". Measured: **87.3 MB**, 12.7 MB inside the limit, zip present
+and dll absent.
+
+### Fixed — adding an iteration corrupted session.yaml
+
+Duplicating an iteration copied the source block PLUS the following line, so
+`+ Add iteration` on `cateli` also wrote a second `lernagopal:` key.
+`load_session_yaml` rejects duplicate keys, so the next `Session.open` raised
+and every run of that session failed. For a block mapping YAML's `end_mark`
+sits at the start of the NEXT key — the parser only knows the block ended once
+it sees a shallower token. Entry bounds are found by indentation now.
+`delete_entry` had the same bug and was worse: it deleted the following
+iteration's key line, merging its settings into the wrong entry.
+
+### Fixed — the GRF window's lines never moved on matplotlib >= 3.10
+
+`axvspan` returns a `Rectangle` there and a `Polygon` before it;
+`Rectangle.set_xy` takes a corner, so a polygon path raised — and the redraw is
+defensive, so it was swallowed: the numbers moved and the plot did not.
+
+### Added — sliders for the trial window, and a dependency error worth reading
+
+Start/end sliders under the GRF plot drag their dashed line and the shaded band
+live, cannot cross, and sit beside an "Update session.yaml" button. Separately,
+a missing dependency now names the package AND the command that installs it
+(`bioscout --env-create`, or `uv pip install -r "<path>"` — quoted, because
+git-bash eats backslashes in a bare Windows path) instead of a bare
+ModuleNotFoundError.
+
+### Changed — bundled settings.py template refreshed from the study project
+
+### Changed — one `validation/` folder per iteration, one rule for its name
+
+Every report *about* a model now goes to `<model_dir>/validation/<model_stem>/`
+instead of a `muscle_inspect_<stem>/` folder sitting directly in the iteration
+folder. An iteration folder is models plus `validation/`, and everything written
+about a given model sits together under that model's name:
+
+    cateli/
+        scaled.osim
+        scaled_opt_N10.osim                 <- CEINMS model
+        scaled_opt_N10_mvicx3.00.osim       <- SO model
+        scale_factors.xml
+        validation/
+            scaled_opt_N10/
+            scaled_opt_N10_mvicx3.00/
+                moment_arm_change/
+
+The point is not tidiness. The folder name was computed independently in five
+places — `muscle_inspect.run_moment_arm_inspection`, `.run_muscle_checker`,
+`.__main__`, `tps_personalise.bioscout_adapter` (which only *reported* the path,
+so it could disagree with the tool that wrote it) and
+`change_moment_arms.inspection` (`moment_arm_change_<stem>/`). All five now call
+`muscle_inspect.paths.validation_dir(model, kind=..., out=...)`. `--out` still
+wins wherever it was accepted.
+
+`paths.is_report_dir()` replaces the three ad-hoc `"muscle_inspect" not in str(p)`
+string tests in `change_moment_arms.cli`, so a model picker cannot offer a figure
+folder as a model. It also matches the legacy names, so old sessions stay safe.
+
+**Not migrated.** Nothing reads these folders, so there is no fallback and no
+auto-move: old `muscle_inspect_*/` folders keep sitting where they are until you
+move or delete them, and the next run writes to the new place. Note that reports
+generated before a model was rebuilt describe a model that no longer exists —
+worth checking the dates before trusting one.
+
+### Added
+
+* `bioscout/tests/test_validation_paths.py` (13 tests, pure stdlib, wired into
+  `tests.suite()`) — pins the layout, the `kind=` sub-folder, `--out` precedence,
+  and that an iteration's SO and CEINMS models cannot collide.
+
 ## [2.0.0b10] — 2026-08-07
 
 ### Added — Trial Analysis rebuilt around a stage's real inputs

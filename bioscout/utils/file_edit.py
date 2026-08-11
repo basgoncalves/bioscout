@@ -606,15 +606,54 @@ class YamlDocument(Document):
             return self.map_node(key)
         raise ValueError(f"'{key}' exists but is not a mapping")
 
+    def _entry_bounds(self, knode, vnode) -> Tuple[int, int]:
+        """Character span of one block-mapping entry, key line to last child line.
+
+        NOT derivable from ``vnode.end_mark``: for a block mapping that mark sits
+        at the start of the NEXT key, because YAML only knows the block ended
+        once it sees a token at a shallower indent. Trusting it made
+        ``entry_source`` return cateli's block *plus the following*
+        ``lernagopal:`` line, so duplicating an iteration wrote a duplicate key
+        and session.yaml stopped loading (its loader rejects duplicates); and it
+        made ``delete_entry`` remove the next entry's key line as well.
+
+        So the end is found by indentation instead: a line belongs to the entry
+        while it is blank or indented deeper than the key. Trailing blank and
+        comment lines are then given back — they lead into whatever follows.
+        """
+        start, _ = self._line_bounds(knode.start_mark.index)
+        indent = knode.start_mark.column
+        limit = max(vnode.end_mark.index, knode.start_mark.index)
+        pos = self._line_bounds(knode.start_mark.index)[1]
+        end = pos
+        while pos < len(self.text) and pos <= limit:
+            ls, le = pos, self.text.find("\n", pos)
+            le = len(self.text) if le == -1 else le + 1
+            line = self.text[ls:le]
+            stripped = line.strip()
+            if stripped:
+                col = len(line) - len(line.lstrip())
+                if col <= indent:
+                    break              # a sibling key (or a dedented comment)
+                end = le                # a child line — part of this entry
+            pos = le
+            if le == ls:
+                break
+        return start, end
+
     def entry_source(self, map_node, key) -> Optional[str]:
         """The raw source lines of ``key`` within *map_node* (block style only)."""
         for knode, vnode in map_node.value:
             if str(knode.value) != str(key):
                 continue
-            s, _ = self._line_bounds(knode.start_mark.index)
-            _, e = self._line_bounds(max(vnode.end_mark.index - 1, knode.start_mark.index))
+            s, e = self._entry_bounds(knode, vnode)
             return self.text[s:e]
         return None
+
+    def _mapping_end(self, map_node) -> int:
+        """Offset just past the LAST entry of a block mapping."""
+        knode, vnode = map_node.value[-1]
+        return self._entry_bounds(knode, vnode)[1]
 
     def add_entry(self, map_node, key: str, value_src: str = "{}") -> None:
         """Append ``key: value_src`` to *map_node*, matching its indentation."""
@@ -629,8 +668,7 @@ class YamlDocument(Document):
             if map_node.value:
                 first_key = map_node.value[0][0]
                 indent = " " * first_key.start_mark.column
-                last_val = map_node.value[-1][1]
-                _, end = self._line_bounds(max(last_val.end_mark.index - 1, 0))
+                end = self._mapping_end(map_node)
             else:
                 indent, end = "  ", map_node.end_mark.index
             block = f"{indent}{key}: {value_src}\n"
@@ -647,9 +685,9 @@ class YamlDocument(Document):
         indent = first_line[:len(first_line) - len(stripped)]
         _, _, after_key = stripped.partition(":")
         block = f"{indent}{new_key}:{after_key}\n" + (rest if rest else "")
-        last_val = map_node.value[-1][1]
-        _, end = self._line_bounds(max(last_val.end_mark.index - 1, 0))
-        self._inserts.append((end, block))
+        if not block.endswith("\n"):
+            block += "\n"
+        self._inserts.append((self._mapping_end(map_node), block))
         self.apply_staged()
 
     def delete_entry(self, map_node, key) -> None:
@@ -660,8 +698,7 @@ class YamlDocument(Document):
             if map_node.flow_style:
                 raise ValueError("cannot delete from an inline {a: 1, b: 2} "
                                  "mapping — edit it as text instead")
-            s, _ = self._line_bounds(knode.start_mark.index)
-            _, e = self._line_bounds(max(vnode.end_mark.index - 1, knode.start_mark.index))
+            s, e = self._entry_bounds(knode, vnode)
             self._edits[(s, e)] = ""
             self.apply_staged()
             return

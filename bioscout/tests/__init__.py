@@ -65,6 +65,15 @@ def suite():
             s.addTests(loader.loadTestsFromTestCase(_cls))
     except Exception as _e:  # pragma: no cover
         print(f"[tests] model_edit tests unavailable: {_e}")
+    # validation paths: the one rule for where a report about a model goes.
+    # Pure stdlib, so it always runs — and it is the only thing pinning the
+    # five call sites that used to compute the folder name independently.
+    try:
+        from . import test_validation_paths as _vp
+        for _cls in (_vp.TestValidationDir, _vp.TestIsReportDir):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] validation path tests unavailable: {_e}")
     # file_edit: config-file editing (session.yaml / OpenSim XML / JSON).
     # Pure stdlib + PyYAML, so it always runs. Pins that a YAML edit is
     # surgical — losing session.yaml's comments is silent and unrecoverable.
@@ -79,9 +88,17 @@ def suite():
     # OpenSim/CEINMS knee integration tests — optional. They self-skip when
     # OpenSim (or the CEINMS binary) isn't available; the import is guarded so a
     # problem there can never break the lightweight suite.
+    #
+    # TestGhostSessionLayout is FIRST and is NOT skipped: it checks that the
+    # ghost session the others run inside was created correctly (numbered
+    # layout, iteration under 3_iterations/, a session.yaml that Session.open
+    # accepts). That is session-creation coverage, needs no OpenSim, and would
+    # otherwise be skipped away on exactly the machines most likely to have a
+    # layout problem.
     try:
         from . import test_knee_pipeline as _knee
-        for cls in (_knee.TestKneeModelBuild, _knee.TestKneeOpenSim,
+        for cls in (_knee.TestGhostSessionLayout,
+                    _knee.TestKneeModelBuild, _knee.TestKneeOpenSim,
                     _knee.TestKneeCEINMSWiring, _knee.TestKneeCEINMSCalibration,
                     _knee.TestKneeCEINMSPipeline):
             s.addTests(loader.loadTestsFromTestCase(cls))

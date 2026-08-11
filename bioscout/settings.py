@@ -5,11 +5,11 @@ This is the default settings module shipped inside bioscout.
 falls back to it when a project has no settings.py of its own. A real
 project edits its OWN copy — KEEP THIS FILE.
 
-``__version__`` here is the settings-SCHEMA version: what a project pins to
-say which shape of settings.py it was written against.
-``check_settings_version`` compares its MAJOR.MINOR against a project's own
-value. It is an INDEPENDENT series from the bioscout package version —
-bump it only when the SHAPE of settings.py changes.
+``__version__`` here is the settings-SCHEMA version, an INDEPENDENT series
+from the bioscout package version: it is what a project pins to say which
+SHAPE of settings.py it was written against, and
+``check_settings_version`` compares its MAJOR.MINOR against a project's
+own value. Bump it only when that shape actually changes.
 
 Running a project copy of this file directly:
 
@@ -31,9 +31,8 @@ from pathlib import Path
 
 # Guarded: this BUNDLED template is exec'd by bioscout DURING its own
 # import, so a bare top-level import of bioscout.utils.* would be circular
-# (utils.analysis is not assigned yet). The try/except lets it load with
-# safe stubs; a real project's own settings.py — loaded after bioscout is
-# ready — takes the real imports and never needs the fallback.
+# (utils.analysis is not assigned yet). A real project's own settings.py —
+# loaded after bioscout is ready — takes the real imports.
 try:
     from bioscout.utils.analysis import (
         Subject, build_model_config, select_subjects, sessions_from_subjects,
@@ -74,16 +73,23 @@ CAPTURES = {
         emg_bandpass_high_hz=450.0,
         grf_plate_force_sign={1: {"vx": -1}},
         emg_muscle_mapping={
+            # NARROWED, and it must stay in step with session.yaml's emg_map --
+            # that file outranks this one at run time (Session.trial_config), so
+            # if the two drift, this dict is the one that silently does nothing.
+            # gast_med drives ONLY the two gastrocnemii: it is a two-joint
+            # muscle and its signal says nothing about soleus, the peroneals,
+            # tibialis posterior or the toe flexors. rect_fem likewise drives
+            # only rectus femoris, not sartorius and TFL.
             "EMG_Channels_EMG01_vast_lat_l":  ["vaslat_l", "vasmed_l", "vasint_l"],
-            "EMG_Channels_EMG03_rect_fem_l":  ["recfem_l", "sart_l", "tfl_l"],
+            "EMG_Channels_EMG03_rect_fem_l":  ["recfem_l"],
             "EMG_Channels_EMG05_bic_fem_l":   ["bflh_l", "bfsh_l", "semimem_l", "semiten_l"],
             "EMG_Channels_EMG07_glut_l":      ["glmed1_l", "glmed2_l", "glmed3_l"],
-            "EMG_Channels_EMG09_gast_med_l":  ["fdl_l", "fhl_l", "gasmed_l", "gaslat_l", "perbrev_l", "perlong_l", "soleus_l", "tibpost_l"],
+            "EMG_Channels_EMG09_gast_med_l":  ["gasmed_l", "gaslat_l"],
             "EMG_Channels_EMG02_vast_lat_r":  ["vaslat_r", "vasmed_r", "vasint_r"],
-            "EMG_Channels_EMG04_rect_fem_r":  ["recfem_r", "sart_r", "tfl_r"],
+            "EMG_Channels_EMG04_rect_fem_r":  ["recfem_r"],
             "EMG_Channels_EMG06_bic_fem_r":   ["bflh_r", "bfsh_r", "semimem_r", "semiten_r"],
             "EMG_Channels_EMG08_glut_r":      ["glmed1_r", "glmed2_r", "glmed3_r"],
-            "EMG_Channels_EMG10_gast_med_r":  ["fdl_r", "fhl_r", "gasmed_r", "gaslat_r", "perbrev_r", "perlong_r", "soleus_r", "tibpost_r"],
+            "EMG_Channels_EMG10_gast_med_r":  ["gasmed_r", "gaslat_r"],
         },
         tps_landmarks=("mri", "Athlete_03", "orientation_Katya.mrk.json"),
         tps_iterations=["cateli_mri", "lernagopal_mri", "gpk_mri"],
@@ -148,15 +154,43 @@ STATIC_TRIAL = CAPTURE["static_trial"]
 CAL_TRIALS  = list(CAPTURE["cal_trials"])
 REPLACE      = True
 # -- stages, in pipeline order -----------------------------------------------
+#
+#  SET FOR THE a1 b1 g30 CEINMS RE-RUN (2026-08-10). Only the CEINMS execution
+#  weights changed, so only CEINMS and what depends on it is rebuilt:
+#
+#    scaling / IK / ID / MA / SO  are inputs to CEINMS, not outputs of it, and
+#    nothing about them changed -- re-running them would burn hours to write
+#    byte-identical files. They are already on disk and were NOT backed up.
+#
+#    CALIBRATE = False is deliberate, and is the switch to check first if the
+#    results look wrong. The calibrated model depends on the CALIBRATION
+#    objective (see CEINMSSettings.objective_functions) and on the excitation
+#    generator -- NOT on alpha/beta/gamma, which are execution-only weights.
+#    The generators on disk were rebuilt on 2026-08-08 with the narrowed EMG
+#    map already in force: 26 prescribed excitations, soleus correctly absent.
+#    So they are current. Set this True only if the EMG map, the calibration
+#    trials or the calibration objective change.
+#
+#  To go back to a full rebuild: DO_SCALE / DO_MA / DO_SO / CALIBRATE = True.
 DO_EXPORT   = False
 EXPORT_SRC  = None
-DO_SCALE    = True
+# Movement detection: classify every exported trial from its markers/GRF and
+# write session_auto_detection.yaml + movement_detection/ beside the session.
+# Runs straight after export because that is when the .trc and grf.mot it reads
+# first exist, and because a wrong trial type in session.yaml is cheapest to
+# catch before it has been carried through IK, ID, SO and CEINMS.
+DO_DETECT   = False
+# True = also correct session.yaml's trial types from the detection (the old
+# file is kept as session.yaml.pre_detection). Leave False to only write
+# session_auto_detection.yaml and review it by hand first.
+DETECT_WRITE_YAML = False
+DO_SCALE    = False
 MUSCLE_OPT  = None
 DO_EXBIOMEC = False
-DO_MA       = True
-DO_SO       = True
+DO_MA       = False
+DO_SO       = False
 DO_CEINMS   = True
-CALIBRATE   = True
+CALIBRATE   = False
 DO_PLOTS    = True
 FIGURES     = ["kin_mom", "jra"]
 DO_SUMMARY  = True
@@ -316,6 +350,12 @@ class BatchSettings:
     emg_sampling_freq = CAPTURE["emg_sampling_freq"]
     right_foot_markers = ["RTOE", "RHEE", "RFMH", "RSMH", "RVMH"]
     left_foot_markers = ["LTOE", "LHEE", "LFMH", "LSMH", "LVMH"]
+    # Markers on the barbell. They are skipped for IK (markers_to_skip above —
+    # the bar is not a body segment) but the movement detector reads them: they
+    # are the only thing that separates a deadlift from a squat, since the
+    # pelvis does the same descend-bottom-rise in both, and they carry the bar
+    # path, ROM and mean concentric velocity for every lift.
+    bar_markers = ["BL", "BR"]
     trc_lateral_axis  = "Z"
     trc_vertical_axis = "Y"
     trc_ap_axis       = "X"
@@ -342,6 +382,17 @@ class BatchSettings:
     enable_muscle_scaling = False
     muscle_force_factor = 3
     muscle_opt_neval = 10
+    # Coordinates the Modenese muscle optimiser must not build a grid axis for.
+    # A model that leaves secondary DOFs unlocked (knee_adduction +-20 deg,
+    # subtalar_angle +-30 deg in GPK_v3) pays for them: the sampling grid is
+    # N**nDOF, so each extra axis multiplies the cost by N. On Athlete_06 those
+    # two pushed the hamstrings/quads to 5 spanned coordinates (1024 poses,
+    # 177 s each) and the gastrocnemii to 6 (capped to 729, 113 s each) --
+    # 13 muscles for 34 of the run's 39 minutes, for millimetre moment arms.
+    muscle_opt_skip_coords = ["knee_adduction", "subtalar_angle"]
+    # A coordinate counts as spanned only above this moment arm (m). The
+    # default 0.1 mm is below any real geometry and lets noise add an axis.
+    muscle_opt_ma_tol = 0.001
     static_trials = {k: v["static_trial"] for k, v in CAPTURES.items()}
     enable_inverse_kinematics = True
     enable_inverse_dynamics = True
@@ -398,15 +449,45 @@ class CEINMSSettings:
     num_synergies = 4
     hybrid_calibration = "true"
     number_of_synergies = 8
-    alpha = 10
+    # -- EXECUTION weights, F_obj = a*E_trackMOM + b*E_sumEXC + g*E_trackEMG
+    #    (Sartori et al. 2014 Eq. 1; beta is the EFFORT penalty, gamma the
+    #    EMG-tracking weight -- they were read the wrong way round before t19).
+    #
+    #    Was a10 b1 g1000, i.e. gamma/alpha = 100. t19 swept 288 cells over
+    #    Walking_03 and Squat_35kg_01 and settled three things:
+    #
+    #      * alpha is only a SCALE. (a, b, g) == (1, b/a, g/a), and the solver
+    #        honours that to a median of 0.02 % wherever beta > 0. So alpha is
+    #        pinned at 1 and only the ratios are real.
+    #      * the L-curve KNEE is not usable here. Re-run inside five different
+    #        gamma windows it comes out at exactly one tenth of whatever the
+    #        top of the window was -- it finds the corner of a box you sized,
+    #        not one the data put there.
+    #      * a window-free criterion does work: the largest gamma whose
+    #        moment-tracking error is still within 10 % of the best that beta
+    #        reaches. That gives gamma = 30 for BOTH trials at beta = 1, and it
+    #        removes 68-76 % of the EMG discrepancy. CEINMSoptimise, searching
+    #        on its own, chose 54 (walking) and 10 (squat) -- 30 sits between
+    #        them; Sartori tuned 5-15 for walking.
+    #
+    #    session.yaml's `ceinms:` block OUTRANKS these three at run time. Both
+    #    are set to the same values; change them together.
+    alpha = 1
     beta  = 1
-    gamma = 1000
+    gamma = 30
     beta_min = 1;  beta_max = 100;  beta_delta = 10
     gamma_min = 1; gamma_max = 100; gamma_delta = 50
     alphas = "1 10 100"
     betas  = "1 10"
     gammas = "1 10 100 500 1000 1500 2000 3000 4000 5000"
-    dof_set = " ".join(d for d in BatchSettings.dof_list if "pelvis" not in d)
+    # The DOFs CEINMS calibrates and executes over. Derived from dof_list by
+    # default; pinned explicitly here because knee_adduction was dropped (t23)
+    # -- it is a secondary DOF whose moment the muscles cannot track, and
+    # leaving it in spends calibration effort on noise. Keep this a literal:
+    # a derived list changes silently when dof_list does.
+    dof_set = ("hip_flexion_l hip_flexion_r hip_adduction_l hip_adduction_r "
+               "hip_rotation_l hip_rotation_r knee_angle_l knee_angle_r "
+               "ankle_angle_l ankle_angle_r")
     c1 = "-0.99 -0.05"
     c2 = "-0.95 -0.05"
     shape_factor = "-2.999 -0.001"
@@ -584,8 +665,8 @@ def run_deadlifts_export_to_ceinms_jrf():
 
 
 if __name__ == "__main__":
-    # Headless backend ONLY when this file is run as a script. At import
-    # time bioscout may be driving the GUI, whose canvases need TkAgg.
+    # Headless backend ONLY when run as a script. At import time bioscout
+    # may be driving the GUI, whose canvases need TkAgg.
     import matplotlib
     matplotlib.use("Agg")
 
@@ -853,6 +934,13 @@ if __name__ == "__main__":
         print(f"[settings] export {len(EXPORT_TRIALS)} trials "
               f"(incl. static '{STATIC_TRIAL}') from {_src}")
         s.export(trials=EXPORT_TRIALS, export_src=_src, replace=REPLACE)
+
+    if DO_DETECT:
+        # Same code path as `bioscout --classifier <session>`, so the pipeline
+        # and the command line can never disagree about what a trial is.
+        from bioscout.movement_detector import classify_session
+        classify_session(SESSION_PATH, settings=BatchSettings,
+                         write_session_yaml=DETECT_WRITE_YAML)
 
     for name in ITERATIONS:
         if name not in s.iterations:

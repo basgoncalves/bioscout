@@ -88,3 +88,14 @@ ziLDWRaE
 *.bak
 *.tmp
 *.new
+
+# A project settings.py at the repo root SHADOWS bioscout/settings.py for
+# anything launched from here. Keep it usable locally, never committed.
+/settings.py
+
+# --- local-only working dirs (added 2026-08-11) ---
+.pytest_cache/
+# git worktrees live here; `git worktree prune` cleans up the refs
+.wt/
+# the artifact-deletion helper: local convenience, not shipped
+cleanup.sh

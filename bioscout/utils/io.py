@@ -579,12 +579,25 @@ def dict_to_xml(parent_elem, data_dict):
             elem.text = str(value)
 
 def save_pretty_xml(tree, save_path):
-            """Saves the XML tree to a file with proper indentation and no blank lines."""
+            """Saves the XML tree to a file with proper indentation and no blank lines.
+
+            Creates the parent directory if it is missing. Every caller here
+            has already decided where the file goes, so a missing folder is
+            never the answer -- and it used to be a real failure: an
+            UNCALIBRATED CEINMS arm writes excitationGenerator.xml into
+            `ceinms_calibration/`, which only the CALIBRATION path had ever
+            created. The arm died with FileNotFoundError, bioscout logged it
+            instead of raising, and the run reported success in 30 seconds
+            having produced nothing.
+            """
             rough_string = ET.tostring(tree.getroot(), 'utf-8')
             reparsed = xml.dom.minidom.parseString(rough_string)
             pretty_xml = reparsed.toprettyxml(indent="   ")
             # Remove blank lines
             pretty_xml_no_blanks = "\n".join([line for line in pretty_xml.splitlines() if line.strip()])
+            _parent = os.path.dirname(os.path.abspath(save_path))
+            if _parent:
+                os.makedirs(_parent, exist_ok=True)
             with open(save_path, 'w') as file:
                 file.write(pretty_xml_no_blanks)
 

@@ -18,14 +18,34 @@ path get caught:
                                 asserting a calibrated subject XML is produced.
 
 All tests build up ONE shared ghost session under
-``bioscout/tests/_results/simulations/<Subject>/<session>/`` — the exact shape of
-a real ``simulations/`` session (e.g. Athlete_03_GPK/25_03_31): trials at the
-session root (``ExtFlex_01``, ``ExtFlex_02``, ...) each with a MuscleAnalysis/
-folder, joint_angles.mot, emg.mot and inverse_dynamics.sto, plus a session-level
-``ceinms_calibration/`` folder holding every CEINMS file (subject XMLs,
-excitation generator, calibration cfg/setup, calibrated subject,
-calibrationOutput/). The full run log is saved to
-``bioscout/tests/_results/test_run.log``. (Add ``_results`` to .gitignore.)
+``bioscout/tests/_results/simulations/<Subject>/<session>/`` in the ITERATIVE
+layout — the exact shape a real session has today (e.g. Athlete_03/25_03_31)::
+
+    KneeGhost/ghost_session/
+        session.yaml            <- scaffold_session_yaml(), then the ghost map
+        1_c3dfiles/             <- placeholder captures the scaffold reads
+        2_experimental/         <- model-independent exports (empty here)
+        3_iterations/
+            ghost/              <- ONE model iteration
+                knee.osim
+                ExtFlex_01/     <- MuscleAnalysis/, joint_angles.mot,
+                ExtFlex_02/        emg.mot, inverse_dynamics.sto
+                ceinms_calibration/
+        logs/
+
+The fixture is built THROUGH bioscout's own session tools — ``scaffold_session_yaml``
+and the ``session_layout`` resolvers — not by joining folder names by hand. That
+is deliberate: it makes this test the only coverage that session CREATION
+produces a session the rest of the pipeline can actually open, and it means a
+layout change cannot pass here while breaking real projects.
+
+``ceinms_calibration/`` sits INSIDE the iteration, not at the session root: the
+calibrated subject is a property of one model variant (cateli/gpk/lernagopal
+each have their own), so a session-level folder would be a lie about what the
+calibration belongs to.
+
+The full run log is saved to ``bioscout/tests/_results/test_run.log``.
+(``bioscout/tests/_results/`` is already in .gitignore.)
 
 Everything self-skips when OpenSim (and, for calibration, the CEINMS binary)
 isn't available, so the lightweight suite is never broken.
@@ -38,6 +58,7 @@ import os
 import sys
 import types
 import shutil
+import stat
 import unittest
 
 import numpy as np
@@ -73,23 +94,31 @@ EMG_CHANNELS = ["EMG_ext", "EMG_flx"]
 EMG_MAP = {"EMG_ext": ["ext_med", "ext_lat"], "EMG_flx": ["flx_med", "flx_lat"]}
 
 # Ghost session laid out exactly like a real bioscout `simulations/` session:
-#   _results/simulations/<SUBJECT>/<stage-session>/<Trial>/...
-# (subject -> session -> trial, MuscleAnalysis/ folder, joint_angles.mot IK,
-#  session-level CEINMS XMLs alongside the trial folders).
+#   _results/simulations/<SUBJECT>/<SESSION>/3_iterations/<ITERATION>/<Trial>/...
 RESULTS_ROOT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_results")
 SIM_ROOT      = os.path.join(RESULTS_ROOT, "simulations")
 SUBJECT_NAME  = "KneeGhost"           # one ghost subject
 SESSION_NAME  = "ghost_session"       # one session holding all trials
-CEINMS_CALIB_DIR = "ceinms_calibration"  # session-level CEINMS files live here
+ITERATION_NAME = "ghost"              # the one model iteration in the session
+CEINMS_CALIB_DIR = "ceinms_calibration"  # per-ITERATION CEINMS files live here
+GHOST_BODY_MASS = 75.0                # session.yaml needs one; nothing normalises to it
 MA_FOLDER     = "MuscleAnalysis"   # match real-session MA folder name
 IK_MOT        = "joint_angles.mot" # match real-session IK output name
 ID_STO        = "inverse_dynamics.sto"
 EMG_MOT       = "emg.mot"
 
-# One shared session, mirroring simulations/<Subject>/<session>/ exactly:
-#   <SUBJECT>/<session>/<Trial>/...            (trials at session root)
-#   <SUBJECT>/<session>/ceinms_calibration/    (all session-level CEINMS files)
 GHOST_SESSION = os.path.join(SIM_ROOT, SUBJECT_NAME, SESSION_NAME)
+
+
+def _ghost_iter():
+    """The iteration folder, resolved through bioscout rather than joined here.
+
+    A function and not a constant: ``iteration_path`` answers from what is on
+    disk (it supports the old flat layout too), so it must be asked AFTER
+    setUpModule has built the skeleton, not at import time.
+    """
+    from bioscout.utils.session_layout import iteration_path
+    return iteration_path(GHOST_SESSION, ITERATION_NAME)
 
 
 def _has_opensim() -> bool:
@@ -139,41 +168,127 @@ def _use_headless_matplotlib():
         pass
 
 
-def setUpModule():
-    """Create ONE fresh ghost session for the whole module, so the tests build
-    up a single ``simulations/<Subject>/<session>/`` folder with several trials
-    and a session-level ``ceinms_calibration/`` folder — exactly the shape of a
-    real session (e.g. Athlete_03_GPK/25_03_31)."""
-    shutil.rmtree(SIM_ROOT, ignore_errors=True)
+def _wipe(path):
+    """Delete *path* and make sure it is gone.
+
+    ``shutil.rmtree(..., ignore_errors=True)`` is the obvious call and the wrong
+    one here: files copied out of a read-only source carry the read-only bit,
+    and on Windows that makes the unlink fail. With errors ignored the wipe
+    reports nothing and the NEXT run builds its new-layout session on top of the
+    old one — a fixture that is half old layout, half new, and passes. So clear
+    the read-only bit and retry, then assert.
+    """
+    def _retry(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except Exception:
+            pass
+
+    if os.path.exists(path):
+        shutil.rmtree(path, onerror=_retry)
+    assert not os.path.exists(path), (
+        f"could not remove {path} — a stale fixture would be silently reused. "
+        "Close anything holding a file open in it (Explorer, an editor) and "
+        "re-run.")
+
+
+def build_ghost_session():
+    """Create ONE fresh ghost session in the ITERATIVE layout, using bioscout's
+    own session tools so this test covers session CREATION as well as the
+    pipeline that runs inside it.
+
+    Returns the path to the iteration folder. Steps:
+
+    1. the folder skeleton, from the ``session_layout`` resolvers (they pick
+       the numbered names for a session that does not exist yet);
+    2. placeholder ``.c3d`` files — ``scaffold_session_yaml`` takes the trial
+       list from the c3d FILENAMES, which is the real contract, and there is no
+       synthetic c3d writer here. They stay empty; nothing reads their bytes.
+       ``Static_01`` is included because a real session always has one and the
+       scaffold warns when it is missing (the ghost pipeline never scales, so
+       it is never opened);
+    3. ``scaffold_session_yaml`` itself;
+    4. the ghost EMG map written over whatever the scaffold inherited. The
+       scaffold walks UP for the nearest ``settings.py`` to pick up lab
+       constants, and from inside the installed package that finds bioscout's
+       own bundled template — a real project's powerlifting EMG map, which
+       names muscles this 4-muscle knee does not have.
+    """
+    from bioscout.utils.session_layout import (
+        c3d_root, experimental_root, iterations_root, iteration_path,
+        is_numbered_layout)
+    from bioscout.utils.session import (
+        scaffold_session_yaml, read_session_yaml, write_session_yaml)
+
+    _wipe(SIM_ROOT)
     os.makedirs(GHOST_SESSION, exist_ok=True)
+
+    c3d = c3d_root(GHOST_SESSION, create=True)
+    experimental_root(GHOST_SESSION, create=True)
+    iterations_root(GHOST_SESSION, create=True)
+    os.makedirs(os.path.join(GHOST_SESSION, "logs"), exist_ok=True)
+    assert is_numbered_layout(GHOST_SESSION), \
+        "session_layout did not create the numbered layout for a new session"
+
+    trials = [f"ExtFlex_{i + 1:02d}" for i in range(N_CALIB_TASKS)]
+    for name in ["Static_01"] + trials:
+        open(os.path.join(c3d, name + ".c3d"), "wb").close()
+
+    scaffold_session_yaml(GHOST_SESSION, body_mass=GHOST_BODY_MASS,
+                          static_trial="Static_01", overwrite=True)
+
+    spec = read_session_yaml(os.path.join(GHOST_SESSION, "session.yaml"))
+    spec.emg_muscle_mapping = {k: list(v) for k, v in EMG_MAP.items()}
+    # Absolute paths to the bundled setup files came in with the lab constants.
+    # They are correct for the machine that ran the scaffold and wrong for every
+    # other one, and the ghost model has no markers to scale — drop them so the
+    # fixture is the same on disk everywhere.
+    spec.setup_folder = None
+    spec.markerset = None
+    spec.ceinms = {"alpha": str(EXEC_ALPHA), "beta": str(EXEC_BETA),
+                   "gamma": str(EXEC_GAMMA)}
+    spec.calibration_trials = list(trials)
+    write_session_yaml(spec, os.path.join(GHOST_SESSION, "session.yaml"))
+
+    it = iteration_path(GHOST_SESSION, ITERATION_NAME)
+    os.makedirs(it, exist_ok=True)
+    return it
+
+
+def setUpModule():
+    build_ghost_session()
 
 
 def _model_path():
-    return os.path.join(GHOST_SESSION, "knee.osim")
+    """The iteration's model. A model IS the iteration — that is why it lives
+    in the iteration folder and not at the session root."""
+    return os.path.join(_ghost_iter(), "knee.osim")
 
 
 def _ensure_model():
-    """Build the session model once; reuse it across tests (tests stay
+    """Build the iteration model once; reuse it across tests (tests stay
     independent — each builds it if missing)."""
     mp = _model_path()
     if not os.path.exists(mp):
-        os.makedirs(GHOST_SESSION, exist_ok=True)
+        os.makedirs(_ghost_iter(), exist_ok=True)
         build_knee_model(mp)
     return mp
 
 
 def _calib_dir():
-    """Session-level CEINMS folder: <session>/ceinms_calibration/."""
-    d = os.path.join(GHOST_SESSION, CEINMS_CALIB_DIR)
+    """Per-iteration CEINMS folder: <iteration>/ceinms_calibration/."""
+    d = os.path.join(_ghost_iter(), CEINMS_CALIB_DIR)
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def build_trial(model_path, session_dir, trial_name, lo=FLEX_MIN_DEG,
                 hi=FLEX_MAX_DEG, activation=ACTIVATION_PCT / 100.0):
-    """Create one trial folder in real-session format under *session_dir*:
-    ``<session>/<trial_name>/`` with joint_angles.mot, emg.mot, a MuscleAnalysis/
-    folder and inverse_dynamics.sto. Returns (trial_dir, ik_mot, emg, ma_dir, id_sto)."""
+    """Create one trial folder in real-session format under *session_dir* (an
+    ITERATION folder): ``<iteration>/<trial_name>/`` with joint_angles.mot,
+    emg.mot, a MuscleAnalysis/ folder and inverse_dynamics.sto.
+    Returns (trial_dir, ik_mot, emg, ma_dir, id_sto)."""
     trial = os.path.join(session_dir, trial_name)
     os.makedirs(trial, exist_ok=True)
     ik = write_motion(os.path.join(trial, IK_MOT), lo=lo, hi=hi)
@@ -436,6 +551,51 @@ class _settings_context:
 # --------------------------------------------------------------------------- #
 # tests
 # --------------------------------------------------------------------------- #
+class TestGhostSessionLayout(unittest.TestCase):
+    """The session the other tests run inside is a VALID session.
+
+    No OpenSim, so this runs everywhere — which is the point: it is the only
+    coverage that bioscout's session-creation tools produce a session that
+    bioscout's session-reading tools can open. The pipeline tests below all
+    skip on a machine without OpenSim, and used to take this with them.
+    """
+    def test_numbered_layout(self):
+        from bioscout.utils.session_layout import (
+            is_numbered_layout, c3d_root, experimental_root, iterations_root)
+        self.assertTrue(is_numbered_layout(GHOST_SESSION))
+        self.assertEqual(os.path.basename(c3d_root(GHOST_SESSION)), "1_c3dfiles")
+        self.assertEqual(os.path.basename(experimental_root(GHOST_SESSION)),
+                         "2_experimental")
+        self.assertEqual(os.path.basename(iterations_root(GHOST_SESSION)),
+                         "3_iterations")
+
+    def test_iteration_is_under_iterations_root(self):
+        it = _ghost_iter()
+        self.assertTrue(os.path.isdir(it))
+        self.assertEqual(
+            os.path.normpath(os.path.dirname(it)),
+            os.path.normpath(os.path.join(GHOST_SESSION, "3_iterations")),
+            "the iteration must live under 3_iterations/, not at the session root")
+
+    def test_session_yaml_round_trips(self):
+        from bioscout.utils.session import read_session_yaml
+        spec = read_session_yaml(os.path.join(GHOST_SESSION, "session.yaml"))
+        self.assertEqual(spec.subject, SUBJECT_NAME)
+        self.assertEqual(spec.session, SESSION_NAME)
+        self.assertEqual(spec.body_mass, GHOST_BODY_MASS)
+        self.assertEqual(spec.static_trial, "Static_01")
+        # the ghost map, not the powerlifting one the scaffold inherits
+        self.assertEqual(spec.emg_map_for(), EMG_MAP)
+        # machine-specific paths must not be baked into the fixture
+        self.assertIsNone(spec.markerset)
+        self.assertIsNone(spec.setup_folder)
+
+    def test_session_opens_and_sees_the_iteration(self):
+        from bioscout import Session
+        s = Session.open(GHOST_SESSION)
+        self.assertIn(ITERATION_NAME, list(s.iterations))
+
+
 @unittest.skipUnless(HAS_OSIM, "OpenSim not importable")
 class TestKneeModelBuild(unittest.TestCase):
     def test_build_and_reload(self):
@@ -457,7 +617,7 @@ class TestKneeOpenSim(unittest.TestCase):
     def test_ma_so_id(self):
         import pandas as pd
         mp = _ensure_model()
-        trial, ik, emg, ma, idf = build_trial(mp, GHOST_SESSION, "ExtFlex_01")
+        trial, ik, emg, ma, idf = build_trial(mp, _ghost_iter(), "ExtFlex_01")
 
         length = _find(ma, "_MuscleAnalysis_Length.sto")
         marm = _find(ma, f"_MuscleAnalysis_MomentArm_{DOF}.sto")
@@ -485,7 +645,7 @@ class TestKneeCEINMSWiring(unittest.TestCase):
     def test_excitation_generator_and_input_data(self):
         ceinms = _resolve_ceinms()
         mp = _ensure_model()
-        trial, ik, emg, ma, idf = build_trial(mp, GHOST_SESSION, "ExtFlex_01")
+        trial, ik, emg, ma, idf = build_trial(mp, _ghost_iter(), "ExtFlex_01")
 
         with _settings_context():
             eg = os.path.join(_calib_dir(), "excitationGenerator.xml")
@@ -538,13 +698,13 @@ def ghost_calibrate(ceinms, force=False):
         input_rels, first_emg = [], None
         for i, name in enumerate(paths["trials"]):
             lo, hi, act = task_specs[i % len(task_specs)]
-            build_session_task(ceinms, mp, GHOST_SESSION, name, lo=lo, hi=hi, activation=act)
+            build_session_task(ceinms, mp, _ghost_iter(), name, lo=lo, hi=hi, activation=act)
             # cfg/setup live in ceinms_calibration/, so trial inputData is referenced
             # relative to that folder (../<trial>/inputData.xml).
-            input_abs = os.path.join(GHOST_SESSION, name, "inputData.xml")
+            input_abs = os.path.join(_ghost_iter(), name, "inputData.xml")
             input_rels.append(os.path.relpath(input_abs, calib))
             if first_emg is None:
-                first_emg = os.path.join(GHOST_SESSION, name, EMG_MOT)
+                first_emg = os.path.join(_ghost_iter(), name, EMG_MOT)
 
         ceinms.create_excitation_generator(osim_model_path=mp, emg_path=first_emg,
                                            save_path=paths["eg"])
@@ -575,7 +735,7 @@ def ghost_execute(ceinms, trial_name, calibrated, eg):
     Execution_*/). Returns the execution output directory."""
     from bioscout import utils
     import xml.etree.ElementTree as ET
-    trial = os.path.join(GHOST_SESSION, trial_name)
+    trial = os.path.join(_ghost_iter(), trial_name)
     exe_cfg = os.path.join(trial, "ceinms_cfg.xml")
     exe_setup = os.path.join(trial, "ceinms_setup.xml")
     out_dir = f"Execution_a{EXEC_ALPHA}_b{EXEC_BETA}_g{EXEC_GAMMA}"
@@ -605,7 +765,7 @@ def ghost_optimise(ceinms, trial_name, calibrated, eg):
     execution cfg as the parameter template. Returns the optimisation output
     directory (or None if it produced nothing)."""
     from bioscout import utils
-    trial = os.path.join(GHOST_SESSION, trial_name)
+    trial = os.path.join(_ghost_iter(), trial_name)
     exe_cfg = os.path.join(trial, "ceinms_cfg.xml")       # template (from ghost_execute)
     opt_cfg = os.path.join(trial, "ceinms_optimise_cfg.xml")
     opt_setup = os.path.join(trial, "ceinms_optimise_setup.xml")
@@ -640,7 +800,7 @@ def build_and_render_trial_summary(trial_name, exec_dir, opt_dir=None):
     *opt_dir* (a CEINMS-optimise output dir) is given and contains results, its
     forces/activations/fibre lengths + a JRA are overlaid as a third series.
     Returns (save_path, jra_so_file, jra_ceinms_file, jra_force_cols)."""
-    trial = os.path.join(GHOST_SESSION, trial_name)
+    trial = os.path.join(_ghost_iter(), trial_name)
     ma = os.path.join(trial, MA_FOLDER)
     ik_mot = os.path.join(trial, IK_MOT)
     so_force_f = _find(ma, "_StaticOptimization_force.sto")

@@ -154,12 +154,26 @@ def _osim_quiet_ctx():
     ...") which is written to std::cout and bypasses the logger. stderr stays open
     (errors still surface); the Python log-file tee is unaffected."""
     _quiet_osim()
-    _off = False
+    # Quiet unless the project explicitly asks for OpenSim's chatter.
+    #
+    # This used to be opt-IN: redirect fd 1 only when
+    # BatchSettings.opensim_log_level == "off". The gate resolves `settings`
+    # through a sys.path insert that finds the project's settings.py only when
+    # the process was started a particular way — so `python -c "from bioscout
+    # import Session; ..."` from the project folder read no setting at all,
+    # fell back to False, and OpenSim's printBasicInfo block came back four
+    # times per trial. The same fragility already forced _quiet_model() to be
+    # made unconditional; this is the other half of it.
+    #
+    # Now: quiet unless a level was explicitly set to something verbose. The
+    # redirect covers fd 1 only, so errors on stderr still surface.
+    _off = True
     try:
         _bs = getattr(getattr(settings, "BatchSettings", None), "opensim_log_level", None)
-        _off = str(_bs).strip().lower() == "off"
+        if _bs is not None:
+            _off = str(_bs).strip().lower() in ("off", "", "none")
     except Exception:
-        _off = False
+        _off = True
     if not _off:
         try:
             yield
@@ -1087,6 +1101,28 @@ def muscles_per_coordinate(osimModel=None):
 #: binds on, so leave the default alone for production runs.
 MAX_EVAL_POINTS = 1500
 
+#: Coordinates the muscle optimiser must NOT treat as spanned, by exact name or
+#: by substring. The grid is N**nDOF, so every extra coordinate multiplies the
+#: cost by N — and a secondary DOF earns its place only if the muscle really
+#: does change length over it.
+#:
+#: Measured on GPK_v3 (Athlete_06, N=4): `knee_adduction` and `subtalar_angle`
+#: are unlocked with ranges of +-20 deg and +-30 deg, and they push the
+#: hamstrings/quadriceps group to 5 spanned coordinates (4**5 = 1024 poses,
+#: 177 s each) and the gastrocnemii to 6 (capped down to 3**6 = 729, 113 s
+#: each). Those 13 muscles cost 34 of the run's 39 minutes. Excluding the two
+#: secondary DOFs drops them to 4 coordinates.
+#:
+#: Empty by default — this changes results, so a project opts in through
+#: BatchSettings.muscle_opt_skip_coords rather than inheriting it silently.
+MUSCLE_OPT_SKIP_COORDS = ()
+
+#: A coordinate counts as spanned only if the muscle's moment arm exceeds this
+#: anywhere in its range. 1e-4 m = 0.1 mm, which is below the resolution of
+#: any musculoskeletal geometry and lets numerical noise add a whole axis to
+#: the grid. Raise it to exclude coordinates the muscle barely acts on.
+MUSCLE_OPT_MA_TOL = 1e-4
+
 
 def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
     """Sample muscle-tendon quantities across the range of motion of the
@@ -1143,7 +1179,10 @@ def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
     # --- coordinates spanned by the muscle (non-zero moment arm in ROM) -------
     # Detection only needs the muscle path length/moment arm, so realizePosition
     # (cheap) is enough here -- no need for the full constraint assembler.
+    _skip = tuple(MUSCLE_OPT_SKIP_COORDS or ())
+    _ma_tol = float(MUSCLE_OPT_MA_TOL)
     spanned = []
+    _excluded = []
     for i in range(coords.getSize()):
         c = coords.get(i)
         try:
@@ -1151,13 +1190,17 @@ def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
                 continue
         except Exception:
             pass
+        _nm = c.getName()
+        if any(_s == _nm or _s in _nm for _s in _skip):
+            _excluded.append(_nm)
+            continue
         rmin, rmax = c.getRangeMin(), c.getRangeMax()
         hit = False
         for frac in (0.0, 0.5, 1.0):
             c.setValue(state, rmin + frac * (rmax - rmin), False)
             osimModel.realizePosition(state)
             try:
-                if abs(gp.computeMomentArm(state, c)) > 1e-4:
+                if abs(gp.computeMomentArm(state, c)) > _ma_tol:
                     hit = True
                     break
             except Exception:
@@ -1174,6 +1217,9 @@ def sampleMuscleQuantities(osimModel, osimMuscle, muscleQuant, N_eval):
     if len(spanned) > MAX_DOF:
         spanned = spanned[:MAX_DOF]
     nDOF = len(spanned)
+    if _excluded:
+        print(f"      [opt] {osimMuscle.getName()}: {nDOF} DOF "
+              f"(excluded {', '.join(_excluded)})")
     n_per = N_eval
     if nDOF and n_per ** nDOF > MAX_EVAL_POINTS:
         n_per = max(2, int(MAX_EVAL_POINTS ** (1.0 / nDOF)))
@@ -1267,9 +1313,38 @@ def muscle_optimimizer_Modenese2015(osim_model_path=None, save_path=None,
     return save_path
 
 
+def _apply_muscle_opt_settings():
+    """Pull the optimiser's DOF knobs from the project's BatchSettings, once.
+
+    Kept as module globals rather than threaded through four signatures
+    because sampleMuscleQuantities is called from two places and is itself
+    called per muscle per quantity; a project sets the policy once and every
+    call site sees it.
+    """
+    global MUSCLE_OPT_SKIP_COORDS, MUSCLE_OPT_MA_TOL
+    try:
+        from . import settings as _st
+        _bs = getattr(_st, "BatchSettings", None)
+    except Exception:
+        _bs = None
+    if _bs is None:
+        return
+    _sk = getattr(_bs, "muscle_opt_skip_coords", None)
+    if _sk:
+        MUSCLE_OPT_SKIP_COORDS = tuple(_sk)
+        print(f"[opt] excluding coordinates from the muscle-optimiser grid: "
+              f"{', '.join(MUSCLE_OPT_SKIP_COORDS)}")
+    _tol = getattr(_bs, "muscle_opt_ma_tol", None)
+    if _tol:
+        MUSCLE_OPT_MA_TOL = float(_tol)
+        print(f"[opt] moment-arm threshold for 'spanned': {MUSCLE_OPT_MA_TOL*1000:.2f} mm")
+
+
 def optimMuscleParams(osimModel_ref_filepath, osimModel_targ_filepath, N_eval, log_folder):
-    
-    
+
+    # Read the project's DOF policy before any muscle is sampled.
+    _apply_muscle_opt_settings()
+
     # results file identifier
     res_file_id_exp = '_N' + str(N_eval)
     
@@ -2884,7 +2959,7 @@ def _sanitize_markerset_xml(src_path, skip_names, out_dir):
     return out
 
 
-def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, scale_setup_output_dir=None, mass=None, time_range=None, marker_set_file=None, linear_scaling=True, marker_placer=False):
+def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, scale_setup_output_dir=None, mass=None, time_range=None, marker_set_file=None, linear_scaling=True, marker_placer=False, ik_weights=None, setup_xml_path=None, run=True):
     """
     Scale an OpenSim model using the ScaleTool based on static marker data from a TRC file.
 
@@ -2905,6 +2980,22 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
 
     Args:
         scale_setup_output_dir: Directory where to save scale_setup.xml (defaults to scaled_model directory)
+        ik_weights: ``{marker: weight}`` for the standalone marker-registration
+            IK. A weight of 0 drops the marker from the pass entirely. Only
+            used when ``marker_placer`` is on; ignored otherwise. Default None
+            = every marker weighted 1.0, which is what this always did.
+        setup_xml_path: Where to write the ScaleTool setup. Defaults to
+            ``<scale_setup_output_dir>/scale_setup.xml``. This file is the
+            record of what was actually applied — the MeasurementSet, the
+            joint-centre-augmented TRC, the time range — and is the first thing
+            to read when a scaled model looks wrong.
+        run: False writes the setup and returns its path WITHOUT scaling. The
+            setup references files under ``_temp_scaling/`` (the augmented TRC,
+            the sanitised model), so that folder is kept in this mode — the
+            setup is loadable in the OpenSim GUI as written.
+
+    Returns:
+        The setup XML path when ``run=False``; otherwise None.
     """
     import shutil as _shutil
     from bioscout.utils import scale_measurements as _sm
@@ -3093,6 +3184,24 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     markerPlacer = scaleTool.getMarkerPlacer()
     markerPlacer.setApply(False)
 
+    # Write the setup BEFORE running. Written after, a crash leaves nothing to
+    # read — which is exactly when you want it. This is a real ScaleTool setup:
+    # OpenSim serialises it, so the OpenSim GUI opens it.
+    _setup_out = setup_xml_path or os.path.join(_outdir, "scale_setup.xml")
+    try:
+        os.makedirs(os.path.dirname(_setup_out) or ".", exist_ok=True)
+        scaleTool.printToXML(_setup_out)
+        print(f"[scale] ScaleTool setup written: {_setup_out}")
+    except Exception as e:
+        print(f"[scale] [WARNING] could not write the ScaleTool setup: {e}")
+        _setup_out = None
+
+    if not run:
+        # Deliberately NOT removing _temp_scaling: the setup points into it.
+        print(f"[scale] run=False — setup written, nothing scaled. Its inputs "
+              f"live in {_tmp}")
+        return _setup_out
+
     print(f"[scale] linear_scaling={bool(linear_scaling)}, marker_placer={bool(marker_placer)} "
           f"(marker placement via standalone IK, not ScaleTool MarkerPlacer)")
     if linear_scaling:
@@ -3117,7 +3226,7 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         _ms_place = _sm.marker_placement_markerset(marker_set_for_scaling, _tmp)
         place_markers_via_ik(scaled_model_path, static_trc_path, scaled_model_path,
                              marker_set_file=_ms_place, time_range=(t0, t1),
-                             work_dir=_tmp)
+                             work_dir=_tmp, ik_weights=ik_weights)
     # Prove the model actually changed size. Without this the empty-MeasurementSet
     # failure is invisible: the file exists, is named scaled.osim, and every
     # downstream stage runs happily on generic geometry.
@@ -3126,7 +3235,11 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
             _sm.verify_scaled(generic_for_scaling, scaled_model_path)
         except Exception as e:
             print(f"[scale] [WARNING] post-scaling verification failed: {e}")
-    # scaling succeeded — drop the throwaway intermediates.
+    # scaling succeeded — drop the throwaway intermediates. The setup XML above
+    # names two of them (the joint-centre-augmented TRC and, if markers were
+    # dropped, the sanitised model), so those paths no longer resolve: the setup
+    # is a RECORD of what ran, not a re-runnable file. Call with run=False to
+    # get one that is.
     _shutil.rmtree(_tmp, ignore_errors=True)
     print(f"Scaled model saved to: {scaled_model_path}")
     
@@ -3412,9 +3525,11 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
         except Exception as _abs_e:
             print(f"[IK] Warning: could not set absolute tool paths ({_abs_e})")
 
-        # Run the inverse kinematics calculation
-        print("Running inverse kinematics...")
-        ikTool.run()
+        # Run the inverse kinematics calculation. The TOOL loads its own
+        # model from the setup XML, so _quiet_model() upstream cannot reach
+        # that copy's printBasicInfo — only the fd-level context can.
+        with _osim_quiet_ctx():
+            ikTool.run()
         utils.print_to_log(f"Inverse Kinematics calculation completed. Results saved to {resultsDir}")
         print(f"Inverse Kinematics calculation completed successfully")
 
@@ -3600,7 +3715,8 @@ def _strip_trailing_nulls(osim_path):
 
 
 def place_markers_via_ik(model_path, static_trc, out_model_path,
-                         marker_set_file=None, time_range=None, work_dir=None):
+                         marker_set_file=None, time_range=None, work_dir=None,
+                         ik_weights=None):
     """Register a model's markers to the subject's STATIC pose WITHOUT ScaleTool's
     MarkerPlacer (which segfaults / throws bad_alloc on some complex models, e.g.
     the MRI/Lerner-knee model). Standard MarkerPlacer algorithm, done by hand:
@@ -3635,6 +3751,35 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
     _mot = (os.path.join(work_dir, os.path.splitext(os.path.basename(out_model_path))[0] + "_static_ik.mot")
             if work_dir else os.path.splitext(out_model_path)[0] + "_static_ik.mot")
     ik = osim.InverseKinematicsTool()
+    # Marker weights for the registration pass. Without a task set every marker
+    # is weighted 1.0, so a marker you know is badly placed pulls the static
+    # pose exactly as hard as a reliable one — and the model's markers are then
+    # registered to that pose.
+    if ik_weights:
+        try:
+            _model_names = {model.getMarkerSet().get(_i).getName()
+                            for _i in range(model.getMarkerSet().getSize())}
+            _ts = osim.IKTaskSet()
+            _used = _zero = 0
+            for _n, _w in sorted(ik_weights.items()):
+                if _n not in _model_names:
+                    continue                      # in the TRC, not on the model
+                _t = osim.IKMarkerTask()
+                _t.setName(_n)
+                _t.setWeight(float(_w))
+                _t.setApply(float(_w) > 0)
+                _ts.cloneAndAppend(_t)
+                if float(_w) > 0:
+                    _used += 1
+                else:
+                    _zero += 1
+            if _ts.getSize():
+                ik.set_IKTaskSet(_ts)
+                print(f"[scale] marker registration IK: {_used} marker(s) weighted, "
+                      f"{_zero} switched off")
+        except Exception as e:
+            print(f"[scale] [WARNING] could not apply marker weights to the "
+                  f"registration IK ({e}); every marker weighted 1.0")
     ik.setModel(model)
     ik.setMarkerDataFileName(static_trc)
     ik.setStartTime(t0)
@@ -4082,7 +4227,8 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
     original_cwd = os.getcwd()
     try:
         os.chdir(resultsDir)
-        idTool.run()
+        with _osim_quiet_ctx():
+            idTool.run()
         idTool.setModel(model)  # Set the model again after running
         print(f"Inverse Dynamics calculation completed. Results saved to {resultsDir}\\inverse_dynamics.sto")
     finally:
