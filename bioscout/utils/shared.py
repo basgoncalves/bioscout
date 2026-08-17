@@ -298,7 +298,7 @@ def ensure_logging(name="bioscout", log_dir=None):
 def start_logging(name="run", log_dir=None, filename=None, append=False):
     """Tee stdout+stderr to a timestamped project log file, with a run heading.
 
-    Every run writes to ``<log_dir>/bioscout_<YYYYmmdd_HHMMSS>.log`` — one naming
+    Every run writes to ``<log_dir>/bioscout_<YYYYmmdd_HHMMSS>.txt`` — one naming
     scheme (``bioscout_…``) for all runs, with the timestamp in the filename so
     runs never collide, and a heading inside identifying what was done (``name``
     + time + disclaimer)::
@@ -311,12 +311,26 @@ def start_logging(name="run", log_dir=None, filename=None, append=False):
     Python-level output; OpenSim's C++ ``[info]`` lines are fd-level — pipe
     ``... 2>&1 | tee`` to capture those too. Returns the open log file handle.
     """
-    if log_dir is None:
+    # BIOSCOUT_LOG=0 disables file logging entirely — for runs whose parent
+    # process already tees ALL output to its own log (e.g. a runner script);
+    # without this, every run produced two near-identical log files.
+    if os.environ.get("BIOSCOUT_LOG", "1").lower() in ("0", "false", "off"):
+        return None
+    # BIOSCOUT_LOG_DIR wins over everything: one folder for every log of a
+    # project, wherever the caller wanted to put it (2026-08-17 — session-folder
+    # logs scattered per subject/state made runs hard to audit).
+    env_dir = os.environ.get("BIOSCOUT_LOG_DIR")
+    if env_dir:
+        log_dir = env_dir
+    elif log_dir is None:
         from bioscout import utils as _u
         log_dir = os.path.join(getattr(_u, "PROJECT_DIR", os.getcwd()), "logs")
     os.makedirs(log_dir, exist_ok=True)
     if filename is None:
-        filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+        # ONE naming scheme for every log: bioscout_<date>_<time>.txt.
+        # No subject/session in the name (2026-08-17) — the heading inside
+        # the file says what was run.
+        filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
     path = os.path.join(log_dir, filename)
     f = open(path, "a" if append else "w", encoding="utf-8")
     f.write(f"\n{'=' * 72}\n"

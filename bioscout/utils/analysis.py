@@ -1429,7 +1429,7 @@ class Analyse:
         # No-op for the flat layout (paths without a directory part); enables the
         # subfoldered layout automatically once Inputs uses subfolder-prefixed paths.
         _inputs_dir = LAYOUT_DIRS.get("inputs", "inputs")
-        for _k, _v in inputs.items():
+        for _k, _v in (inputs.items() if getattr(self, "_scaffold_output_dirs", True) else ()):
             if _k.startswith("_") or not isinstance(_v, str):
                 continue
             _d = os.path.dirname(_v)
@@ -1860,7 +1860,7 @@ class Analyse:
         # Recreate the output subfolders referenced by the layout so setup/result
         # writes don't fail after a reset that stripped them.
         _inputs_dir = LAYOUT_DIRS.get("inputs", "inputs")
-        for _v in list(layout.values()):
+        for _v in (list(layout.values()) if getattr(self, "_scaffold_output_dirs", True) else ()):
             if not isinstance(_v, str):
                 continue
             _d = os.path.dirname(_v)
@@ -5837,6 +5837,71 @@ class Analyse:
                                           setupXMLPath=self.ceinms_optimise_setup,
                                           templateCfgXMLPath=_tpl)
 
+    # ---- executing against the UNCALIBRATED subject model -----------------
+    # `ceinms: {calibrated: false}` is resolved in session.py, which sets
+    # `ceinms_calibrated` on the trial, builds subjectUncalibrated.xml, skips
+    # the calibration and logs that execution will use it. Until 2026-08-12
+    # nothing DOWNSTREAM read that flag: every writer here hard-coded
+    # `ceinms_calibrated_model`, so the setup named subjectCalibrated.xml
+    # regardless -- a file an uncalibrated arm does not even have. CEINMS then
+    # produced no output, surfacing as "MuscleForces.sto not readable" rather
+    # than as a wiring error. Worse is when a calibrated subject DOES sit in
+    # the folder from an earlier run: the arm silently executes CALIBRATED,
+    # agrees with the calibrated arms, and reads as "calibration changes
+    # nothing" -- the strongest possible wrong conclusion an uncalibrated
+    # control can produce.
+    # The names below are the ones bioscout/tests/test_uncalibrated_execution.py
+    # was written against.
+
+    @property
+    def ceinms_is_calibrated(self):
+        """Does EXECUTION use the calibrated subject model?
+
+        `_overrides` FIRST: session.yaml lands there and is authoritative -- the
+        lesson `ceinms.modes._set_weights` records after a bounds run silently
+        solved every arm at one gamma. Reading the plain attribute alone would
+        report `calibrated` for an iteration session.yaml had switched off.
+
+        Default True: trials built outside `Session.trial()` never carry the
+        flag and must keep the existing behaviour.
+        """
+        _ov = getattr(self, '_overrides', None)
+        if isinstance(_ov, dict) and 'ceinms_calibrated' in _ov:
+            _v = _ov['ceinms_calibrated']
+        else:
+            _v = getattr(self, 'ceinms_calibrated', True)
+        # yaml_bool, not bool(): PyYAML gives a bool for bare `false` but a
+        # STRING for `"false"`, and bool("false") is True -- which would run
+        # the calibration the session asked to skip, silently.
+        from bioscout.utils.session import yaml_bool
+        return yaml_bool(_v)
+
+    @property
+    def ceinms_execution_subject(self):
+        """The subject XML CEINMS execution must read for this trial."""
+        return (self.ceinms_calibrated_model if self.ceinms_is_calibrated
+                else self.ceinms_uncalibrated_model)
+
+    @property
+    def ceinms_exe_tag(self):
+        """`_uncal` for an uncalibrated solve, else ''.
+
+        Without it a calibrated and an uncalibrated solve of the same trial and
+        weights both write `Execution_a1_b1_g30` and one overwrites the other,
+        leaving a result that reads as calibrated whichever ran last.
+        """
+        return "" if self.ceinms_is_calibrated else "_uncal"
+
+    def ceinms_exe_out_rel(self):
+        """Trial-root-relative execution output folder, tag and weights included.
+
+        One definition: the setup XML, the JRA forces path and every reader go
+        through this, so the folder cannot be named two different ways.
+        Still matches `Execution_*`, which is how `ceinms.modes` finds a solve.
+        """
+        return (f'{self.ceinms_exe_dir}{self.ceinms_exe_tag}'
+                f'_a{self.alpha}_b{self.beta}_g{self.gamma}')
+
     def create_ceinms_exe_setup(self):
         # ceinms_setup.xml lives in ceinms/; CEINMS resolves its inner paths
         # relative to THAT dir. Compute every path relative to the setup file's
@@ -5847,7 +5912,7 @@ class Analyse:
         os.makedirs(_base, exist_ok=True)
 
         root = _u.ET.Element('ceinms')
-        _u.ET.SubElement(root, 'subjectFile').text = _rel(self.ceinms_calibrated_model)
+        _u.ET.SubElement(root, 'subjectFile').text = _rel(self.ceinms_execution_subject)
         _u.ET.SubElement(root, 'inputDataFile').text = _rel(self.ceinms_input_data)
         _u.ET.SubElement(root, 'executionFile').text = _rel(self.ceinms_exe_cfg)
         _u.ET.SubElement(root, 'excitationGeneratorFile').text = _rel(self.ceinms_excitation_generator)
@@ -5862,7 +5927,7 @@ class Analyse:
         
         try:
             dofSet = ' '.join(_u.settings.BatchSettings.dof_list)
-            _u.ceinms.create_ceinms_cfg(ceinmsModelPath=self.ceinms_calibrated_model,
+            _u.ceinms.create_ceinms_cfg(ceinmsModelPath=self.ceinms_execution_subject,
                                  alpha=self.alpha,
                                  beta=self.beta,
                                     gamma=self.gamma,
@@ -6141,7 +6206,7 @@ class Analyse:
         self._log(
             f"CEINMS execution — time_range={_tr}\n"
             f"   inputData    : {os.path.abspath(_inp)}\n"
-            f"   calib model  : {os.path.abspath(os.path.join(self.path, self.ceinms_calibrated_model)) if not os.path.isabs(str(self.ceinms_calibrated_model)) else self.ceinms_calibrated_model}\n"
+            f"   subject model: {os.path.abspath(os.path.join(self.path, self.ceinms_execution_subject)) if not os.path.isabs(str(self.ceinms_execution_subject)) else self.ceinms_execution_subject}\n"
             f"   EMG (excit.) : {os.path.abspath(os.path.join(self.path, self.emg_filtered_normalised)) if not os.path.isabs(str(self.emg_filtered_normalised)) else self.emg_filtered_normalised}",
             terminal=True)
 
@@ -6163,7 +6228,7 @@ class Analyse:
 
         # outputDirectory is resolved relative to the setup file (in ceinms/), so
         # use the basename, not the trial-root-relative self.ceinms_exe_dir.
-        setup.find('outputDirectory').text = f'{os.path.basename(self.ceinms_exe_dir)}_a{self.alpha}_b{self.beta}_g{self.gamma}'
+        setup.find('outputDirectory').text = os.path.basename(self.ceinms_exe_out_rel())
 
         _u.save_pretty_xml(_u.ET.ElementTree(setup), self.ceinms_exe_setup)
 
@@ -6181,7 +6246,7 @@ class Analyse:
 
         # update jra ceinms forces path — TRIAL-ROOT-relative (ceinms/Execution_...),
         # not the setup's outputDirectory text which is relative to ceinms/.
-        _exe_out_rel = f'{self.ceinms_exe_dir}_a{self.alpha}_b{self.beta}_g{self.gamma}'
+        _exe_out_rel = self.ceinms_exe_out_rel()
         self.update_trial_attribute('jra_forces_ceinms', os.path.join(_exe_out_rel, 'MuscleForces.sto'))
 
         # check if ceinms forces file exists before trying to add so columns
@@ -6312,7 +6377,7 @@ class Analyse:
             self.create_ceinms_exe_setup()
         
         if not os.path.exists(self.ceinms_exe_cfg):
-            _u.ceinms.create_ceinms_cfg(ceinmsModelPath=self.ceinms_calibrated_model, alpha=self.alpha, beta=self.beta, gamma=self.gamma, dofSet=' '.join(self.DofSet),excitationGeneratorFilePath=self.ceinms_excitation_generator, outputPath=self.ceinms_exe_cfg)
+            _u.ceinms.create_ceinms_cfg(ceinmsModelPath=self.ceinms_execution_subject, alpha=self.alpha, beta=self.beta, gamma=self.gamma, dofSet=' '.join(self.DofSet),excitationGeneratorFilePath=self.ceinms_excitation_generator, outputPath=self.ceinms_exe_cfg)
         
         try:
             self.load_settings(settingsXML=self.settingsXML)

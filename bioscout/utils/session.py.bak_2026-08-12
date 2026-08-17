@@ -2278,29 +2278,8 @@ class Iteration:
         t.experimental_dir = experimental_dir(self.session_dir, name)
         if self._setup_dir:
             t._session_setup_dir = self._setup_dir
-        # EMG-only normalisation trials never produce iteration outputs — they
-        # only feed the session MVC maximum from experimental/. Suppress the
-        # output-stage scaffolding for them and prune anything the Analyse
-        # constructor already created, so 20+ MVIC captures do not each leave
-        # an empty {external_biomechanics, ceinms, ...} tree per iteration
-        # (reported 2026-08-17, FAIS 022).
-        _norm_only = (name in set(self._cfg.get("normalisation_trials") or [])
-                      and name not in set(self._cfg.get("calibration_trials") or []))
-        t._scaffold_output_dirs = not _norm_only
         t._apply_inputs_layout()
         self._apply_session_config(t, name, force_type)     # session.yaml is the source of truth
-        if _norm_only:
-            try:
-                from .analysis import LAYOUT_DIRS as _LD
-                os.chdir(self.session_dir)          # cannot rmdir the cwd on Windows
-                for _d in _LD.values():
-                    _p2 = os.path.join(_tp, _d)
-                    if os.path.isdir(_p2) and not os.listdir(_p2):
-                        os.rmdir(_p2)
-                if os.path.isdir(_tp) and not os.listdir(_tp):
-                    os.rmdir(_tp)
-            except OSError:
-                pass
         return t
 
     def get_trial(self, name, force_type="SO"):
@@ -2366,43 +2345,6 @@ class Iteration:
                 print(f"[Session] {self.label}: plot failed for {tn}: {e}")
         return made
 
-    def resolve_model_file(self, mfile):
-        """Find a configured model file. -> absolute path or None.
-
-        Search order (2026-08-17 — models used to HAVE to be copied into every
-        iteration folder, so the same scaled model existed 3x per subject):
-          1. an absolute path, as given
-          2. relative to THIS iteration folder        (the classic location)
-          3. relative to the session folder            (explicit ../ paths)
-          4. ``<project>/models/<name>``               (the shared model library)
-        A session.yaml can therefore keep just the filename and store the model
-        once in the project's models/ folder, shared by every session and
-        iteration of that subject.
-        """
-        if not mfile:
-            return None
-        if os.path.isabs(mfile):
-            return mfile if os.path.exists(mfile) else None
-        for base in (self.path, self.session_dir):
-            p = os.path.normpath(os.path.join(base, mfile))
-            if os.path.exists(p):
-                return p
-        try:
-            from bioscout import utils as _u
-            roots = [getattr(_u, "PROJECT_DIR", None)]
-        except Exception:
-            roots = []
-        # session assumed at <project>/simulations/<subject>/<session>
-        roots.append(os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.abspath(self.session_dir)))))
-        for root in roots:
-            if not root:
-                continue
-            p = os.path.join(str(root), "models", os.path.basename(mfile))
-            if os.path.exists(p):
-                return p
-        return None
-
     def trial_config(self, name, force_type="SO"):
         """FULL config for one (trial, iteration) from session.yaml + iteration
         model config — everything trial_settings.xml used to hold. side/time_range/
@@ -2419,15 +2361,6 @@ class Iteration:
                 pass
         if meta.get("side") is not None:
             cfg["side"] = str(meta["side"])
-            # FAIS patch 2026-08-12: session.yaml's `side` is the LOADED limb,
-            # and that is the limb the per-trial figures should show. But
-            # plot_kin_mom_summary reads `analysis_leg`, which only ever came
-            # from trial_settings.xml (disabled here) or the project-wide
-            # SummarySettings default of "both" — so every single-leg squat was
-            # plotted with both legs. Derive it from `side`; "both" stays both.
-            _s = cfg["side"].strip().lower()
-            if _s.startswith(("r", "l")):
-                cfg["analysis_leg"] = _s[0]
         if meta.get("type") is not None:
             cfg["trial_type"] = str(meta["type"])
         if self._cfg.get("body_mass") is not None:
@@ -2508,20 +2441,13 @@ class Iteration:
         # Prefer the requested model; fall back to the other, then the plain
         # marker-registered scaled.osim — enough for external biomechanics
         # (IK/ID/MA) before the slow muscle-opt has produced scaled_opt_*.
-        _tried = []
         for mfile in (it.get(mkey), it.get("so_model"), it.get("ceinms_model"), "scaled.osim"):
             if not mfile:
                 continue
-            _tried.append(str(mfile))
-            mpath = self.resolve_model_file(mfile)
-            if mpath:
+            mpath = os.path.join(self.path, mfile)
+            if os.path.exists(mpath):
                 cfg["model_dir"] = mpath
                 break
-        else:
-            if _tried:               # a model WAS configured but none resolved
-                print(f"[Session] {self.label}: [warn] no model file found for "
-                      f"{name} — tried {', '.join(_tried)} in the iteration "
-                      f"folder, the session folder and <project>/models/")
         if self._setup_dir:
             cfg["setup_dir"] = self._setup_dir
         return cfg
@@ -3517,24 +3443,16 @@ class Iteration:
 # Session — the session-level setup object that holds runnable Iterations
 # ---------------------------------------------------------------------------
 def _bootstrap_project(session_dir, run_name, project_dir=None, verbose=False):
-    """Start PROJECT-folder logging BEFORE Project's own auto-logging fires,
-    then bootstrap ``bioscout.Project`` once so trials resolve their models.
-    Shared by ``Session.open`` and ``Iteration.open``.
-
-    2026-08-17: logs used to go into ``<session>/logs`` — one folder per
-    subject x session made runs impossible to audit. Everything now lands in
-    ``<project>/logs`` (session assumed at ``<project>/simulations/<pid>/<name>``,
-    else the session's grandparent-of-grandparent), with the subject/session
-    baked into the FILENAME so one folder still says which run is which.
-    ``BIOSCOUT_LOG_DIR`` overrides the folder either way."""
+    """Start session-folder logging (into ``<session>/logs``) BEFORE Project's
+    own auto-logging fires — so every line lands in the session log, not
+    ``<project>/logs`` — then bootstrap ``bioscout.Project`` once so trials
+    resolve their models. Shared by ``Session.open`` and ``Iteration.open``."""
     import bioscout
     from bioscout import utils
     if session_dir is not None:
         try:
-            sd = os.path.abspath(str(session_dir))
-            root = project_dir or os.path.dirname(os.path.dirname(os.path.dirname(sd)))
             utils.shared.start_logging(name=run_name,
-                                       log_dir=os.path.join(str(root), "logs"))
+                                       log_dir=os.path.join(session_dir, "logs"))
         except Exception:
             pass
     bioscout.Project(project_dir, verbose=verbose)
@@ -3741,7 +3659,7 @@ class Session:
 
             Session.open(path).summarise()
         """
-        import numpy as np, pandas as pd, re
+        import numpy as np, re
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
@@ -3753,18 +3671,7 @@ class Session:
         joints = list(getattr(ss, "joints", None) or ["hip", "knee", "ankle"])
         iters = [m for m in (iterations or self.iterations)
                  if os.path.isdir(_layout.iteration_path(self.session_dir, m))]
-        # FAIS patch 2026-08-12: `_trial_names` lives on Iteration, not Session,
-        # so summarise() without an explicit `trials=` always raised
-        # AttributeError. Take the session.yaml trial list directly, minus the
-        # static trial and the marker-less EMG-only captures.
-        if trials:
-            names = [trials] if isinstance(trials, str) else list(trials)
-        else:
-            _emg_only = set(self._cfg.get("normalisation_trials") or [])
-            _static = self._cfg.get("static_trial")
-            names = [tn for tn, meta in (self._cfg.get("trials") or {}).items()
-                     if tn != _static and tn not in _emg_only
-                     and str((meta or {}).get("type", "")).lower() != "static"]
+        names = ([trials] if isinstance(trials, str) else list(trials)) if trials else self._trial_names()
         icfg = (self._cfg.get("iterations") or {})
         color = {m: (icfg.get(m, {}) or {}).get("color", None) for m in iters}
         label = {m: (icfg.get(m, {}) or {}).get("label", m) for m in iters}
@@ -3848,13 +3755,7 @@ class Session:
                     return None
                 comp = {c[-2:]: df[c].to_numpy(float) for c in fc[:3]}
                 r = np.sqrt(sum(v ** 2 for v in comp.values()))
-                r = r / bw if bw else r
-                # FAIS patch 2026-08-12: the kinematics/moments getters return
-                # _tnorm(...) but this one returned the RAW column, so _band
-                # vstacked native-length curves and the plot below hit
-                # "x and y must have same first dimension, shapes (101,) and
-                # (234,)" for every trial that is not exactly npts frames long.
-                return _tnorm(r)
+                return r / bw if bw else r
             for ttype in types:
                 fig, ax = plt.subplots(1, len(joints), figsize=(4.6 * len(joints), 3.4), squeeze=False)
                 for k, joint in enumerate(joints):
@@ -3877,273 +3778,6 @@ class Session:
                 fig.tight_layout(rect=[0, 0.08, 1, 0.95])
                 p = os.path.join(out, f"summary_jcf_{ttype}.png")
                 fig.savefig(p, dpi=int(getattr(ss, "dpi", 200) or 200)); plt.close(fig); made.append(p)
-
-        # ---- MUSCLE SHARE : who is loading each joint, per TASK ------------
-        # FAIS addition 2026-08-12. NOT an induced-acceleration analysis: JRA
-        # writes only the resultant contact force, so a muscle's true induced
-        # contribution would need one JRA run per muscle. What this shows is each
-        # muscle's force as a SHARE OF THE TOTAL MUSCLE FORCE crossing that joint
-        # — the dominant term in the contact force, and the one that is free to
-        # compute from files already on disk. Label it as such in any manuscript.
-        if "muscle_share" in figures:
-            TOPN = int(getattr(ss, "muscle_share_top_n", 5) or 5)
-            COORD = {"hip": "hip_flexion", "knee": "knee_angle",
-                     "ankle": "ankle_angle"}
-
-            # "task" = session.yaml `type`, NOT the `types` dict above: that one
-            # strips a trailing _NN, which for FAIS names (RunL1, SLSback_post2)
-            # leaves every trial in a group of its own.
-            tasks = {}
-            for tn in names:
-                k = str(((self._cfg.get("trials") or {}).get(tn) or {})
-                        .get("type", "other")).lower()
-                tasks.setdefault(k, []).append(tn)
-
-            def _muscles_spanning(model, tn, joint):
-                """Muscles with a non-zero moment arm about `joint` in this trial."""
-                ma = _load(model, tn, os.path.join(
-                    "muscle_analysis",
-                    f"_MuscleAnalysis_MomentArm_{COORD[joint]}_{leg}.sto"))
-                if ma is None:
-                    return []
-                keep = []
-                for c in ma.columns:
-                    if str(c).lower() == "time":
-                        continue
-                    v = pd.to_numeric(ma[c], errors="coerce").to_numpy(float)
-                    if np.isfinite(v).any() and np.nanmax(np.abs(v)) > 1e-4:
-                        keep.append(str(c))
-                return keep
-
-            def _forces(model, tn):
-                for rel in ("static_optimisation/SO_StaticOptimization_force.sto",
-                            "ceinms/Execution_a%s_b%s_g%s/MuscleForces.sto" % (
-                                (self._cfg.get("ceinms") or {}).get("alpha", 10),
-                                (self._cfg.get("ceinms") or {}).get("beta", 1),
-                                (self._cfg.get("ceinms") or {}).get("gamma", 1000))):
-                    df = _load(model, tn, rel)
-                    if df is not None:
-                        return df
-                return None
-
-            for task, tns in sorted(tasks.items()):
-                if task in ("static", "generic", "other"):
-                    continue
-                fig, ax = plt.subplots(1, len(joints),
-                                       figsize=(4.8 * len(joints), 3.6),
-                                       squeeze=False)
-                drew = False
-                for k, joint in enumerate(joints):
-                    a = ax[0][k]
-                    per_muscle = {}          # muscle -> list of % curves
-                    for m in iters:
-                        for tn in tns:
-                            span = _muscles_spanning(m, tn, joint)
-                            df = _forces(m, tn)
-                            if df is None or not span:
-                                continue
-                            cols = [c for c in df.columns if str(c) in span]
-                            if not cols:
-                                continue
-                            arr = np.vstack([_tnorm(pd.to_numeric(df[c],
-                                             errors="coerce").to_numpy(float))
-                                             for c in cols])
-                            tot = np.nansum(np.abs(arr), axis=0)
-                            tot[tot <= 0] = np.nan
-                            for c, row in zip(cols, arr):
-                                per_muscle.setdefault(str(c), []).append(
-                                    100.0 * np.abs(row) / tot)
-                    if not per_muscle:
-                        a.text(0.5, 0.5, "no muscle_analysis /\nforce data",
-                               ha="center", va="center", transform=a.transAxes,
-                               color="0.6", fontsize=8)
-                        a.set_title(f"{joint}", fontsize=9)
-                        continue
-                    mean_of = {c: np.nanmean(np.vstack(v), axis=0)
-                               for c, v in per_muscle.items()}
-                    top = sorted(mean_of, key=lambda c: np.nanmax(mean_of[c]),
-                                 reverse=True)[:TOPN]
-                    xs = np.linspace(0, 100, npts)
-                    for c in top:
-                        a.plot(xs, mean_of[c], lw=1.6, label=c)
-                        drew = True
-                    rest = [c for c in mean_of if c not in top]
-                    if rest:
-                        a.plot(xs, np.nansum(np.vstack([mean_of[c] for c in rest]),
-                                             axis=0),
-                               lw=1.0, ls=":", color="0.5",
-                               label=f"other ({len(rest)})")
-                    a.set_title(f"{joint} — top {len(top)} of "
-                                f"{len(mean_of)} muscles", fontsize=9)
-                    a.set_xlabel("% task", fontsize=8)
-                    a.set_ylabel("% of muscle force at the joint", fontsize=8)
-                    a.set_xlim(0, 100); a.tick_params(labelsize=7)
-                    a.grid(color="0.92", lw=0.5)
-                    a.legend(fontsize=6, ncol=2, frameon=False)
-                if not drew:
-                    plt.close(fig)
-                    print(f"[Session] muscle_share: no data for task {task!r}")
-                    continue
-                fig.suptitle(f"{self.name} — {task} — muscle share of the force "
-                             f"crossing each joint ({leg} limb, "
-                             f"{len(tns)} trial(s))", fontsize=12)
-                fig.tight_layout(rect=[0, 0.02, 1, 0.93])
-                pth = os.path.join(out, f"summary_muscle_share_{task}.png")
-                fig.savefig(pth, dpi=int(getattr(ss, "dpi", 200) or 200))
-                plt.close(fig); made.append(pth)
-
-        # ---- MUSCLE CONTRIBUTIONS TO THE JOINT MOMENTS ----------------------
-        # Method of:
-        #   Maniar N, Schache AG, Cole MH, Opar DA (2019). Lower-limb muscle
-        #   function during sidestep cutting. Journal of Biomechanics 82:186-192.
-        #   https://doi.org/10.1016/j.jbiomech.2018.10.021
-        # Their section 2.6: "Muscle-derived joint moments (computed from the
-        # predicted muscle forces and their respective moment arms) were well
-        # matched with the experimental joint moments (R^2 = 1.0 +/- 0.0;
-        # nRMSE = 2.0e-2 +/- 0.03%)". So, for muscle i about coordinate q:
-        #
-        #       M_i(t) = F_i(t) * r_iq(t)
-        #
-        # with F from static optimisation (or CEINMS) and r from the OpenSim
-        # MuscleAnalysis moment arms. Muscles are pooled into the functional
-        # groups of their Fig. 3, and the net inverse-dynamics moment is drawn
-        # shaded behind, exactly as they present it. Summing every muscle should
-        # reproduce the ID moment to within the reserve/residual actuators —
-        # that identity is the built-in check, reported per panel as R^2.
-        if "muscle_moment" in figures:
-            MANIAR_GROUPS = {
-                "HAM":       ("bflh", "bfsh", "semimem", "semiten"),
-                "RECFEM":    ("recfem",),
-                "VASTI":     ("vasmed", "vaslat", "vasint"),
-                "GMAX":      ("glmax1", "glmax2", "glmax3"),
-                "GMED":      ("glmed1", "glmed2", "glmed3"),
-                "GMIN":      ("glmin1", "glmin2", "glmin3"),
-                "ILIOPSOAS": ("iliacus", "psoas"),
-                "PIRI":      ("piri",),
-                "ADD":       ("addbrev", "addlong", "addmagDist", "addmagIsch",
-                              "addmagMid", "addmagProx"),
-                "GAS":       ("gasmed", "gaslat"),
-                "SOLEUS":    ("soleus",),
-                "TIBANT":    ("tibant",),
-            }
-            MOM_COORDS = [("hip_flexion", "Hip flexion"),
-                          ("hip_adduction", "Hip adduction"),
-                          ("hip_rotation", "Hip rotation"),
-                          ("knee_angle", "Knee flexion"),
-                          ("ankle_angle", "Ankle plantarflexion")]
-
-            def _grp_of(muscle):
-                base = re.sub(r"_[rl]$", "", str(muscle))
-                for g, mem in MANIAR_GROUPS.items():
-                    if base in mem:
-                        return g
-                return None
-
-            def _forces_df(model, tn):
-                for rel in ("static_optimisation/SO_StaticOptimization_force.sto",
-                            "ceinms/Execution_a%s_b%s_g%s/MuscleForces.sto" % (
-                                (self._cfg.get("ceinms") or {}).get("alpha", 10),
-                                (self._cfg.get("ceinms") or {}).get("beta", 1),
-                                (self._cfg.get("ceinms") or {}).get("gamma", 1000))):
-                    df = _load(model, tn, rel)
-                    if df is not None:
-                        return df
-                return None
-
-            tasks2 = {}
-            for tn in names:
-                k = str(((self._cfg.get("trials") or {}).get(tn) or {})
-                        .get("type", "other")).lower()
-                tasks2.setdefault(k, []).append(tn)
-
-            for task, tns in sorted(tasks2.items()):
-                if task in ("static", "generic", "other"):
-                    continue
-                fig, ax = plt.subplots(1, len(MOM_COORDS),
-                                       figsize=(3.6 * len(MOM_COORDS), 3.6),
-                                       squeeze=False)
-                drew = False
-                for k, (coord, nice) in enumerate(MOM_COORDS):
-                    a = ax[0][k]
-                    per_grp, nets, checks = {}, [], []
-                    for m in iters:
-                        for tn in tns:
-                            ma = _load(model=m, trial=tn, rel=os.path.join(
-                                "muscle_analysis",
-                                f"_MuscleAnalysis_MomentArm_{coord}_{leg}.sto"))
-                            fdf = _forces_df(m, tn)
-                            idf = _load(m, tn,
-                                        "external_biomechanics/inverse_dynamics.sto")
-                            if ma is None or fdf is None:
-                                continue
-                            shared = [c for c in ma.columns
-                                      if str(c).lower() != "time" and c in fdf.columns]
-                            if not shared:
-                                continue
-                            tot = np.zeros(npts)
-                            acc = {}
-                            for c in shared:
-                                r_ = _tnorm(pd.to_numeric(ma[c], errors="coerce")
-                                            .to_numpy(float))
-                                f_ = _tnorm(pd.to_numeric(fdf[c], errors="coerce")
-                                            .to_numpy(float))
-                                mi = f_ * r_                     # Maniar eq: F * r
-                                g = _grp_of(c)
-                                if g:
-                                    acc[g] = acc.get(g, 0.0) + mi
-                                tot = tot + np.nan_to_num(mi)
-                            for g, v in acc.items():
-                                per_grp.setdefault(g, []).append(v)
-                            if idf is not None:
-                                ncol = next((c for c in idf.columns
-                                             if str(c).lower().startswith(
-                                                 f"{coord}_{leg}")), None)
-                                if ncol is not None:
-                                    net = _tnorm(pd.to_numeric(idf[ncol],
-                                                 errors="coerce").to_numpy(float))
-                                    nets.append(net)
-                                    ok = np.isfinite(net) & np.isfinite(tot)
-                                    if ok.sum() > 2 and np.ptp(net[ok]) > 0:
-                                        checks.append(1.0 - np.sum((net[ok]-tot[ok])**2)
-                                                      / np.sum((net[ok]-net[ok].mean())**2))
-                    if not per_grp:
-                        a.text(0.5, 0.5, "no moment-arm /\nforce data", ha="center",
-                               va="center", transform=a.transAxes, color="0.6",
-                               fontsize=8)
-                        a.set_title(nice, fontsize=9); continue
-                    xs = np.linspace(0, 100, npts)
-                    if nets:
-                        a.fill_between(xs, 0, np.nanmean(np.vstack(nets), 0),
-                                       color="0.82", zorder=1,
-                                       label="net (inverse dynamics)")
-                    order = sorted(per_grp,
-                                   key=lambda g: np.nanmax(np.abs(
-                                       np.nanmean(np.vstack(per_grp[g]), 0))),
-                                   reverse=True)
-                    for g in order[:6]:
-                        a.plot(xs, np.nanmean(np.vstack(per_grp[g]), 0), lw=1.6,
-                               label=g, zorder=3)
-                        drew = True
-                    a.axhline(0, color="0.5", lw=0.6, zorder=2)
-                    ttl = nice + (f"  (R²={np.mean(checks):.2f})" if checks else "")
-                    a.set_title(ttl, fontsize=9)
-                    a.set_xlabel("% task", fontsize=8)
-                    if k == 0:
-                        a.set_ylabel("Moment (N·m)", fontsize=8)
-                    a.set_xlim(0, 100); a.tick_params(labelsize=7)
-                    a.legend(fontsize=6, frameon=False, ncol=2)
-                if not drew:
-                    plt.close(fig)
-                    print(f"[Session] muscle_moment: no data for task {task!r}")
-                    continue
-                fig.suptitle(f"{self.name} — {task} — muscle contributions to the "
-                             f"net joint moments ({leg} limb, {len(tns)} trial(s))"
-                             f"   [method: Maniar et al. 2019, J Biomech 82:186-192]",
-                             fontsize=11)
-                fig.tight_layout(rect=[0, 0.02, 1, 0.92])
-                pth = os.path.join(out, f"summary_muscle_moment_{task}.png")
-                fig.savefig(pth, dpi=int(getattr(ss, "dpi", 200) or 200))
-                plt.close(fig); made.append(pth)
 
         print(f"[Session] {self.name}: wrote {len(made)} summary figures -> {out}")
         return made

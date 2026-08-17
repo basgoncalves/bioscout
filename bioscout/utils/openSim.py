@@ -2673,8 +2673,25 @@ def assign_grfs_to_feet(grf_mot_path=None, marker_trc_path=None,
             t0, t1 = -np.inf, np.inf
         rx, rz = _foot_xz(right_markers, t0, t1)
         lx, lz = _foot_xz(left_markers, t0, t1)
-        dR = np.hypot(cx - rx, cz - rz) if rx is not None else np.inf
-        dL = np.hypot(cx - lx, cz - lz) if lx is not None else np.inf
+        # FAIS patch 2026-08-12: decide LEFT/RIGHT on the LATERAL axis ALONE.
+        # The CoP sits mid-foot, ~150 mm forward of the heel marker, so the
+        # progression-axis error is systematically LARGER than the real left/right
+        # separation (~50-100 mm). Scoring on the horizontal plane let that offset
+        # dominate and collapsed every plate onto one foot: Run_baselineA1 put all
+        # three plates on calcn_l, so the right leg had kinematics but no GRF and
+        # therefore no ankle moment. The horizontal distance is still used, but
+        # only for the "is this a foot at all" gate below.
+        _lat = getattr(getattr(settings, 'BatchSettings', None),
+                       'trc_lateral_axis', 'Z').upper()
+        _c_lat, _r_lat, _l_lat = ((cx, rx, lx) if _lat == 'X' else (cz, rz, lz))
+        dR = abs(_c_lat - _r_lat) if _r_lat is not None else np.inf
+        dL = abs(_c_lat - _l_lat) if _l_lat is not None else np.inf
+        _hR = np.hypot(cx - rx, cz - rz) if rx is not None else np.inf
+        _hL = np.hypot(cx - lx, cz - lz) if lx is not None else np.inf
+        print(f"    Plate {pnum}: lateral({_lat}) CoP={_c_lat:.0f} "
+              f"R={_r_lat if _r_lat is None else round(_r_lat)} "
+              f"L={_l_lat if _l_lat is None else round(_l_lat)} "
+              f"-> dR={dR:.0f} dL={dL:.0f} mm")
         if not np.isfinite(dR) and not np.isfinite(dL):
             body = right_foot_body if int(pnum) % 2 == 1 else left_foot_body
         else:

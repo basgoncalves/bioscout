@@ -11,6 +11,33 @@ All notable changes to BioScout are documented here.
 > possible in 2.x while the session/iteration API settles; they get a minor bump
 > and a note here.
 
+## 2.0.0c1 — 2026-08-17 (unreleased, branch `implementations-c1`)
+
+Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
+`docs/IMPLEMENTATIONS.md` for the full field-tested bug list and roadmap.
+
+### Added
+- **Shared model library.** `so_model` / `ceinms_model` resolve: absolute
+  path -> iteration folder -> session folder -> `<project>/models/`. One
+  scaled model per subject serves every session/iteration; a per-iteration
+  copy still wins when present. A model that resolves nowhere now WARNS
+  instead of silently leaving the trial without a model.
+- `BIOSCOUT_LOG_DIR` env var: one folder for every log of a project;
+  `BIOSCOUT_LOG=0` disables bioscout's own file logging when a parent
+  process already tees all output (one run = one log file).
+
+### Changed
+- **All run logs land in `<project>/logs/`** as uniform
+  `bioscout_<date>_<time>.txt` — `Session.open`/`Iteration.open` no longer
+  scatter per-session `logs/` folders; the heading inside the file names the
+  run.
+
+### Fixed
+- **EMG-only normalisation trials no longer scaffold empty stage folders**
+  (`external_biomechanics/`, `ceinms/`, ...) in every iteration —
+  normalisation-only trials skip the scaffolding and constructor leftovers
+  are pruned.
+
 ## [2.0.0] — 2026-08-11
 
 First normal (non-pre-release) 2.x. Code-identical to `2.0.0b20` — only the
