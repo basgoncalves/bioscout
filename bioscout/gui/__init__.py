@@ -76,10 +76,10 @@ def scaling_defaults(session_dir, iteration=None):
     plausible wrong path.
 
         template_model   iterations.<it>.generic, resolved against
-                         "generic models/"
-        markerset        session.yaml markerset
+                         models/generic/ (then the legacy "generic models/")
+        markerset        session.yaml markerset, falling back to models/utils/
         trc              2_experimental/<static_trial>/marker_experimental.trc
-        output           3_iterations/<it>/scaled.osim
+        output           models/personalised/<subject>/<generic>_scaled.osim
         static_trial     the session's static trial name
         iterations       every iteration the session declares
     """
@@ -111,7 +111,8 @@ def scaling_defaults(session_dir, iteration=None):
 
     gen = it.get("generic") or ""
     if gen:
-        for base in (_os.path.join(proj, "generic models"),
+        for base in (_os.path.join(proj, "models", "generic"),
+                     _os.path.join(proj, "generic models"),
                      _os.path.join(proj, "models"), proj, session_dir):
             cand = _os.path.join(base, gen)
             if _os.path.isfile(cand):
@@ -129,6 +130,16 @@ def scaling_defaults(session_dir, iteration=None):
         # exists nowhere. Treat a drive letter as absolute on every platform.
         _abs = _os.path.isabs(ms) or (len(ms) > 2 and ms[1] == ":")
         cand = ms if _abs else _os.path.join(proj, ms)
+        if not _os.path.isfile(cand) and not _abs:
+            # the markerset is lab equipment, not session data — it lives in
+            # the models folder. Try there before declaring it missing.
+            base = _os.path.basename(ms)
+            for alt in (_os.path.join(proj, "models", "utils", base),
+                        _os.path.join(proj, "models", "generic", base),
+                        _os.path.join(proj, "models", base)):
+                if _os.path.isfile(alt):
+                    cand = alt
+                    break
         out["markerset"] = _os.path.normpath(cand)
         if not _os.path.isfile(cand):
             out["errors"].append(f"markerset not found: {ms}")
@@ -146,7 +157,13 @@ def scaling_defaults(session_dir, iteration=None):
         out["errors"].append("session.yaml has no static_trial")
 
     if iteration:
-        # scaled.osim — the name every downstream stage looks for.
-        out["output"] = _os.path.normpath(
-            _os.path.join(session_dir, "3_iterations", iteration, "scaled.osim"))
+        # models/personalised/<subject>/ — ONE scaled model per subject serves
+        # every session and iteration (the shared model library resolves
+        # absolute paths first), instead of a copy buried inside each
+        # session's 3_iterations/. Name keeps the generic's stem so the file
+        # says what it was scaled from.
+        subject = _os.path.basename(_os.path.dirname(session_dir))
+        stem = _os.path.splitext(_os.path.basename(gen))[0] if gen else "model"
+        out["output"] = _os.path.normpath(_os.path.join(
+            proj, "models", "personalised", subject, f"{stem}_scaled.osim"))
     return out

@@ -108,14 +108,46 @@ def _keep_line(line, level):
     return True
 
 
+def in_notebook():
+    """True when stdout belongs to a Jupyter/IPython cell rather than a console.
+
+    ``ipykernel`` in ``sys.modules`` is the cheap, dependency-free test: it is
+    imported by the kernel itself and by nothing else. Used for two decisions in
+    ``start_logging`` — both about not stealing a notebook's own output."""
+    return "ipykernel" in sys.modules
+
+
 class _Tee:
     """Write to several streams at once (console AND log), filtering whole lines
-    by settings.LOG_TYPE ("detailed" | "minimal" | "quiet")."""
-    def __init__(self, *streams):
+    by settings.LOG_TYPE ("detailed" | "minimal" | "quiet").
+
+    ``raw=True`` turns the filter off entirely and passes writes straight
+    through. The filter exists to keep an hours-long batch log readable; applied
+    in a notebook it silently eats the user's own ``print()`` calls, because
+    nothing they write is on the whitelist ``_KEEP_MINIMAL`` matches.
+    """
+    def __init__(self, *streams, raw=False):
         self.streams = streams
+        self.raw = bool(raw)
         self._buf = ""
         self._in_tb = False        # inside a Python traceback block (keep every line)
         self._kept_prev = False    # previous line survived the filter
+
+    # Some libraries probe the stream they are writing to (tqdm asks isatty,
+    # anything doing encoding work asks encoding). Answer for the first stream
+    # rather than raising AttributeError from a tee nobody asked for.
+    def isatty(self):
+        try:
+            return bool(self.streams[0].isatty())
+        except Exception:
+            return False
+
+    @property
+    def encoding(self):
+        # `or`, not a getattr default: io.StringIO HAS an `encoding` attribute
+        # and it is None, so the default never fires and callers that do
+        # `codecs.lookup(stream.encoding)` get a TypeError instead of a name.
+        return getattr(self.streams[0], "encoding", None) or "utf-8"
 
     def _emit(self, text):
         for s in self.streams:
@@ -134,6 +166,9 @@ class _Tee:
         return line
 
     def write(self, data):
+        if self.raw:
+            self._emit(data)
+            return
         level = _log_verbosity()
         if level not in ("minimal", "quiet"):
             # detailed: still timestamp warning/error lines, but keep everything.
@@ -298,7 +333,7 @@ def ensure_logging(name="bioscout", log_dir=None):
 def start_logging(name="run", log_dir=None, filename=None, append=False):
     """Tee stdout+stderr to a timestamped project log file, with a run heading.
 
-    Every run writes to ``<log_dir>/bioscout_<YYYYmmdd_HHMMSS>.txt`` — one naming
+    Every run writes to ``<log_dir>/bioscout_<YYYYmmdd_HHMMSS>.log`` — one naming
     scheme (``bioscout_…``) for all runs, with the timestamp in the filename so
     runs never collide, and a heading inside identifying what was done (``name``
     + time + disclaimer)::
@@ -327,10 +362,13 @@ def start_logging(name="run", log_dir=None, filename=None, append=False):
         log_dir = os.path.join(getattr(_u, "PROJECT_DIR", os.getcwd()), "logs")
     os.makedirs(log_dir, exist_ok=True)
     if filename is None:
-        # ONE naming scheme for every log: bioscout_<date>_<time>.txt.
+        # ONE naming scheme for every log: bioscout_<date>_<time>.log.
+        # .log rather than .txt so editors and log viewers syntax-highlight
+        # it, and so a `*.txt` glob in a project folder does not sweep up
+        # run logs alongside real text files.
         # No subject/session in the name (2026-08-17) — the heading inside
         # the file says what was run.
-        filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.txt"
+        filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
     path = os.path.join(log_dir, filename)
     f = open(path, "a" if append else "w", encoding="utf-8")
     f.write(f"\n{'=' * 72}\n"
@@ -342,8 +380,21 @@ def start_logging(name="run", log_dir=None, filename=None, append=False):
     _LOG_STARTED, _LOG_HANDLE = True, f   # mark started so auto-logging won't re-open
     _LOG_FINISHED = False                 # fresh run — allow the finish hook to write
     _LOG_START, _LOG_NAME = time.time(), name
-    sys.stdout = _Tee(sys.__stdout__, f)
-    sys.stderr = _Tee(sys.__stderr__, f)
+    # Tee onto the CURRENT streams, never sys.__stdout__.
+    #
+    # In a Jupyter kernel ipykernel has already replaced sys.stdout with the
+    # stream that routes output INTO the cell; sys.__stdout__ is still the
+    # kernel PROCESS's stdout — the terminal nobody is looking at. Teeing onto
+    # that sent every print after `bs.Project()` to that terminal, so a notebook
+    # cell ran, succeeded, and displayed nothing. In a normal console the two
+    # are the same object, so this changes nothing there.
+    #
+    # `raw` in a notebook: the LOG_TYPE line filter is for batch logs. A user's
+    # own print() matches no whitelist entry, so under the default
+    # LOG_TYPE="minimal" it would be dropped even after the fix above.
+    _raw = in_notebook()
+    sys.stdout = _Tee(sys.stdout or sys.__stdout__, f, raw=_raw)
+    sys.stderr = _Tee(sys.stderr or sys.__stderr__, f, raw=_raw)
     # OpenSim's C++ [info]/[warning] lines are fd-level, so the Python tee above
     # misses them. Send them to a per-run sidecar in the TEMP dir (its own handle
     # — no conflict with this log's), folded into THIS log at exit. Keeping the

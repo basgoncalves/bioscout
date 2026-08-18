@@ -126,8 +126,15 @@ def _defaults() -> dict:
 class EMGProcessingTab(ctk.CTkFrame):
     """Session-level EMG filtering, normalisation and inspection."""
 
-    def __init__(self, parent, config_manager=None, status_callback=None):
+    def __init__(self, parent, config_manager=None, status_callback=None,
+                 show_mvc=True):
+        """``show_mvc=False`` builds the tab as a pure FILTERING view: no
+        "Trials in normalisation" list, no Amplitude-normalise step. That is
+        the shape the merged EMG tab uses — normalisation is a session-level
+        decision made at export/pipeline time, and offering it twice invited
+        two different answers."""
         super().__init__(parent, fg_color="transparent")
+        self.show_mvc = bool(show_mvc)
         self.config_manager = config_manager
         self.status_callback = status_callback or (lambda *a, **k: None)
         self._project_root: Optional[Path] = None
@@ -210,9 +217,14 @@ class EMGProcessingTab(ctk.CTkFrame):
         col.grid_rowconfigure(3, weight=1)
         col.grid_columnconfigure(0, weight=1)
 
-        self._ref_frame = self._trial_list(
-            col, 0, "Trials in normalisation",
-            "the MVC reference spans these", self._ref_vars)
+        if self.show_mvc:
+            self._ref_frame = self._trial_list(
+                col, 0, "Trials in normalisation",
+                "the MVC reference spans these", self._ref_vars)
+        else:
+            # no MVC list: the plot list takes the whole column
+            self._ref_frame = None
+            col.grid_rowconfigure(1, weight=0)
         self._plot_frame_list = self._trial_list(
             col, 2, "Trials to plot", "drawn in the panel on the right",
             self._plot_vars)
@@ -271,7 +283,16 @@ class EMGProcessingTab(ctk.CTkFrame):
             ("cutoff (Hz)", "_env_low", d["env_low"]),
             ("order", "_env_order", d["env_order"])])
 
-        self._do_norm = ctk.BooleanVar(value=True)
+        self._do_norm = ctk.BooleanVar(value=self.show_mvc)
+        if not self.show_mvc:
+            # Filtering view: the normalise vars keep existing (everything
+            # downstream reads them) but the block itself is not built, and
+            # _do_norm stays False — the Apply button below still works.
+            self._norm_method = ctk.StringVar(value="max")
+            self._win_row = None
+            self._win_ms = ctk.StringVar(value="200")
+            self._finish_settings(col, r)
+            return
         r = self._step(col, r, self._do_norm, "Amplitude normalise", [])
         meth = ctk.CTkFrame(col, fg_color="transparent")
         meth.grid(row=r, column=0, sticky="ew", padx=26, pady=(0, 4))
@@ -292,7 +313,9 @@ class EMGProcessingTab(ctk.CTkFrame):
         ctk.CTkEntry(self._win_row, textvariable=self._win_ms, width=70,
                      height=24, font=("Consolas", 11)).grid(row=0, column=1)
         self._sync_window_box()
+        self._finish_settings(col, r)
 
+    def _finish_settings(self, col, r):
         self._apply_btn = ctk.CTkButton(col, text="▶  Apply to ticked trials",
                                         height=32, font=("Segoe UI", 12),
                                         fg_color="#28a745", hover_color="#218838",
@@ -433,6 +456,8 @@ class EMGProcessingTab(ctk.CTkFrame):
 
     def _scan_trials(self):
         for f in (self._ref_frame, self._plot_frame_list):
+            if f is None:
+                continue
             for w in f.winfo_children():
                 w.destroy()
         self._ref_vars.clear()
@@ -453,10 +478,11 @@ class EMGProcessingTab(ctk.CTkFrame):
             # should span the session unless you say otherwise.
             rv = ctk.BooleanVar(value=has)
             self._ref_vars[d.name] = rv
-            ctk.CTkCheckBox(self._ref_frame, text=d.name, variable=rv,
-                            font=("Segoe UI", 10),
-                            state="normal" if has else "disabled"
-                            ).pack(anchor="w", padx=4, pady=1)
+            if self._ref_frame is not None:      # hidden in the filtering view
+                ctk.CTkCheckBox(self._ref_frame, text=d.name, variable=rv,
+                                font=("Segoe UI", 10),
+                                state="normal" if has else "disabled"
+                                ).pack(anchor="w", padx=4, pady=1)
             # Plotting defaults to the FIRST such trial only — drawing 14 trials
             # x 16 channels on open is the thing that made this tab feel stuck.
             first = has and not any(v.get() for v in self._plot_vars.values())

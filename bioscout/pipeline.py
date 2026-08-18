@@ -961,11 +961,27 @@ def run_sessions(project_dir=None, replace=None, models=None, trials=None,
         if not os.path.isfile(abs_model):
             print(f"  [ERROR] {spec.subject}/{model.name}: model not found -> {abs_model}")
             continue
-        setup_dir = (spec.setup_folder if (spec.setup_folder and os.path.isabs(spec.setup_folder))
-                     else os.path.join(project_dir, spec.setup_folder or "setupFiles"))
-        csrc = spec.c3d_source
-        csrc = (csrc if (csrc and os.path.isabs(csrc))
-                else (os.path.join(project_dir, csrc) if csrc else None))
+        # Both used to be joined to project_dir unconditionally. That is right
+        # for setup_folder and wrong for c3d_source: sessions write it
+        # session-relative (`../../../c3d_files/022`), so against the project it
+        # pointed three levels ABOVE the project, at a path that does not exist.
+        # One resolver now applies each key's own base order and reports which
+        # base answered — see bioscout.utils.session_paths.
+        from bioscout.utils.session_paths import resolve as _resolve_path
+        _notes = []
+        _setup = _resolve_path("setup_folder", spec.setup_folder or "setupFiles",
+                               session_dir=sdir, project_dir=project_dir)
+        setup_dir = str(_setup)
+        _notes.append(_setup.note())
+        csrc = None
+        if spec.c3d_source:
+            _c3d = _resolve_path("c3d_source", spec.c3d_source,
+                                 session_dir=sdir, project_dir=project_dir)
+            csrc = str(_c3d)
+            _notes.append(_c3d.note())
+        for _note in _notes:
+            if _note:
+                print(f"  [paths] {_note}")
         trs = list(spec.trials.keys())
         if want_trials:
             trs = [t for t in trs if t in set(want_trials)]

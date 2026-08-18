@@ -1,6 +1,7 @@
 """Batch C3D Export Widget - Process multiple C3D files at once."""
 
 import customtkinter as ctk
+import tkinter                      # Text + Scrollbar: the max-EMG table
 from pathlib import Path
 import threading
 from typing import List, Callable, Optional
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from utils.logger import logger
 from utils.xml_utils import save_pretty_xml
 from .c3d_export import C3DExportTab
+from ..gui_settings import gui_settings, font_size
 
 # Try to import Inputs class and settings from settings module
 try:
@@ -56,20 +58,52 @@ try:
 except ImportError:
     HAS_C3D = False
 
-# Optional: scipy for the live EMG filter preview / max-EMG calculation
-try:
-    import scipy.signal as _sps
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
+# Optional: scipy (filtering) and matplotlib (preview plot) — resolved LAZILY.
+# This module is imported when the app starts, and importing scipy+matplotlib
+# here put ~2s of scientific-stack start-up cost on every launch, paid before
+# the window even painted, for features used only once this tab is open.
+_sps = None
+Figure = None
+FigureCanvasTkAgg = None
 
-# Optional: matplotlib (embedded) for the live EMG filter preview
-try:
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    HAS_MPL = True
-except Exception:
-    HAS_MPL = False
+
+def _load_scipy():
+    global _sps
+    if _sps is None:
+        try:
+            import scipy.signal as _m
+            _sps = _m
+        except ImportError:
+            _sps = False
+    return _sps
+
+
+def _load_mpl():
+    global Figure, FigureCanvasTkAgg
+    if Figure is None:
+        try:
+            from matplotlib.figure import Figure as _F
+            from matplotlib.backends.backend_tkagg import (
+                FigureCanvasTkAgg as _C)
+            Figure, FigureCanvasTkAgg = _F, _C
+        except Exception:
+            Figure = FigureCanvasTkAgg = False
+    return bool(Figure)
+
+
+class _Avail:
+    """Truthy availability flag that does the import on FIRST CHECK, so the
+    module-level names HAS_SCIPY / HAS_MPL keep working unchanged."""
+
+    def __init__(self, loader):
+        self._loader = loader
+
+    def __bool__(self):
+        return bool(self._loader())
+
+
+HAS_SCIPY = _Avail(_load_scipy)
+HAS_MPL = _Avail(_load_mpl)
 
 # ============================================================================
 # DEFAULT FOOT MARKER PATTERNS - EDIT THESE TO CUSTOMIZE MARKER DETECTION
@@ -161,12 +195,22 @@ RIGHT_FOOT_MARKER_PATTERNS = [
 class BatchC3DExport(ctk.CTkFrame):
     """Batch processor for multiple C3D files."""
 
-    def __init__(self, parent):
-        """Initialize Batch C3D Export widget."""
+    def __init__(self, parent, config_manager=None, status_callback=None):
+        """Initialize Batch C3D Export widget.
+
+        ``config_manager``/``status_callback`` are the pair every other tab
+        takes. This one used to be constructed with neither, which is why it
+        was the only tab that could not report status and had nowhere to
+        remember anything between launches."""
         super().__init__(parent)
+
+        self.config_manager = config_manager
+        self.status_callback = status_callback
+        self.gui_settings = gui_settings()
 
         self.source_folder = None
         self.dest_folder = None
+        self.project_dir = None  # set by main_window.broadcast_project_dir
         self.c3d_files: List[Path] = []
         self.selected_files: List[bool] = []
         self.is_processing = False
@@ -175,8 +219,150 @@ class BatchC3DExport(ctk.CTkFrame):
         self.session_dir = None  # Track session directory
         self.all_detected_markers = set()  # Store all markers detected across trials
         self._all_analog_channels: list = []  # All analog channels found (unfiltered)
+        self.max_emg_per_trial: dict = {}    # channel -> {trial: peak}
+        self._emg_scale_entries: dict = {}   # channel -> StringVar (per-muscle)
 
         self._create_widgets()
+        self._restore_ui_state()
+
+    # ------------------------------------------------------------------
+    # Where a file dialog should open
+    # ------------------------------------------------------------------
+    def set_project_dir(self, project_dir):
+        """Called by ``main_window.broadcast_project_dir`` on every project
+        load. This tab did not implement it, so it never learned what project
+        was open — which is why Browse opened wherever Windows last happened to
+        be, often in an unrelated study."""
+        try:
+            self.project_dir = Path(project_dir) if project_dir else None
+        except Exception:                                      # noqa: BLE001
+            self.project_dir = None
+        if self.project_dir:
+            self.gui_settings.remember_path("paths.last_project",
+                                            str(self.project_dir))
+            logger.debug(f"Batch C3D: project dir set to {self.project_dir}")
+
+    def _start_dir(self, kind="source"):
+        """Best guess at where a folder picker should open, most specific first.
+
+        1. what is already typed in that field   — you are correcting a path
+        2. the other field                       — source and dest are siblings
+        3. the last folder used for this purpose — per machine, not per project
+        4. <project>/simulations, then <project> — the project that is open
+        5. home                                  — anything but someone else's study
+        """
+        candidates = []
+        typed = (self.source_folder_var.get() if kind == "source"
+                 else self.dest_entry.get())
+        other = (self.dest_entry.get() if kind == "source"
+                 else self.source_folder_var.get())
+        candidates += [typed, other]
+        candidates.append(self.gui_settings.get(
+            "paths.last_c3d_source" if kind == "source" else "paths.last_c3d_dest", ""))
+        if self.session_dir:
+            candidates.append(str(self.session_dir))
+        if self.project_dir:
+            candidates.append(str(Path(self.project_dir) / "simulations"))
+            candidates.append(str(self.project_dir))
+        candidates.append(self.gui_settings.get("paths.last_project", ""))
+        candidates.append(str(Path.home()))
+        for c in candidates:
+            try:
+                if c and Path(c).is_dir():
+                    return str(c)
+            except Exception:                                  # noqa: BLE001
+                continue
+        return ""
+
+    # ------------------------------------------------------------------
+    # Remembering what you typed last time
+    # ------------------------------------------------------------------
+    #: Everything worth restoring, as {settings key: attribute holding a
+    #: StringVar}. Folders are NOT in here — they live under `paths.*` so the
+    #: Settings tab can show and clear them in one place.
+    _PERSISTED_VARS = {
+        "c3d_export.emg_label": "emg_label_var",
+        "c3d_export.emg_lowpass": "emg_lowpass_var",
+        "c3d_export.emg_highpass": "emg_highpass_var",
+        "c3d_export.emg_notch": "emg_notch_var",
+        "c3d_export.maxemg_window": "maxemg_window_var",
+        "c3d_export.marker_remove": "marker_remove_var",
+        "c3d_export.emg_scale_uniform": "emg_scale_value_var",
+    }
+
+    def _save_ui_state(self):
+        """Write the current form to the per-machine GUI settings.
+
+        Per-MACHINE on purpose. These are working preferences, not a record of
+        how the data was produced — what actually processed a trial is written
+        into that trial's own settings at export time, where it stays true even
+        if the form is changed afterwards."""
+        try:
+            data = {}
+            for key, attr in self._PERSISTED_VARS.items():
+                var = getattr(self, attr, None)
+                if var is not None:
+                    data[key] = var.get()
+            data["c3d_export.emg_scale_enabled"] = bool(
+                getattr(self, "emg_scale_enabled_var", None)
+                and self.emg_scale_enabled_var.get())
+            for key, attr in (("c3d_export.post_session", "post_session_var"),
+                              ("c3d_export.post_detect", "post_detect_var")):
+                var = getattr(self, attr, None)
+                if var is not None:
+                    data[key] = bool(var.get())
+            data["c3d_export.emg_scale_mode"] = (
+                self.emg_scale_mode_var.get()
+                if getattr(self, "emg_scale_mode_var", None) else "uniform")
+            data["c3d_export.emg_scale_per_channel"] = {
+                ch: v.get() for ch, v in self._emg_scale_entries.items()
+                if str(v.get()).strip() not in ("", "1", "1.0")}
+            left, right = self._get_selected_markers()
+            data["c3d_export.left_markers"] = list(left)
+            data["c3d_export.right_markers"] = list(right)
+            data["c3d_export.emg_channels"] = list(self._get_selected_emg_channels())
+            self.gui_settings.update(data)
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"Batch C3D: could not save UI state: {exc}")
+
+    def _restore_ui_state(self):
+        """Put back what was typed last time. Best-effort and silent: a stale
+        settings file must never stop the tab from opening."""
+        try:
+            for key, attr in self._PERSISTED_VARS.items():
+                var = getattr(self, attr, None)
+                stored = self.gui_settings.get(key, None)
+                if var is not None and stored not in (None, ""):
+                    var.set(stored)
+            if getattr(self, "emg_scale_enabled_var", None) is not None:
+                self.emg_scale_enabled_var.set(
+                    bool(self.gui_settings.get("c3d_export.emg_scale_enabled", False)))
+            for key, attr, dflt in (
+                    ("c3d_export.post_session", "post_session_var", True),
+                    ("c3d_export.post_detect", "post_detect_var", True)):
+                var = getattr(self, attr, None)
+                if var is not None:
+                    var.set(bool(self.gui_settings.get(key, dflt)))
+            if getattr(self, "emg_scale_mode_var", None) is not None:
+                self.emg_scale_mode_var.set(
+                    self.gui_settings.get("c3d_export.emg_scale_mode", "uniform"))
+            src = self.gui_settings.get("paths.last_c3d_source", "")
+            dst = self.gui_settings.get("paths.last_c3d_dest", "")
+            if src and Path(src).is_dir() and not self.source_folder_var.get():
+                self.source_folder_var.set(src)
+                self._validate_source_folder()
+            if dst and Path(dst).is_dir() and not self.dest_entry.get():
+                self.dest_entry.insert(0, dst)
+                self._validate_dest_folder()
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"Batch C3D: could not restore UI state: {exc}")
+
+    def _remembered_selection(self, kind):
+        """Marker/EMG names ticked last time, as a set (empty when none)."""
+        try:
+            return set(self.gui_settings.get(f"c3d_export.{kind}", []) or [])
+        except Exception:                                      # noqa: BLE001
+            return set()
 
     def set_session_dir(self, session_dir: str):
         """Set the session directory - called by main window."""
@@ -314,9 +500,11 @@ class BatchC3DExport(ctk.CTkFrame):
         emg_col = ctk.CTkFrame(settings_frame)
         emg_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         emg_col.grid_columnconfigure(0, weight=1)
-        emg_col.grid_rowconfigure(4, weight=3)   # preview plot
-        emg_col.grid_rowconfigure(6, weight=2)   # channel list
-        emg_col.grid_rowconfigure(8, weight=2)   # max-EMG results
+        # Row 3 holds channels-beside-preview; row 5 the max-EMG table. The
+        # old layout stacked preview, channel list and results vertically and
+        # the channel list was the row that lost — it collapsed to nothing.
+        emg_col.grid_rowconfigure(3, weight=3)   # channels | preview plot
+        emg_col.grid_rowconfigure(5, weight=2)   # max-EMG results
 
         markers_col = ctk.CTkFrame(settings_frame)
         markers_col.grid(row=0, column=1, sticky="nsew")
@@ -391,9 +579,39 @@ class BatchC3DExport(ctk.CTkFrame):
         for _e in (lp_entry, hp_entry, notch_entry):
             _e.bind("<Return>", lambda e: self._update_filter_preview())
 
-        # ----- EMG column: live filter preview controls -----
-        preview_ctrl = ctk.CTkFrame(emg_col)
-        preview_ctrl.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 2))
+        # ----- EMG column: channels BESIDE the preview -----
+        # One row, two columns: the tick list of channels on the left (under
+        # the Low/High/Notch fields, where the eye already is after setting a
+        # filter) and the preview plot on the right. Stacked vertically these
+        # fought for height and the channel list always lost.
+        mid = ctk.CTkFrame(emg_col, fg_color="transparent")
+        mid.grid(row=3, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        mid.grid_rowconfigure(1, weight=1)
+        mid.grid_columnconfigure(0, minsize=210)   # channels — never collapses
+        mid.grid_columnconfigure(1, weight=1)      # preview takes the rest
+
+        # -- left: EMG channel tick list --
+        ch_head = ctk.CTkFrame(mid, fg_color="transparent")
+        ch_head.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkLabel(ch_head, text="EMG Channels:",
+                     font=("Segoe UI", 10, "bold")).pack(side="left", padx=2)
+        ctk.CTkButton(ch_head, text="All", width=40, height=22,
+                      font=("Segoe UI", 9),
+                      command=self._select_all_emg).pack(side="right", padx=1)
+        ctk.CTkButton(ch_head, text="None", width=44, height=22,
+                      font=("Segoe UI", 9),
+                      command=self._deselect_all_emg).pack(side="right", padx=1)
+
+        self.emg_channels_scroll = ctk.CTkScrollableFrame(mid)
+        self.emg_channels_scroll.grid(row=1, column=0, sticky="nsew",
+                                      padx=(0, 4), pady=(2, 0))
+        self.emg_channels_scroll.grid_columnconfigure(0, weight=1)
+        self.emg_channel_vars = {}
+        self.emg_channel_checkboxes = []
+
+        # -- right: preview controls + plot --
+        preview_ctrl = ctk.CTkFrame(mid)
+        preview_ctrl.grid(row=0, column=1, sticky="ew")
         preview_ctrl.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(preview_ctrl, text="Preview ch:", font=("Segoe UI", 7, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 4))
@@ -410,8 +628,8 @@ class BatchC3DExport(ctk.CTkFrame):
         ).grid(row=0, column=2, padx=0)
 
         # ----- EMG column: live filter preview plot -----
-        self.preview_plot_frame = ctk.CTkFrame(emg_col)
-        self.preview_plot_frame.grid(row=4, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        self.preview_plot_frame = ctk.CTkFrame(mid)
+        self.preview_plot_frame.grid(row=1, column=1, sticky="nsew", pady=(2, 0))
         self.preview_plot_frame.grid_rowconfigure(0, weight=1)
         self.preview_plot_frame.grid_columnconfigure(0, weight=1)
 
@@ -427,60 +645,101 @@ class BatchC3DExport(ctk.CTkFrame):
         )
         self._preview_placeholder.grid(row=0, column=0, sticky="nsew")
 
-        # --- preview panel hidden (bioscout 2.0.0b2) ---
-        # The preview showed one channel of one file while you tuned filters,
-        # which meant re-reading the c3d on every parameter change for a view
-        # the exported file and the Results tab both give you afterwards. The
-        # widgets are built and then hidden rather than destroyed, so every
-        # method that updates them keeps working and this is a one-line revert.
-        preview_ctrl.grid_remove()
-        self.preview_plot_frame.grid_remove()
-        emg_col.grid_rowconfigure(4, weight=0)
-
-        # ----- EMG column: channels header + list -----
-        ctk.CTkLabel(emg_col, text="EMG Channels:", font=("Segoe UI", 8, "bold")).grid(
-            row=5, column=0, sticky="w", padx=5, pady=(6, 2)
-        )
-
-        emg_channels_frame = ctk.CTkFrame(emg_col)
-        emg_channels_frame.grid(row=6, column=0, sticky="nsew", padx=5, pady=(0, 3))
-        emg_channels_frame.grid_rowconfigure(1, weight=1)
-        emg_channels_frame.grid_columnconfigure(0, weight=1)
-
-        emg_btn_frame = ctk.CTkFrame(emg_channels_frame)
-        emg_btn_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 2))
-        emg_btn_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkButton(emg_btn_frame, text="All", width=40, font=("Segoe UI", 7), command=self._select_all_emg).pack(side="left", padx=1)
-        ctk.CTkButton(emg_btn_frame, text="None", width=40, font=("Segoe UI", 7), command=self._deselect_all_emg).pack(side="left", padx=1)
-
-        self.emg_channels_scroll = ctk.CTkScrollableFrame(emg_channels_frame, height=100)
-        self.emg_channels_scroll.grid(row=1, column=0, sticky="nsew")
-        self.emg_channels_scroll.grid_columnconfigure(0, weight=1)
-
-        self.emg_channel_vars = {}
-        self.emg_channel_checkboxes = []
+        # (The b2 "hide the preview" block is gone: the preview no longer costs
+        # the channel list its space — they share row 3 side by side — so the
+        # reason for hiding it no longer exists.)
 
         # ----- EMG column: max-EMG calculator -----
         maxemg_ctrl = ctk.CTkFrame(emg_col)
-        maxemg_ctrl.grid(row=7, column=0, sticky="ew", padx=5, pady=(6, 2))
+        maxemg_ctrl.grid(row=4, column=0, sticky="ew", padx=5, pady=(6, 2))
         maxemg_ctrl.grid_columnconfigure(3, weight=1)
 
-        ctk.CTkLabel(maxemg_ctrl, text="Max EMG", font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 6))
-        ctk.CTkLabel(maxemg_ctrl, text="Window (frames):", font=("Segoe UI", 7)).grid(row=0, column=1, sticky="e", padx=(0, 2))
+        ctk.CTkLabel(maxemg_ctrl, text="Max EMG", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", padx=(2, 6))
+        ctk.CTkLabel(maxemg_ctrl, text="Window (frames):", font=("Segoe UI", 10)).grid(row=0, column=1, sticky="e", padx=(0, 2))
         self.maxemg_window_var = ctk.StringVar(value="100")
-        ctk.CTkEntry(maxemg_ctrl, textvariable=self.maxemg_window_var, height=24, width=55).grid(row=0, column=2, sticky="w", padx=(0, 6))
+        ctk.CTkEntry(maxemg_ctrl, textvariable=self.maxemg_window_var, height=28,
+                     width=70, font=("Segoe UI", 11)).grid(row=0, column=2, sticky="w", padx=(0, 6))
         self.maxemg_button = ctk.CTkButton(
-            maxemg_ctrl, text="Compute", width=80, height=24, font=("Segoe UI", 8),
+            maxemg_ctrl, text="Compute", width=90, height=28, font=("Segoe UI", 11),
             command=self._on_compute_max_emg,
         )
         self.maxemg_button.grid(row=0, column=4, sticky="e", padx=0)
 
-        self.maxemg_results_scroll = ctk.CTkScrollableFrame(emg_col, height=90)
-        self.maxemg_results_scroll.grid(row=8, column=0, sticky="nsew", padx=5, pady=(0, 3))
-        self.maxemg_results_scroll.grid_columnconfigure(0, weight=1)
-        self.maxemg_result_labels = []
-        self.max_emg_results = {}  # channel -> (max_value, trial_name)
+        # RESULTS TABLE — a Text widget, not a stack of labels.
+        # The table is now one column per trial (peak as % of that channel's
+        # own maximum), which is far wider than the panel. A Text widget with
+        # wrap="none" scrolls in BOTH directions for free, keeps the monospace
+        # columns aligned, and lets the whole table be selected and copied —
+        # none of which a column of CTkLabels can do.
+        maxemg_table = ctk.CTkFrame(emg_col)
+        maxemg_table.grid(row=5, column=0, sticky="nsew", padx=5, pady=(0, 3))
+        maxemg_table.grid_rowconfigure(0, weight=1)
+        maxemg_table.grid_columnconfigure(0, weight=1)
+        # font_size(): plain tkinter.Text does not follow CTk widget scaling,
+        # so the table takes the UI scale explicitly or stays small forever.
+        self.maxemg_text = tkinter.Text(
+            maxemg_table, wrap="none", height=8,
+            font=("Consolas", font_size(11)),
+            background="#1e1e1e", foreground="#dcdcdc",
+            insertbackground="#dcdcdc", relief="flat", borderwidth=0,
+            highlightthickness=0,
+        )
+        self.maxemg_text.grid(row=0, column=0, sticky="nsew")
+        _mv = tkinter.Scrollbar(maxemg_table, orient="vertical",
+                                command=self.maxemg_text.yview)
+        _mv.grid(row=0, column=1, sticky="ns")
+        _mh = tkinter.Scrollbar(maxemg_table, orient="horizontal",
+                                command=self.maxemg_text.xview)
+        _mh.grid(row=1, column=0, sticky="ew")
+        self.maxemg_text.configure(yscrollcommand=_mv.set, xscrollcommand=_mh.set)
+        self.maxemg_text.tag_configure("head", foreground="#9fc5e8")
+        self.maxemg_text.configure(state="disabled")
+        self.maxemg_result_labels = []            # kept: older code appends here
+        self.max_emg_results = {}                 # channel -> (max_value, trial_name)
+        self.max_emg_per_trial = {}               # channel -> {trial: peak}
+
+        # ----- EMG column: export scaling -----
+        # Applied to the exported EMG, after filtering. Two modes because both
+        # are real: one gain for the whole rig, or one per electrode when the
+        # channels were not matched.
+        scale_frame = ctk.CTkFrame(emg_col)
+        scale_frame.grid(row=6, column=0, sticky="ew", padx=5, pady=(0, 4))
+        scale_frame.grid_columnconfigure(3, weight=1)
+
+        self.emg_scale_enabled_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(scale_frame, text="Scale EMG", font=("Segoe UI", 11, "bold"),
+                        variable=self.emg_scale_enabled_var,
+                        command=self._on_emg_scale_toggle
+                        ).grid(row=0, column=0, sticky="w", padx=(4, 8), pady=4)
+
+        self.emg_scale_mode_var = ctk.StringVar(value="uniform")
+        ctk.CTkSegmentedButton(
+            scale_frame, values=["uniform", "per muscle"],
+            variable=self.emg_scale_mode_var, font=("Segoe UI", 10),
+            command=lambda _v: self._on_emg_scale_toggle()
+        ).grid(row=0, column=1, sticky="w", padx=(0, 8), pady=4)
+
+        self.emg_scale_value_var = ctk.StringVar(value="1.0")
+        self.emg_scale_entry = ctk.CTkEntry(
+            scale_frame, textvariable=self.emg_scale_value_var, width=80,
+            height=28, font=("Segoe UI", 11))
+        self.emg_scale_entry.grid(row=0, column=2, sticky="w", pady=4)
+        self.emg_scale_entry.bind("<FocusOut>", lambda _e: self._save_ui_state())
+
+        self.emg_scale_hint = ctk.CTkLabel(
+            scale_frame, text="factor applied to every selected channel",
+            font=("Segoe UI", 10), text_color="#8a8a8a")
+        self.emg_scale_hint.grid(row=0, column=3, sticky="w", padx=8)
+
+        ctk.CTkButton(scale_frame, text="From Max EMG", width=110, height=28,
+                      font=("Segoe UI", 10), command=self._fill_scales_from_max_emg
+                      ).grid(row=0, column=4, sticky="e", padx=4, pady=4)
+
+        self.emg_scale_per_frame = ctk.CTkScrollableFrame(scale_frame, height=110)
+        self.emg_scale_per_frame.grid(row=1, column=0, columnspan=5, sticky="ew",
+                                      padx=4, pady=(0, 4))
+        self.emg_scale_per_frame.grid_columnconfigure(1, weight=1)
+        self.emg_scale_per_frame.grid_remove()      # shown only in per-muscle mode
 
         # ----- Markers column: header -----
         ctk.CTkLabel(markers_col, text="All Markers:", font=("Segoe UI", 8, "bold")).grid(
@@ -586,6 +845,25 @@ class BatchC3DExport(ctk.CTkFrame):
         )
         self.progress_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2)
 
+        # What happens AFTER the trials are exported. Ticked by default: an
+        # export whose session.yaml does not know about it, and whose trials
+        # have no detected type, is only half an export — every downstream
+        # stage reads both.
+        post_frame = ctk.CTkFrame(progress_frame, fg_color="transparent")
+        post_frame.grid(row=4, column=0, columnspan=2, sticky="w", padx=5, pady=(4, 0))
+        self.post_session_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(post_frame,
+                        text="After export: update session.yaml",
+                        variable=self.post_session_var, font=("Segoe UI", 10),
+                        command=self._save_ui_state
+                        ).pack(side="left", padx=(0, 14))
+        self.post_detect_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(post_frame,
+                        text="run movement detection",
+                        variable=self.post_detect_var, font=("Segoe UI", 10),
+                        command=self._save_ui_state
+                        ).pack(side="left")
+
         # Export and cancel buttons
         button_frame_bottom = ctk.CTkFrame(progress_frame)
         button_frame_bottom.grid(row=3, column=0, columnspan=2, sticky="ew", padx=5, pady=(8, 0))
@@ -661,11 +939,15 @@ class BatchC3DExport(ctk.CTkFrame):
         """Select source folder with C3D files."""
         try:
             import tkinter.filedialog as filedialog
-            folder = filedialog.askdirectory(title="Select source folder with C3D files")
+            folder = filedialog.askdirectory(
+                title="Select source folder with C3D files",
+                initialdir=self._start_dir("source"))
             if folder:
                 self.source_entry.delete(0, "end")
                 self.source_entry.insert(0, folder)
                 self._validate_source_folder()
+                self.gui_settings.remember_path("paths.last_c3d_source", folder)
+                self._save_ui_state()
         except Exception as e:
             logger.error(f"Error selecting source folder: {str(e)}")
 
@@ -673,11 +955,15 @@ class BatchC3DExport(ctk.CTkFrame):
         """Select destination folder for exports."""
         try:
             import tkinter.filedialog as filedialog
-            folder = filedialog.askdirectory(title="Select destination folder")
+            folder = filedialog.askdirectory(
+                title="Select destination folder",
+                initialdir=self._start_dir("dest"))
             if folder:
                 self.dest_entry.delete(0, "end")
                 self.dest_entry.insert(0, folder)
                 self._validate_dest_folder()
+                self.gui_settings.remember_path("paths.last_c3d_dest", folder)
+                self._save_ui_state()
         except Exception as e:
             logger.error(f"Error selecting destination folder: {str(e)}")
 
@@ -749,6 +1035,17 @@ class BatchC3DExport(ctk.CTkFrame):
         if checked_right is None:
             checked_right = set()
 
+        # What you ticked last time wins over the auto-detected guess, but only
+        # for markers this capture actually has. Auto-detection is a heuristic
+        # over name patterns; a deliberate choice is not, and re-making it on
+        # every launch was the complaint.
+        remembered_l = self._remembered_selection("left_markers") & set(left_markers)
+        remembered_r = self._remembered_selection("right_markers") & set(right_markers)
+        if remembered_l:
+            checked_left = remembered_l
+        if remembered_r:
+            checked_right = remembered_r
+
         # Clear existing checkboxes
         for checkbox in self.left_marker_checkboxes:
             checkbox.destroy()
@@ -770,7 +1067,8 @@ class BatchC3DExport(ctk.CTkFrame):
                 self.left_markers_scroll,
                 text=marker,
                 variable=var,
-                font=("Segoe UI", 9)
+                font=("Segoe UI", 9),
+                command=self._save_ui_state,
             )
             checkbox.pack(anchor="w", padx=5, pady=2)
             self.left_marker_checkboxes.append(checkbox)
@@ -785,25 +1083,35 @@ class BatchC3DExport(ctk.CTkFrame):
                 self.right_markers_scroll,
                 text=marker,
                 variable=var,
-                font=("Segoe UI", 9)
+                font=("Segoe UI", 9),
+                command=self._save_ui_state,
             )
             checkbox.pack(anchor="w", padx=5, pady=2)
             self.right_marker_checkboxes.append(checkbox)
 
-    def _filter_emg_channels(self) -> None:
-        """Re-populate EMG channel list using the current label string as a filter.
+    def _label_patterns(self):
+        """The Label field as a list of substrings — ";"-separated so one rig's
+        "Voltage" channels and another's "EMG" channels can both be caught in
+        one session (e.g. ``voltage;emg;sensor``). Empty list = no filter."""
+        return [p.strip().lower()
+                for p in str(self.emg_label_var.get()).split(";")
+                if p.strip()]
 
-        Shows only channels whose name contains the label string (case-insensitive).
-        If the label is empty, all detected channels are shown.
+    def _filter_emg_channels(self) -> None:
+        """Re-populate the EMG channel list from the Label field.
+
+        A channel is shown when its name contains ANY of the ";"-separated
+        patterns (case-insensitive). Empty label = every detected channel.
         """
-        pattern = self.emg_label_var.get().strip().lower()
-        if pattern:
+        patterns = self._label_patterns()
+        if patterns:
             filtered = [ch for ch in self._all_analog_channels
-                        if pattern in ch.lower()]
+                        if any(p in ch.lower() for p in patterns)]
         else:
             filtered = list(self._all_analog_channels)
         self._populate_emg_channels(filtered)
-        logger.info(f"EMG filter '{pattern}': {len(filtered)}/{len(self._all_analog_channels)} channels shown")
+        logger.info(f"EMG filter {patterns}: "
+                    f"{len(filtered)}/{len(self._all_analog_channels)} channels shown")
 
     def _select_all_emg(self):
         """Select all EMG channels."""
@@ -843,21 +1151,39 @@ class BatchC3DExport(ctk.CTkFrame):
         self.emg_channel_checkboxes.clear()
         self.emg_channel_vars.clear()
 
-        # Create checkboxes for each EMG channel
+        # Default is everything ticked; a remembered selection narrows it, but
+        # only when at least one of the remembered channels is present — a
+        # remembered set from a different rig must not leave the list empty.
+        remembered = self._remembered_selection("emg_channels") & set(channels)
+
         for channel in sorted(channels):
-            var = ctk.BooleanVar(value=True)
+            var = ctk.BooleanVar(value=(channel in remembered) if remembered else True)
             self.emg_channel_vars[channel] = var
             checkbox = ctk.CTkCheckBox(
                 self.emg_channels_scroll,
                 text=channel,
                 variable=var,
-                font=("Segoe UI", 9)
+                font=("Segoe UI", 9),
+                command=self._on_emg_channel_toggle,
             )
             checkbox.pack(anchor="w", padx=5, pady=2)
             self.emg_channel_checkboxes.append(checkbox)
 
         # Keep the live-preview channel dropdown in sync with available channels
         self._refresh_preview_channel_menu(sorted(channels))
+        self._on_emg_channel_toggle()
+
+    def _on_emg_channel_toggle(self):
+        """Channel selection changed: remember it, and keep the per-muscle
+        scale rows in step with what is actually selected."""
+        try:
+            if (getattr(self, "emg_scale_enabled_var", None) is not None
+                    and self.emg_scale_enabled_var.get()
+                    and self.emg_scale_mode_var.get() == "per muscle"):
+                self._rebuild_scale_rows()
+            self._save_ui_state()
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"EMG channel toggle: {exc}")
 
     def _refresh_preview_channel_menu(self, channels):
         """Populate the filter-preview channel dropdown with the given channels."""
@@ -1081,6 +1407,8 @@ class BatchC3DExport(ctk.CTkFrame):
         sig = sig[~np.isnan(sig)] if np.isnan(sig).any() else sig
         if sig.size < 10 or fs <= 0:
             return sig, np.abs(sig)
+        if not _load_scipy():
+            return sig, np.abs(sig)
         sig = sig - np.mean(sig)
         nyq = 0.5 * fs
         out = sig
@@ -1231,6 +1559,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
         bg = "#2b2b2b"
         fg = "#dddddd"
+        _load_mpl()
         fig = Figure(figsize=(5, 3), dpi=100, facecolor=bg)
         self.preview_fig = fig
 
@@ -1291,7 +1620,8 @@ class BatchC3DExport(ctk.CTkFrame):
 
     def _compute_max_emg_worker(self, files, channels, window):
         """Background worker: scan trials, build per-channel max envelope table."""
-        results = {}  # channel -> (max_value, trial_name)
+        results = {}    # channel -> (max_value, trial_name)
+        per_trial = {}  # channel -> {trial: peak}  — every trial, not just the winner
         wanted = set(channels)
         try:
             highpass, lowpass, notch = self._get_emg_filter_params()
@@ -1311,9 +1641,11 @@ class BatchC3DExport(ctk.CTkFrame):
                     if env.size == 0:
                         continue
                     peak = float(np.nanmax(env))
+                    per_trial.setdefault(ch, {})[c3d_file.stem] = peak
                     if (ch not in results) or (peak > results[ch][0]):
                         results[ch] = (peak, c3d_file.stem)
             self.max_emg_results = results
+            self.max_emg_per_trial = per_trial
             logger.info(f"Max EMG computed for {len(results)} channels "
                         f"across {len(files)} trials (window={window} frames)")
         except Exception as e:
@@ -1327,49 +1659,265 @@ class BatchC3DExport(ctk.CTkFrame):
             except Exception:
                 self._render_max_emg_results()
 
+    def _set_max_emg_text(self, lines):
+        """Replace the table contents. ``lines`` is [(text, tag_or_None)]."""
+        try:
+            self.maxemg_text.configure(state="normal")
+            self.maxemg_text.delete("1.0", "end")
+            for text, tag in lines:
+                self.maxemg_text.insert("end", text + "\n", tag or ())
+            self.maxemg_text.configure(state="disabled")
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"Max EMG render failed: {exc}")
+
     def _render_max_emg_message(self, msg):
         """Clear the max-EMG results area and show a single status message."""
-        for lbl in self.maxemg_result_labels:
-            try:
-                lbl.destroy()
-            except Exception:
-                pass
-        self.maxemg_result_labels = []
-        lbl = ctk.CTkLabel(self.maxemg_results_scroll, text=msg,
-                           text_color="#888888", font=("Segoe UI", 8))
-        lbl.pack(anchor="w", padx=5, pady=2)
-        self.maxemg_result_labels.append(lbl)
+        self._set_max_emg_text([(msg, None)])
 
     def _render_max_emg_results(self):
-        """Render the per-channel max-EMG table (value + trial that produced it)."""
-        for lbl in self.maxemg_result_labels:
-            try:
-                lbl.destroy()
-            except Exception:
-                pass
-        self.maxemg_result_labels = []
+        """Per-channel max EMG, plus every trial's peak as a % of it.
 
+        The percentage column is the useful one: an absolute millivolt peak
+        says nothing on its own, but "this trial reached 96 % of the biggest
+        contraction I have for that muscle" tells you immediately whether the
+        max is real or whether one artefact is setting the normalisation for
+        the whole session. The table is wide by design — it scrolls sideways.
+        """
         if not self.max_emg_results:
             self._render_max_emg_message("No results.")
             return
 
-        header = ctk.CTkLabel(
-            self.maxemg_results_scroll,
-            text=f"{'Channel':<18}{'Max':>12}   Trial",
-            font=("Consolas", 8, "bold"), text_color="#bbbbbb", justify="left",
-        )
-        header.pack(anchor="w", padx=5, pady=(2, 1))
-        self.maxemg_result_labels.append(header)
+        # Trials in the order they were scanned, so the columns line up with
+        # the file list rather than being alphabetised away from it.
+        trials = []
+        for ch in self.max_emg_per_trial:
+            for t in self.max_emg_per_trial[ch]:
+                if t not in trials:
+                    trials.append(t)
+
+        w_ch = max([len(str(c)) for c in self.max_emg_results] + [7]) + 2
+        w_tr = max([len(t) for t in trials] + [10]) + 2 if trials else 12
+        col = max([len(t) for t in trials] + [8]) + 2 if trials else 10
+
+        head = (f"{'Channel':<{w_ch}}{'Max':>12}  {'Best trial':<{w_tr}}"
+                + "".join(f"{t:>{col}}" for t in trials))
+        lines = [(head, "head"),
+                 ("-" * len(head), "head")]
 
         for ch in sorted(self.max_emg_results):
-            peak, trial = self.max_emg_results[ch]
-            row = ctk.CTkLabel(
-                self.maxemg_results_scroll,
-                text=f"{ch[:18]:<18}{peak:>12.4g}   {trial}",
-                font=("Consolas", 8), justify="left",
-            )
-            row.pack(anchor="w", padx=5, pady=1)
-            self.maxemg_result_labels.append(row)
+            peak, best = self.max_emg_results[ch]
+            per = self.max_emg_per_trial.get(ch, {})
+            cells = ""
+            for t in trials:
+                v = per.get(t)
+                # A dash, not 0.0 %, when a channel is absent from a trial —
+                # zero is a measurement, "not recorded here" is not.
+                cells += (f"{'-':>{col}}" if v is None or not peak
+                          else f"{100.0 * v / peak:>{col - 1}.1f}%")
+            lines.append((f"{str(ch):<{w_ch}}{peak:>12.4g}  {best:<{w_tr}}{cells}",
+                          None))
+        self._set_max_emg_text(lines)
+
+    # ------------------------------------------------------------------
+    # EMG scaling on export
+    # ------------------------------------------------------------------
+    def _on_emg_scale_toggle(self):
+        """Show the right control for the chosen mode and remember the choice."""
+        try:
+            enabled = bool(self.emg_scale_enabled_var.get())
+            per_muscle = self.emg_scale_mode_var.get() == "per muscle"
+            self.emg_scale_entry.configure(
+                state="normal" if enabled and not per_muscle else "disabled")
+            self.emg_scale_hint.configure(
+                text=("one factor for every selected channel" if not per_muscle
+                      else "one factor per channel — blank or 1 means unchanged"))
+            if enabled and per_muscle:
+                self._rebuild_scale_rows()
+                self.emg_scale_per_frame.grid()
+            else:
+                self.emg_scale_per_frame.grid_remove()
+            self._save_ui_state()
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"EMG scale toggle failed: {exc}")
+
+    def _rebuild_scale_rows(self):
+        """One factor entry per selected EMG channel, keeping typed values."""
+        for child in list(self.emg_scale_per_frame.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:                                  # noqa: BLE001
+                pass
+        stored = self.gui_settings.get("c3d_export.emg_scale_per_channel", {}) or {}
+        kept = {ch: v.get() for ch, v in self._emg_scale_entries.items()}
+        self._emg_scale_entries = {}
+        channels = self._get_selected_emg_channels()
+        if not channels:
+            ctk.CTkLabel(self.emg_scale_per_frame,
+                         text="Select EMG channels first.",
+                         font=("Segoe UI", 10), text_color="#8a8a8a"
+                         ).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+            return
+        for i, ch in enumerate(channels):
+            ctk.CTkLabel(self.emg_scale_per_frame, text=ch, font=("Segoe UI", 10),
+                         anchor="w").grid(row=i, column=0, sticky="w",
+                                          padx=(6, 8), pady=2)
+            var = ctk.StringVar(value=str(kept.get(ch, stored.get(ch, "1.0"))))
+            entry = ctk.CTkEntry(self.emg_scale_per_frame, textvariable=var,
+                                 width=90, height=26, font=("Segoe UI", 10))
+            entry.grid(row=i, column=1, sticky="w", pady=2)
+            entry.bind("<FocusOut>", lambda _e: self._save_ui_state())
+            self._emg_scale_entries[ch] = var
+
+    def _fill_scales_from_max_emg(self):
+        """Set each channel's factor to 1 / its max, i.e. normalise every muscle
+        to its own session peak. Needs Compute to have been run first."""
+        if not self.max_emg_results:
+            self._render_max_emg_message("Run Compute first — no max EMG yet.")
+            return
+        self.emg_scale_enabled_var.set(True)
+        self.emg_scale_mode_var.set("per muscle")
+        self._on_emg_scale_toggle()
+        for ch, var in self._emg_scale_entries.items():
+            peak = (self.max_emg_results.get(ch) or (0.0, ""))[0]
+            var.set(f"{1.0 / peak:.6g}" if peak else "1.0")
+        self._save_ui_state()
+
+    def _get_emg_scale_factors(self, channels):
+        """``{channel: factor}`` for the export, or ``{}`` when scaling is off.
+
+        A blank, zero or unparseable entry means 1.0 — a typo must not silently
+        wipe a channel to zeros in an exported file."""
+        try:
+            if not self.emg_scale_enabled_var.get():
+                return {}
+        except Exception:                                      # noqa: BLE001
+            return {}
+
+        def _f(text, default=1.0):
+            try:
+                v = float(str(text).strip())
+                return v if v != 0 else default
+            except (TypeError, ValueError):
+                return default
+
+        if self.emg_scale_mode_var.get() == "per muscle":
+            return {ch: _f(self._emg_scale_entries[ch].get())
+                    for ch in channels if ch in self._emg_scale_entries}
+        factor = _f(self.emg_scale_value_var.get())
+        return {ch: factor for ch in channels}
+
+    # ------------------------------------------------------------------
+    # Writing the filtered EMG
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _read_mot(path):
+        """``(header_lines, column_names, ndarray)`` from a .mot/.sto."""
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+        end = next((i for i, x in enumerate(lines)
+                    if x.strip().lower() == "endheader"), None)
+        if end is None:
+            raise ValueError(f"{Path(path).name}: no endheader")
+        cols = [c.strip() for c in lines[end + 1].split("\t") if c.strip()]
+        rows = []
+        for ln in lines[end + 2:]:
+            f = [x for x in ln.split("\t") if x.strip()]
+            if len(f) != len(cols):
+                continue
+            try:
+                rows.append([float(x) for x in f])
+            except ValueError:
+                continue
+        return lines[:end + 1], cols, np.asarray(rows, dtype=float)
+
+    @staticmethod
+    def _write_mot(path, name, cols, data):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(f"{name}\nversion=1\nnRows={data.shape[0]}\n"
+                     f"nColumns={data.shape[1]}\ninDegrees=no\nendheader\n")
+            fh.write("\t".join(cols) + "\n")
+            for row in data:
+                fh.write("\t".join(f"{v:.8f}" for v in row) + "\n")
+
+    @staticmethod
+    def _match_channel(column, channels):
+        """The selected channel a .mot column corresponds to, or None.
+
+        `export_emg` does not always keep the c3d's analog label verbatim, so
+        an exact match is tried first, then case-insensitively, then either
+        name containing the other. Without this the scale factors would look
+        applied and quietly do nothing."""
+        c = str(column).strip()
+        for ch in channels:
+            if c == ch:
+                return ch
+        low = c.lower()
+        for ch in channels:
+            if low == str(ch).strip().lower():
+                return ch
+        for ch in channels:
+            cl = str(ch).strip().lower()
+            if cl and (cl in low or low in cl):
+                return ch
+        return None
+
+    def _write_filtered_emg(self, src, dst, channels):
+        """Filter (and optionally scale) ``src`` into ``dst``.
+
+        The maths is `_compute_emg_envelope` — the SAME function that draws the
+        preview — so what is written is what you were shown: band-pass, notch,
+        rectify, low-pass envelope. Anything that cannot be filtered is copied
+        through unchanged rather than dropped, so a bad channel costs you that
+        channel and not the file.
+        """
+        header, cols, data = self._read_mot(src)
+        if data.size == 0 or len(cols) < 2:
+            shutil.copy(str(src), str(dst))
+            logger.warning(f"{Path(src).name}: nothing to filter, copied as-is")
+            return dst
+
+        time_idx = next((i for i, c in enumerate(cols)
+                         if str(c).strip().lower() == "time"), 0)
+        t = data[:, time_idx]
+        fs = 0.0
+        if t.size > 1:
+            dt = float(np.median(np.diff(t)))
+            fs = 1.0 / dt if dt > 0 else 0.0
+        highpass, lowpass, notch = self._get_emg_filter_params()
+        scales = self._get_emg_scale_factors(channels)
+
+        out = data.copy()
+        n_filtered, n_scaled = 0, 0
+        for i, col in enumerate(cols):
+            if i == time_idx:
+                continue
+            sig = np.asarray(data[:, i], dtype=float)
+            # NaNs are zeroed rather than dropped: _compute_emg_envelope drops
+            # them, which would return a shorter array than the time column and
+            # silently misalign every sample after the first gap.
+            sig = np.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
+            try:
+                _band, env = self._compute_emg_envelope(sig, fs, highpass,
+                                                        lowpass, notch)
+                if env.size == sig.size:
+                    out[:, i] = env
+                    n_filtered += 1
+                else:
+                    logger.debug(f"{col}: envelope length mismatch, left raw")
+            except Exception as exc:                           # noqa: BLE001
+                logger.debug(f"{col}: filter failed ({exc}), left raw")
+            match = self._match_channel(col, scales.keys()) if scales else None
+            if match is not None:
+                out[:, i] *= float(scales[match])
+                n_scaled += 1
+
+        self._write_mot(dst, Path(dst).stem, cols, out)
+        msg = (f"[OK] emg_filtered.mot — {n_filtered} channel(s) filtered "
+               f"({highpass:g}-{lowpass:g} Hz, notch {notch:g} Hz"
+               f"{f', {n_scaled} scaled' if n_scaled else ''})")
+        print(msg)
+        logger.info(msg)
+        return dst
 
     def _on_export_batch(self):
         """Start batch export."""
@@ -1413,6 +1961,9 @@ class BatchC3DExport(ctk.CTkFrame):
     def _export_batch_worker(self, total_selected: int):
         """Worker thread for batch export."""
         try:
+            # Snapshot the form as it was when Export was pressed, so the next
+            # launch opens on the settings that produced the last export.
+            self._save_ui_state()
             self.total_files = total_selected
             self.current_progress = 0
 
@@ -1461,6 +2012,11 @@ class BatchC3DExport(ctk.CTkFrame):
                     text=f"[OK] Completed: {self.current_progress} files exported"
                 )
                 logger.info(f"Batch export completed: {self.current_progress} files")
+                # Same worker thread, on purpose: session.yaml and detection
+                # describe the files just written, so they run after the last
+                # trial and before the buttons re-enable — an export the user
+                # immediately acts on should already be described.
+                self._post_export_session_update()
             else:
                 self.progress_label.configure(text="Cancelled by user")
 
@@ -1472,6 +2028,114 @@ class BatchC3DExport(ctk.CTkFrame):
             self.is_processing = False
             self.export_button.configure(state="normal")
             self.cancel_button.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # After the export: session.yaml + movement detection
+    # ------------------------------------------------------------------
+    def _session_root_for_dest(self):
+        """The session folder the export landed in, or None.
+
+        The 2.x layout is ``<session>/{1_c3dfiles, 2_experimental,
+        3_iterations, session.yaml}`` and trials are exported into
+        ``2_experimental`` — so when the destination is (or contains) an
+        experimental folder, the session is right there. An arbitrary
+        destination outside any session resolves to None, and the post-step
+        says so instead of scaffolding a session.yaml in a random folder.
+        """
+        dest = Path(self.dest_folder) if self.dest_folder else None
+        if not dest:
+            return None
+        if dest.name.lower() in ("2_experimental", "experimental"):
+            return dest.parent
+        for cand in (dest, dest.parent):
+            if (cand / "session.yaml").exists():
+                return cand
+        for sub in ("2_experimental", "experimental"):
+            if (dest / sub).is_dir():
+                return dest
+        return None
+
+    def _post_export_session_update(self):
+        """Make the export self-describing: session.yaml knows the filter that
+        produced it, and every trial gets a detected movement type.
+
+        Everything here is guarded per step — the trials on disk are already
+        exported and correct, so a failure in the bookkeeping must degrade to
+        a message, never to a failed export.
+        """
+        want_yaml = bool(getattr(self, "post_session_var", None)
+                         and self.post_session_var.get())
+        want_detect = bool(getattr(self, "post_detect_var", None)
+                           and self.post_detect_var.get())
+        if not (want_yaml or want_detect):
+            return
+
+        root = self._session_root_for_dest()
+        if root is None:
+            msg = ("[INFO] destination is not inside a bioscout session — "
+                   "skipped session.yaml/detection (export itself is complete)")
+            print(msg)
+            logger.info(msg)
+            return
+
+        if want_yaml:
+            try:
+                self.progress_label.configure(text="Updating session.yaml…")
+            except Exception:                                  # noqa: BLE001
+                pass
+            try:
+                if not (root / "session.yaml").exists():
+                    # scaffold_session_yaml builds the trial list from the
+                    # session's own c3ds — the one blessed way to create the
+                    # file (utils/session.py). It returns None when it cannot.
+                    from utils.session import scaffold_session_yaml
+                    made = scaffold_session_yaml(str(root))
+                    if made:
+                        print(f"[OK] Created {made}")
+                        logger.info(f"Scaffolded session.yaml at {made}")
+                    else:
+                        print("[WARN] Could not scaffold session.yaml "
+                              f"(no c3ds found under {root})")
+                if (root / "session.yaml").exists():
+                    # SURGICAL writes only (SessionForm patches value spans) —
+                    # a re-dump would wipe the hand-written comments, which is
+                    # the File Editor's cardinal rule too.
+                    from utils.session_form import SessionForm
+                    form = SessionForm(str(root))
+                    highpass, lowpass, _notch = self._get_emg_filter_params()
+                    # GUI naming vs session.yaml naming: the 'High (Hz)' field
+                    # is the band-pass LOW cutoff and 'Low (Hz)' the HIGH one
+                    # (see _get_emg_filter_params) — mapped here, once.
+                    form.set_emg_filter(bandpass_low=highpass,
+                                        bandpass_high=lowpass)
+                    if form.dirty():
+                        form.save(backup=True)
+                        print("[OK] session.yaml: emg_filter updated "
+                              f"({highpass:g}-{lowpass:g} Hz)")
+                    else:
+                        print("[OK] session.yaml already up to date")
+            except Exception as e:                             # noqa: BLE001
+                print(f"[WARN] session.yaml update failed: {str(e)[:80]}")
+                logger.warning(f"session.yaml update failed: {e}")
+
+        if want_detect:
+            try:
+                self.progress_label.configure(
+                    text="Detecting movements… (this reads every trial)")
+            except Exception:                                  # noqa: BLE001
+                pass
+            try:
+                # numpy-only (movement_detector imports no scipy/OpenSim), so
+                # this runs wherever the export itself ran. write_session_yaml
+                # backs the old file up before correcting trial types.
+                from movement_detector.session import classify_session
+                classify_session(str(root), quiet=True, no_plots=False,
+                                 write_session_yaml=want_yaml)
+                print(f"[OK] Movement detection written under {root}")
+                logger.info(f"Movement detection complete for {root}")
+            except Exception as e:                             # noqa: BLE001
+                print(f"[WARN] movement detection failed: {str(e)[:80]}")
+                logger.warning(f"movement detection failed: {e}")
 
     def _export_single_c3d(self, c3d_file: Path, output_folder: Path, selected_left, selected_right, selected_emg):
         """Export a single C3D file using the same logic as C3D Export tab."""
@@ -1526,10 +2190,13 @@ class BatchC3DExport(ctk.CTkFrame):
                 # Export EMG (now from copy in output folder)
                 try:
                     if selected_emg:
-                        # Extract EMG pattern from selected channels (e.g., "Voltage" from "Voltage.1-VM")
-                        # Use the first selected channel to determine the pattern
-                        emg_pattern = selected_emg[0].split('.')[0].split('_')[0]  # Get prefix before . or _
-                        emg_patterns = [emg_pattern]
+                        # The Label field's ";"-separated patterns drive the
+                        # export directly. Deriving a single pattern from the
+                        # first selected channel (the old behaviour, kept as
+                        # the fallback for an empty label) could not represent
+                        # two naming schemes in one capture.
+                        emg_patterns = self._label_patterns() or \
+                            [selected_emg[0].split('.')[0].split('_')[0]]
                         logger.debug(f"Using EMG pattern: {emg_patterns} from selected channels: {selected_emg[:3]}...")
                         exportC3D.export_emg(str(c3d_copy), emg_strings_list=emg_patterns)
 
@@ -1562,14 +2229,20 @@ class BatchC3DExport(ctk.CTkFrame):
                     print(f"[FAIL] EMG export error: {str(e)[:60]}")
                     logger.error(f"EMG export error: {e}")
 
-                # Generate emg_filtered.mot (copy of emg.mot)
+                # Generate emg_filtered.mot — ACTUALLY FILTERED.
+                #
+                # This used to be `shutil.copy(emg.mot, emg_filtered.mot)`: a
+                # byte-for-byte copy under a name that promises otherwise. The
+                # Low/High/Notch fields above only ever drove the on-screen
+                # preview, so every exported "filtered" EMG in every session
+                # was raw. Nothing downstream could tell.
                 try:
                     emg_file = output_folder / "emg.mot"
                     if emg_file.exists():
                         emg_filtered_file = output_folder / "emg_filtered.mot"
-                        shutil.copy(str(emg_file), str(emg_filtered_file))
-                        print(f"[OK] Generated emg_filtered.mot")
-                        logger.info(f"[OK] Generated emg_filtered.mot")
+                        self._write_filtered_emg(emg_file, emg_filtered_file,
+                                                 selected_emg)
+                        exported_files.append(("EMG filtered", emg_filtered_file))
                 except Exception as e:
                     print(f"[WARN] Could not generate emg_filtered.mot: {str(e)[:60]}")
                     logger.warning(f"Could not generate emg_filtered.mot: {e}")
@@ -1646,7 +2319,12 @@ class BatchC3DExport(ctk.CTkFrame):
 
                     # Update file references for batch export
                     inputs.c3d = c3d_file.name
-                    inputs.emg = "emg_filtered_normalised.mot"
+                    # emg_filtered.mot, not emg_filtered_normalised.mot:
+                    # nothing in this tab has ever written the latter, so
+                    # every trial_settings.xml pointed at a file that does
+                    # not exist. Session-wide normalisation happens later
+                    # (iteration.run(export=True)); it writes its own name.
+                    inputs.emg = "emg_filtered.mot"
                     inputs.grf_mot = "grf.mot"
                     inputs.markers = "marker_experimental.trc"
 
@@ -1754,7 +2432,7 @@ class BatchC3DExport(ctk.CTkFrame):
                     ET.SubElement(root, "session").text = self.session_dir.name if self.session_dir else "Unknown"
                     ET.SubElement(root, "trial").text = trial_name
                     ET.SubElement(root, "c3d").text = c3d_file.name
-                    ET.SubElement(root, "emg").text = "emg_filtered_normalised.mot"
+                    ET.SubElement(root, "emg").text = "emg_filtered.mot"
                     ET.SubElement(root, "grf_mot").text = "grf.mot"
                     ET.SubElement(root, "markers").text = "marker_experimental.trc"
                     ET.SubElement(root, "emg_lowpass_hz").text = self.emg_lowpass_var.get()
@@ -1780,6 +2458,17 @@ class BatchC3DExport(ctk.CTkFrame):
                     logger.debug(f"Cleaned up temporary C3D copy")
             except Exception as e:
                 logger.warning(f"Could not clean up C3D copy: {e}")
+
+            # QC figures — the SAME ones export_session writes for every trial
+            # (emg_processing.png + grf_events.png). This tab skipped them, so
+            # GUI-exported trials had no EMG figure while pipeline-exported
+            # trials did, and the folders could not be compared at a glance.
+            try:
+                exportC3D._qc_figures(str(output_folder))
+                print("[OK] QC figures (emg_processing.png, grf_events.png)")
+            except Exception as e:                             # noqa: BLE001
+                print(f"[WARN] QC figures failed: {str(e)[:60]}")
+                logger.warning(f"QC figures failed for {trial_name}: {e}")
 
             # Export completed successfully
             logger.info(f"Export completed for {c3d_file.name}")

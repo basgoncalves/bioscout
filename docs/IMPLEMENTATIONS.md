@@ -9,6 +9,11 @@ those projects; the point of this file is that the next lab should not have to.
 Status tags: **[fixed]** shipped, **[patched-in-project]** works but lives in
 project code and belongs in bioscout, **[open]** not addressed anywhere.
 
+§1–2 are about getting a *trial* through the pipeline. §3 is the other axis —
+building, organising and trusting the `.osim` files themselves — added after the
+FAIS MRI-personalisation work, which is currently four hand-run scripts with no
+bioscout verb behind them.
+
 ---
 
 ## 1. Bugs found in the field
@@ -62,6 +67,19 @@ project code and belongs in bioscout, **[open]** not addressed anywhere.
 - **[open] Windows MAX_PATH.** Session trees + CEINMS execution folder names
   exceed 260 chars at ~220-char project roots; failures appear as "file not
   found" deep inside OpenSim. Needs an up-front path-length check.
+- **[fixed 2026-08-17] A model that has been moved loads with NO BONES, in
+  silence.** OpenSim resolves `<geometry_file>` (v3) / `<mesh_file>` (v4)
+  relative to the folder holding the `.osim`. Move a model, or move the
+  geometry out from under it — which is what any tidy-up of `models/` does, and
+  what writing a personalised model into a new subfolder does — and it opens
+  with muscles and markers and no skeleton, with no error and no log line.
+  Handling only one of the two tag names breaks the other schema family just as
+  quietly. Now checked by `bioscout.model` (see 3.2): `bioscout
+  --model`, and a warn-level check on every `Analyse.load_model`. Two
+  variants of the same silence are checked with it — a mesh found only by
+  ignoring filename case (works on Windows, fails on Linux) and one found only
+  by absolute path (points somewhere else on any other machine). *Lesson: the
+  tier that resolved a path is the finding, not whether it resolved.*
 
 ### Operational
 
@@ -179,12 +197,205 @@ found in a group figure), residual/reserve saturation reports.
 
 ---
 
-## 3. Suggested order of work
+## 3. The model side: personalisation, model trees, model verification
+
+§2 is about getting a *trial* through the pipeline. This section is about the
+other axis, which FAIS exercised hard in August 2026 and which bioscout barely
+covers: producing, organising and trusting the `.osim` files themselves. Four
+scripts now live in `FAIS_machine_learning/{code,mri}/` and are run by hand:
+
+    python code/reorganise_models.py --apply | --verify
+    python mri/create_mri_model.py --subject 021 --side both --method all --yes
+    python mri/verify_morph.py <source.osim> <morphed.osim>
+    python mri/muscle_inspect.py --subject 021
+
+None of the four had an equivalent verb in bioscout, and all four are generic.
+The `--verify` half of the first one now does: see 3.2.
+
+### 3.1 Model personalisation back-ends beyond TPS
+
+`bioscout/tps_personalise/` already does the hard parts of model rewriting:
+v3/v4 schema normalisation (`osim_format.py`), a comment-preserving parser
+(`osim_model.py:_commented_parser`), frame-compatibility refusal
+(`model_compat.assert_template_compatible`), mesh warping
+(`pipeline._apply_body_meshes`), MRI landmark extraction from NIfTI
+segmentations (`landmarks_from_mri.py`), Handsfield force scaling
+(`scaling.py`) — and exactly **one** morph, `tps.OneBodyTPS`.
+
+FAIS `mri/create_mri_model.py` (1500 lines) adds three more back-ends and,
+critically, re-implements `OsimModel` from scratch to do it — a parallel copy of
+machinery bioscout already ships. Port the back-ends, not the copy:
+
+| back-end | what it changes | why it matters |
+|---|---|---|
+| `TorsionMorph` | AVA + NSA by regional rigid rotation about the shaft axis, smooth blend zone, distal femur exactly invariant | the Torsion Tool concept (Veerkamp 2021) in pure Python, no MATLAB, no OpenSim import. Changes only the two angles you measured |
+| `TibialTorsionMorph` | tibial torsion | same, distally |
+| `RigidPassthrough` | nothing | produces the M0 baseline arm through the *identical* code path, so an arm comparison is not confounded by the writer |
+| `TPSMorph` | landmark-driven TPS | already in bioscout — but see 3.4: FAIS measured it failing |
+
+`bioscout/tps_personalise/` should be renamed to something honest
+(`personalise/`) with the morph selected by `--method`, since "TPS" is now one
+option out of four and the least trustworthy of them.
+
+Two design details worth keeping verbatim. First, the morph applies the
+*difference* between the subject's angles and the **generic model's own**
+angles, and the generic baseline is an input, not a constant — a wrong baseline
+biases every subject the same way and is indistinguishable from a real group
+effect. bioscout should measure the baseline from the template's bone geometry
+rather than prompt for a literature value. Second, `morph_markers = false` by
+default: if the skin markers do not move, IK is driven by identical data in
+every arm, so any difference downstream comes from bone geometry alone.
+
+### 3.2 `bioscout --model` — geometry resolution **[verifier fixed 2026-08-17]**, layout still open
+
+**Shipped:** `bioscout/model/` — pure stdlib, no OpenSim, no numpy.
+
+    bioscout --model                     # the project's model folders
+    bioscout --model "generic models" --strict
+    python -m bioscout.model --verify --json geometry.json
+    from bioscout.model import verify_model, verify_tree, format_text
+
+Every `<geometry_file>` and `<mesh_file>` in the document — including the ground
+and contact meshes v4 puts *outside* the body set — is resolved from that
+model's own folder outward, and the report names the **tier** that hit:
+`local` (portable, the only pass), `parent`, `bundled`, `search`, `absolute`,
+`case`, `empty` (zero-byte mesh), `missing`. Non-local tiers warn; `--strict`
+fails on them. Non-zero exit, so it gates a script or a CI job. It is also
+wired as a warn-level check into `Analyse.load_model`, and — like `--env` — is
+dispatched *before* `__main__.py` imports the scientific stack, so the question
+"can my models still find their bones?" can be asked on a machine where
+bioscout cannot otherwise start. 30 unit tests on synthetic v3 and v4 fixtures,
+in `bioscout/tests/test_model.py`.
+
+What it found on first contact, in trees believed to be fine:
+
+| tree | finding |
+|---|---|
+| FAIS `models/` | 3 BROKEN. All three Catelli models reference `l_pat.vtp`; the file is `l_patella.vtp` — they have been opening with no left patella. The v3 one also wants `{l,r}_pelvis_Rajagopal.vtp` and `sacrum_Rajagopal.vtp`, which exist nowhere: no pelvis either. |
+| FAIS `models/` | 56 NOT PORTABLE. 79 of 81 refs carry the `Raja\` prefix a rewrite gave them; `metacarpal3_rvs.vtp` and `middle_medial_rvs.vtp` were left bare and resolve **only because bioscout is installed and ships the same mesh**. Uninstall bioscout, or open the model in the OpenSim GUI, and two hand bones vanish. |
+| FAIS `models/personalised/` | clean — the torsion-morphed models resolve locally. |
+| Powerlifting `generic models/` | live models clean; 8 broken copies under `to_delete/` (GPK and Lernagopal, missing both tibiae). |
+
+*Still open:* the reorganiser. FAIS `code/reorganise_models.py` moves generic
+templates into
+`generic models/<family>/{*.osim, Geometry/}`, rewrites every geometry path by
+**text substitution on the tag lines only** (so the 54 production models stay
+byte-identical apart from those lines), backs up everything it touches, updates
+the `generic:` key in 54 `session.yaml` files, and then re-verifies.
+
+bioscout today has: a layout created once by `run_init_mode`
+(`__main__.py:1315`), `MODELS_DIR` in `settings.py`, and a `models/<subject>/
+<session>/` convention in `utils/analysis.py`. It has no registry, no
+reorganiser, and no verifier — and `pipeline.py:584` already papers over the
+mess by falling back through `Models/`, `generic models/` and the project root.
+Also note: bioscout resolves a relative sub-path against those roots but does
+**not** search subfolders, so any nested layout needs the prefix written into
+`session.yaml` — which is why the FAIS script has to edit 54 files.
+
+Still wanted, on top of the shipped `--verify`:
+
+    bioscout --model --reorganise [--apply]
+    bioscout --model --list      # generic / scaled / personalised, per subject
+
+and `--verify` should be called by preflight (2.2) once preflight exists — the
+per-model warning in `Analyse.load_model` is the interim, and it deliberately
+only warns, because a missing mesh does not make a solve wrong. What it breaks
+is every visual check a human would use to notice that something else is.
+
+### 3.3 `bioscout model-diff` — verify every edit, not just morphs
+
+`mri/verify_morph.py` is 180 lines and checks: element count and tag sequence
+unchanged, XML comments still present, the region that must not move has
+displacement **exactly** 0.0, the region that should move did move and by a
+plausible amount (0.1–60 mm), child joint frames bit-identical, geometry still
+resolves from the *new* folder, and bodies outside the target untouched. Exit
+code gates a script.
+
+That is not a morph-specific test — it is the post-condition contract for
+**every one of the 15 `model_edit` ops**, none of which has one today
+(`model_edit` ships `info`, `check_paths`, `diff`, `compare` as *inspection*
+verbs; nothing asserts an invariant and fails). Generalise it to
+`bioscout model-diff A.osim B.osim --expect-unchanged <bodies|frames>` and have
+`model_edit apply` run the relevant subset automatically, refusing to write
+otherwise. Same principle as the b17 JRA fix: refuse rather than degrade.
+
+### 3.4 Plausibility gates and provenance on written models
+
+The TPS arm for subject 009 displaced muscle attachments by **1.3 metres** —
+because only 2 of 6 control points carried information and they were nearly
+collinear along the shaft, so the biharmonic kernel extrapolated the
+trochanteric attachments into nonsense. `create_mri_model.py` caught it, printed
+the numbers, and **refused to write the model** without `--force`. A silently
+written broken model that reaches CEINMS is far worse than a build that stops.
+bioscout's TPS path has `model_compat` frame checks but no displacement gate:
+add one, plus the degenerate-control-point detection (rank / collinearity of the
+landmark set) that explains *why* a warp is under-determined.
+
+Every written model should carry the provenance JSON and re-runnable recipe
+`create_mri_model.py` already emits (`--config <recipe>.json` rebuilds it) —
+this is 2.5 applied to models, and it is what makes a comparison ladder
+auditable months later.
+
+### 3.5 Cohort-level measurement QC, and a two-model muscle-geometry diff
+
+Two smaller pieces, both of which found real errors in the data:
+
+- **`--report-only`**: recompute AVA/NSA for every fiducial file in the cohort
+  and print a table with flags. It found subject 010 at 62.3°/41.1° — not
+  physiological, and disagreeing with two spreadsheets — and subject 015
+  missing three landmarks entirely. The angle convention was validated by
+  reproducing 10/10 recorded values to 0.1°. This belongs next to
+  `bioscout validate` (2.6) as a cohort input-QC table, with the derived value
+  treated as the source of truth over any spreadsheet.
+- **`mri/muscle_inspect.py`**: per-muscle *diff* between two models — max
+  attachment displacement, and moment arm r(q) = −dL/dq swept through each hip
+  DOF for both models, ranked by change, CSV + two figures. It runs with **no
+  OpenSim installed**, and it flags muscles whose real path is wrap-dominated
+  because their absolute values are then approximate.
+  bioscout's `muscle_inspect` is single-model-vs-literature and
+  `MomentArmModel._require_opensim()`s; `muscle_inspect compare` compares
+  *settings*, not models; `--compare-models` (`utils/model_report.py`) compares
+  segment dimensions, masses and mesh scale, not muscle geometry. So this is a
+  genuine gap: add a `--baseline <model>` diff mode, and keep the OpenSim-free
+  straight-line path model as the fast pre-check it is (documented as a ranking
+  tool, never as publishable moment arms).
+
+  *Housekeeping:* the project file is named `muscle_inspect.py` and sits on
+  `sys.path` next to its importer, so it shadows `bioscout.muscle_inspect`.
+  Rename it on the way in.
+
+### 3.6 Where this lands for the user
+
+Terminal, mirroring the four commands above:
+
+    bioscout --model [--strict]            # DONE
+    bioscout --model --reorganise --apply
+    bioscout personalise --subject 021 --side both --method torsion|tps|rigid|all
+    bioscout personalise --report-only
+    bioscout model-diff <a.osim> <b.osim>
+    bioscout validate --model <x.osim>          # 2.6, existing muscle_inspect
+
+GUI: the existing **Model Scaling** tab is the natural host for `--model`
+(it is where a model is produced) and for a Personalise panel —
+subject, side, method checkboxes, generic-baseline fields, a dry-run that shows
+the displacement report and the plausibility verdict before writing. The
+**File Editor** tab already edits the XML; **Results** already plots multi-model
+comparisons via `figures.py` `m_model_effects*` and `mi_*`, so once an arm is a
+registered model rather than an ad-hoc file, the plots are free.
+
+---
+
+## 4. Suggested order of work
 
 1. Preflight + run verification + non-zero exit (2.2, part of 2.8) — kills the
    whole silent-failure class, small effort.
 2. EMG map validation at export (§1) — one afternoon, prevents wrong-column
    CEINMS results forever.
-3. `bioscout run` + `bioscout.yaml` + first-class `--session` (2.1, 2.3).
-4. Results layer + provenance (2.4, 2.5).
-5. Validation gate, packaging, CI, docs (2.6–2.8).
+3. ~~Geometry resolution check + `--model` (3.2)~~ — **done
+   2026-08-17.** Found 3 broken and 56 non-portable models on the first run.
+4. `bioscout run` + `bioscout.yaml` + first-class `--session` (2.1, 2.3).
+5. Results layer + provenance (2.4, 2.5).
+6. `model-diff` invariants wired into `model_edit apply` (3.3), then the torsion
+   back-end and plausibility gate (3.1, 3.4).
+7. Validation gate incl. cohort measurement QC, packaging, CI, docs (2.6–2.8,
+   3.5).

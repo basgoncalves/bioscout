@@ -633,7 +633,16 @@ class YamlDocument(Document):
             stripped = line.strip()
             if stripped:
                 col = len(line) - len(line.lstrip())
-                if col <= indent:
+                # A block-sequence item may legally sit at the SAME column as
+                # its key ("emg_map:\n  Voltage_1-VM:\n  - vasmed_r" — PyYAML's
+                # own dump style). Treating it as a sibling made this span end
+                # at the key line, so delete_entry left the "- item" lines
+                # behind to be swallowed by the PREVIOUS entry's list: a
+                # silent remapping of muscles to the wrong EMG channel. Inside
+                # a block MAPPING a sibling is always "key:", never "- item",
+                # so a dash at the key's own column is a child.
+                is_seq_item = stripped == "-" or stripped.startswith("- ")
+                if col < indent or (col == indent and not is_seq_item):
                     break              # a sibling key (or a dedented comment)
                 end = le                # a child line — part of this entry
             pos = le
@@ -689,6 +698,27 @@ class YamlDocument(Document):
             block += "\n"
         self._inserts.append((self._mapping_end(map_node), block))
         self.apply_staged()
+
+    def replace_entry(self, map_node, key, value_src: str) -> None:
+        """Replace ``key``'s WHOLE entry — key line plus any block children —
+        with a single ``key: value_src`` line at the key's indentation.
+
+        This is the safe way to change a value that IS or WAS a block
+        sequence/mapping: ``set_entry_source`` patches only the value span,
+        which for block values glues the replacement onto the next key's line.
+        Adds the entry when absent.
+        """
+        for knode, vnode in map_node.value:
+            if str(knode.value) != str(key):
+                continue
+            if map_node.flow_style:
+                return self.set_entry_source(map_node, key, value_src)
+            s, e = self._entry_bounds(knode, vnode)
+            indent = " " * knode.start_mark.column
+            self._edits[(s, e)] = f"{indent}{key}: {value_src}\n"
+            self.apply_staged()
+            return
+        self.add_entry(map_node, str(key), value_src)
 
     def delete_entry(self, map_node, key) -> None:
         """Remove ``key`` from *map_node* (block style: whole lines)."""

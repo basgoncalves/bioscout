@@ -17,6 +17,62 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 `docs/IMPLEMENTATIONS.md` for the full field-tested bug list and roadmap.
 
 ### Added
+- **GUI: per-machine settings + Settings tab.** `gui/gui_settings.py` →
+  `~/.bioscout/gui_settings.json` (UI scale, theme, window memory, last-used
+  folders, C3D-export form state). Deliberately NOT ConfigManager, which
+  writes back into the installed package. The split: data settings →
+  `session.yaml`, machine settings → `gui_settings.json`. UI scale applies
+  widget+window scaling before construction; plain-Tk widgets take
+  `font_size()` at build and follow on reload ("Apply cleanly" button).
+- **GUI: sidebar sections.** Record / Data curation / Simulations / Results /
+  Project, replacing the flat 11-button list and its hand-numbered grid rows.
+- **GUI: merged EMG tab** (`gui/widgets/emg_tab.py`) — Filtering
+  (EMGProcessingTab, `show_mvc=False`) + Analysis (frequency/synergies) behind
+  one nav entry, left sub-tab rail, children built lazily.
+- **C3D Export: post-export step.** Two persisted checkboxes: update
+  `session.yaml` (scaffold if missing, `SessionForm` surgical `emg_filter:`
+  write, backup first) and run movement detection (`classify_session`,
+  corrects trial types with backup). Session root resolved from the
+  destination; anywhere unrecognised skips with a message rather than
+  scaffolding in a random folder.
+- **C3D Export: EMG scaling on export** (uniform or per-muscle; "From Max
+  EMG" fills 1/peak; blank/zero/junk factor → 1.0, never wiping a channel),
+  Max-EMG table with per-trial peak-% columns in a both-ways-scrollable
+  monospace view, and folder/marker/channel/filter persistence.
+- **Model Scaling: models-folder layout.** `scaling_defaults` resolves the
+  generic against `models/generic/` (legacy `generic models/` still works),
+  the markerset against `models/utils/`, and defaults the scaled output to
+  `models/personalised/<subject>/<generic>_scaled.osim` — one scaled model
+  per subject instead of a copy per session.
+
+- **`bioscout.plot` — generic comparison figures** (`docs/PLOTTING.md`). The
+  ranked muscle-work figure existed in three project-local copies that differed
+  only in what the columns were, so the columns and rows became arguments:
+
+  ```python
+  (bs.plot("results/master_results.csv")
+     .where(Variable="muscle_work_total", Algo="SO")
+     .compare("Condition", order=["pre-fatigue", "post-fatigue"])
+     .facet("Task", icons=TASK_ICONS).group(bs.plot.MUSCLE_GROUPS)
+     .top(8).save("results/group/work_ranks.png"))
+  ```
+
+  Three layers, each usable alone: `plot.work` (.sto -> joules, four work
+  phases, `work_table()`), `plot.tidy` (the long-table contract every figure
+  reads), `plot.compare` (the `Compare` builder, ranked bars or mean±SD
+  curves). Bar colour is anchored on the first compared column and carried
+  right, so colour disorder IS a re-ranking; `normalise="reference"` keeps the
+  magnitudes, `normalise="panel"` throws them away. **No project settings file
+  is involved** — the house style lives in `bioscout/plot/config.py` and a
+  notebook overrides it with `bs.plot.configure(...)` / `bs.plot.using(...)`
+  / `.set(...)`. numpy + pandas + matplotlib only: no OpenSim, no scipy.
+  `bioscout/tests/test_plot.py`, 21 tests, including the work integral pinned
+  against cases with exact answers.
+- **`dir(bioscout)` now lists the public API.** The lazy `__getattr__` that
+  keeps `import bioscout` light also hid every name from `dir()`, so notebook
+  tab-completion on `bs.` offered nothing but `test` and `__version__`. A
+  `__dir__` advertises `__all__` explicitly; `bioscout.plot` and
+  `bioscout.pipeline` are both reachable as lazy submodule attributes.
 - **Shared model library.** `so_model` / `ceinms_model` resolve: absolute
   path -> iteration folder -> session folder -> `<project>/models/`. One
   scaled model per subject serves every session/iteration; a per-iteration
@@ -33,6 +89,27 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
   run.
 
 ### Fixed
+- **C3D Export wrote raw EMG under a filtered name.** `emg_filtered.mot` was a
+  byte-for-byte COPY of `emg.mot`; the Low/High/Notch fields only drove the
+  preview. Now filtered for real (same envelope maths as the preview; NaNs
+  zeroed, never dropped — dropping desynchronised the time column). Also
+  `trial_settings.xml` pointed at `emg_filtered_normalised.mot`, which nothing
+  ever wrote — now `emg_filtered.mot`.
+- **Launch time.** A silent `pip install` at import (network, before the
+  window painted), scipy+matplotlib imported at startup by the C3D Export
+  module, and mediapipe/cv2/matplotlib pulled in eagerly by Recording / Video
+  Analysis / Training Tracking. All deferred to first use.
+- **Notebook output vanished after `bs.Project()`.** `start_logging` teed onto
+  `sys.__stdout__` — the kernel process's terminal, not the cell. It now tees
+  onto the CURRENT stdout, unfiltered in notebooks (`bioscout/tests/
+  test_logging.py` pins both failure modes).
+- **UI scaling stability**: scaling applied before geometry restore, geometry
+  saved through `_reverse_geometry_scaling` (a 120 % window grew ~20 % per
+  launch), Start-maximised takes precedence over the remembered geometry.
+- **GUI Python console forgot its variables** — every line ran in a fresh
+  scope; one persistent namespace now, with `_` bound like the real REPL.
+- **C3D Export Browse opened in unrelated folders** — no `initialdir`, no
+  `set_project_dir`, registered with empty args. All three fixed.
 - **EMG-only normalisation trials no longer scaffold empty stage folders**
   (`external_biomechanics/`, `ceinms/`, ...) in every iteration —
   normalisation-only trials skip the scaffolding and constructor leftovers

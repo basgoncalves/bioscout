@@ -12,15 +12,26 @@ import sys
 
 
 def classify_session(session_path: str, settings=None, no_plots: bool = False,
-                     write_session_yaml: bool = False):
+                     write_session_yaml: bool = False, per_trial: bool = True,
+                     quiet: bool = False):
     """Classify every trial in ``session_path`` and write the outputs.
 
-    Produces, beside the session:
+    Per trial, beside the data it describes (``per_trial``, the default) —
+    this is what the c3d export produces, so the detection travels with the
+    trial and not in a folder somewhere else:
+
+    * ``2_experimental/<trial>/movement_detection.yaml`` — type, confidence,
+      reason, time_range, side and the task/phase breakdown for that trial
+    * ``2_experimental/<trial>/movement_detection.png`` — its QC figure
+
+    And once, beside the session:
 
     * ``session_auto_detection.yaml`` — the detection, never read by the
       pipeline and never overwriting ``session.yaml``
-    * ``movement_detection/classification.csv`` — one row per trial
-    * ``movement_detection/plots/<trial>.png`` — a QC figure per trial
+    * ``movement_detection/classification.csv`` — one row per trial, the
+      only cross-trial view (which is why it stays session-level)
+    * ``movement_detection/plots/<trial>.png`` — the old figure location,
+      written only when ``per_trial=False``; the figures are not duplicated.
 
     ``settings`` is a project's ``BatchSettings`` (or anything with the same
     attribute names); it supplies the lab conventions — marker names and TRC
@@ -28,13 +39,16 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
     session and falls back to the conventional defaults.
 
     ``write_session_yaml`` corrects ``session.yaml``'s trial types from the
-    detection, backing the old file up first. Returns the detection dict, or
-    None when the session could not be read.
+    detection, backing the old file up first. ``quiet`` trims the per-trial
+    chatter to one summary line — the export already prints a line per trial.
+    Returns the detection dict, or None when the session could not be read.
     """
     import csv as _csv
     import yaml as _yaml
     from bioscout.movement_detector import (classify_trial, segment_trial,
                                             plot_trial_tasks, MocapConfig)
+
+    _say = (lambda *_a, **_k: None) if quiet else print
 
     _sess = os.path.abspath(session_path)
     if not os.path.isdir(_sess):
@@ -99,14 +113,14 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
         _probe = _up
     if _mcfg_src and _mcfg_src != "<unusable>":
         _fm = len(_mcfg.left_foot_markers or []) + len(_mcfg.right_foot_markers or [])
-        print(f"[classifier] conventions from {_mcfg_src}: "
+        _say(f"[classifier] conventions from {_mcfg_src}: "
               f"vertical={_mcfg.vertical_axis} ap={_mcfg.ap_axis} "
               f"lateral={_mcfg.lateral_axis}"
               + (f", {_fm} foot markers named" if _fm else ", foot markers by name"))
     elif _mcfg_src == "<unusable>":
         pass                       # already reported above
     else:
-        print("[classifier] no project settings.py found — using default "
+        _say("[classifier] no project settings.py found — using default "
               "conventions (vertical=Y, foot markers by name)")
 
     _trials = sorted(d for d in os.listdir(_exp)
@@ -206,10 +220,31 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
                     _row[f"task_{_sfx}_{_fld}"] = getattr(_g, _fld)
         _rows.append(_row)
 
-        if _do_plots:
+        # The detection belongs beside the data it describes. Written per
+        # trial it survives a trial being copied, re-exported or moved, and
+        # anything reading 2_experimental/<trial>/ finds it without knowing
+        # the session layout.
+        if per_trial:
             try:
-                if plot_trial_tasks(_d, os.path.join(_plots, f"{_t}.png"),
-                                    body_mass=_mass, cfg=_mcfg,
+                _tdoc = {"trial": _t,
+                         "generated_by": f"bioscout {getattr(__import__('bioscout'), '__version__', 'unknown')} export",
+                         **_entry}
+                if _yt:
+                    _tdoc["session_yaml_type"] = _yt
+                    _tdoc["agrees"] = (_yt == _lab)
+                with open(os.path.join(_d, "movement_detection.yaml"), "w",
+                          encoding="utf-8") as _fh:
+                    _yaml.safe_dump(_tdoc, _fh, sort_keys=False,
+                                    default_flow_style=False, allow_unicode=True)
+            except Exception as _e:
+                print(f"  [detect] {_t}: could not write movement_detection.yaml "
+                      f"({type(_e).__name__}: {_e})")
+
+        if _do_plots:
+            _png = (os.path.join(_d, "movement_detection.png") if per_trial
+                    else os.path.join(_plots, f"{_t}.png"))
+            try:
+                if plot_trial_tasks(_d, _png, body_mass=_mass, cfg=_mcfg,
                                     segments=_segs):
                     _n_png += 1
             except Exception as _e:
@@ -217,7 +252,7 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
 
         _old = _yt
         _flag = "" if not _old else ("  ==" if _old == _lab else f"  != session.yaml says {_old}")
-        print(f"  {_t:24} {_lab:18} {len(_segs)} task(s){_flag}")
+        _say(f"  {_t:24} {_lab:18} {len(_segs)} task(s){_flag}")
 
     _dst = os.path.join(_sess, "session_auto_detection.yaml")
     _ver = getattr(__import__('bioscout'), '__version__', 'unknown')
@@ -265,13 +300,29 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
             _w.writeheader(); _w.writerows(_rows)
 
     _dis = [_r for _r in _rows if not _r["agrees"]]
-    print(f"\n[classifier] {len(_out)} trial(s), {_n_multi} with more than one task, "
-          f"{len(_dis)} disagreeing with session.yaml")
-    print(f"[classifier] wrote {_dst}")
-    if _rows:
-        print(f"[classifier] wrote {_csv_path}")
-    print(f"[classifier] wrote {_n_png} figures -> {_plots}" if _do_plots
-          else "[classifier] figures skipped (--no-plots)")
+    if quiet:
+        print(f"  [detect] {len(_out)} trial(s) classified, {len(_dis)} "
+              f"disagreeing with session.yaml"
+              + (f", {_n_png} figure(s)" if _do_plots else ""))
+        for _r in _dis:
+            print(f"  [detect] {_r['trial']:24} detected {_r['detected']}"
+                  f" != session.yaml {_r['session_yaml_type'] or '(unset)'}")
+    else:
+        print(f"\n[classifier] {len(_out)} trial(s), {_n_multi} with more than "
+              f"one task, {len(_dis)} disagreeing with session.yaml")
+        print(f"[classifier] wrote {_dst}")
+        if _rows:
+            print(f"[classifier] wrote {_csv_path}")
+        if not _do_plots:
+            print("[classifier] figures skipped (--no-plots)")
+        elif per_trial:
+            print(f"[classifier] wrote {_n_png} figures -> "
+                  f"{os.path.join('2_experimental', '<trial>', 'movement_detection.png')}")
+        else:
+            print(f"[classifier] wrote {_n_png} figures -> {_plots}")
+        if per_trial:
+            print(f"[classifier] wrote {len(_out)} x "
+                  f"{os.path.join('2_experimental', '<trial>', 'movement_detection.yaml')}")
 
     if not os.path.isfile(_ypath):
         if write_session_yaml:

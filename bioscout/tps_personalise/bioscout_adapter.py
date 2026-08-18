@@ -193,7 +193,8 @@ def _resolve_generic(session, it, iteration):
 
     # Iteration._resolve_model_file already searches every base bioscout uses
     # and knows the project root; `Session` itself exposes neither.
-    resolved = Iteration(str(session.session_dir), iteration)._resolve_model_file(generic)
+    resolved = Iteration(str(session.session_dir),
+                         iteration)._resolve_model_file(generic, "generic")
     if resolved and os.path.exists(resolved):
         return resolved
     project_dir = os.path.abspath(

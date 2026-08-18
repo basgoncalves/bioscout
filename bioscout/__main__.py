@@ -36,12 +36,72 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 #
 # bioscout.envcheck imports nothing but the standard library, for the same reason.
 # ---------------------------------------------------------------------------
+
+# A legacy flag still works; say once what replaced it. This sits above the
+# --env block because --env exits there, and the flags that exit earliest are
+# exactly the ones a person types most often.
+if sys.argv[1:] and sys.argv[1].startswith("-"):
+    from bioscout.cli import legacy_hint as _hint_for
+    _hint = _hint_for(sys.argv[1:])
+    if _hint:
+        print(_hint)
+
 _ENV_FLAGS = {"--env", "--env-check", "--env_check", "--env-create", "--env_create"}
 if _ENV_FLAGS & set(sys.argv[1:]):
     from bioscout.envcheck import ensure
     _create = bool({"--env-create", "--env_create"} & set(sys.argv[1:]))
     _st = ensure(create=_create)
     sys.exit(0 if (_st["match"] or _st["env_exists"]) else 1)
+
+# --model is handled here for the same reason. It reads .osim XML with
+# nothing but the standard library, and the moment you most want to ask "can my
+# models still find their bones?" is on a machine where the scientific stack is
+# not installed — a collaborator's, a CI runner, a fresh checkout. Making it
+# wait for scipy would put the check out of reach exactly there.
+if {"--model"} & set(sys.argv[1:]):
+    from bioscout.model.cli import main as _early_model
+    _argv = list(sys.argv[1:])
+    _out = []
+    _i = 0
+    while _i < len(_argv):
+        _a = _argv[_i]
+        if _a in ("--model",):
+            # its optional value is the folder/model to check
+            if _i + 1 < len(_argv) and not _argv[_i + 1].startswith("-"):
+                _out.append(_argv[_i + 1])
+                _i += 1
+        elif _a in ("--strict", "-v", "--verbose", "-q", "--quiet",
+                    "--no-recursive"):
+            _out.append(_a)
+        elif _a in ("--search", "--json", "--project"):
+            if _i + 1 < len(_argv):
+                _out += [_a, _argv[_i + 1]]
+                _i += 1
+        _i += 1
+    sys.exit(_early_model(["--verify"] + _out))
+
+# ---------------------------------------------------------------------------
+# The verb CLI (bioscout/cli.py), also before the heavy imports.
+#
+# Two reasons it has to be here rather than in main():
+#   * `-h` must be instant. It used to run the conda env check and import
+#     utils.openSim before it could print a help screen — but help is what you
+#     reach for when the environment is broken, so it must need nothing.
+#   * the legacy parser below would reject `run` / `model` / `plot` as unknown
+#     positionals. Verbs are translated into the old flags HERE and the module
+#     then carries on exactly as before, which is why run_subject_mode() — the
+#     one handler that reads the module-global `args` — was not rewritten.
+# ---------------------------------------------------------------------------
+_first_token = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+_wants_help = bool({"-h", "--help"} & set(sys.argv[1:]))
+if sys.argv[1:]:
+    from bioscout.cli import VERBS as _VERBS, route as _route
+    if _first_token in _VERBS or (_wants_help and _first_token is None):
+        _kind, _value = _route(sys.argv[1:])
+        if _kind == "exit":
+            sys.exit(int(_value))
+        sys.argv = [sys.argv[0]] + list(_value)
+    # (the legacy-flag hint is printed further up, above the --env block)
 
 # These pull in numpy/scipy/matplotlib and the rest of the scientific stack.
 # In a half-built environment the bare ImportError names the missing package but
@@ -223,6 +283,22 @@ parser.add_argument('--figures', dest='figures', nargs='?', const=True, default=
                          ".pdf — segment dimensions, segment mass, a mesh-scale "
                          "heatmap and left/right asymmetry. Defaults to the folder of "
                          "-o (or the models' own folder); pass DIR to choose.")
+parser.add_argument('--model', dest='model_check',
+                    nargs='?', const='', default=None, metavar='FOLDER_OR_OSIM',
+                    help="Check that every .osim can find the bone meshes it references, "
+                         "FROM THAT MODEL'S OWN FOLDER. OpenSim resolves a mesh path "
+                         "relative to the .osim, so a moved model — or geometry moved out "
+                         "from under one — loads with muscles, markers and NO BONES, and "
+                         "says nothing. Checks both the v3 <geometry_file> and v4 "
+                         "<mesh_file> tags everywhere in the document, and flags meshes "
+                         "that resolve only by filename case (Windows-only) or by absolute "
+                         "path. Pass a folder or a model; defaults to the project's model "
+                         "folders. Reads XML only, so it needs no OpenSim and never "
+                         "modifies a model. Full options: "
+                         "python -m bioscout.model --help")
+parser.add_argument('--strict', dest='strict', action='store_true',
+                    help="With --model: treat 'resolves, but not from the model's own "
+                         "folder' as a failure rather than a warning.")
 parser.add_argument('--tps', nargs='?', const='', default=None, metavar='PROJECT_PATH',
                     help="Build a TPS/MRI-personalised model, interactively: asks which "
                          "session, which model to warp and which 3D Slicer landmark file, "
@@ -1812,6 +1888,10 @@ def main() -> int:
     if args.change_moment_arms is not None:
         from bioscout.change_moment_arms.cli import run as _run_ma
         return _run_ma(args.change_moment_arms or args.project or os.getcwd())
+    # NB: --model never reaches here either — like --env, it is handled at
+    # the top of this file, before the scientific stack is imported, because the
+    # check is pure stdlib and is most needed on machines that cannot import it.
+    # The argparse entry above exists so it appears in --help.
     if args.compare_models is not None:
         from bioscout.utils.model_report import compare_models as _cmp
         _setups = None

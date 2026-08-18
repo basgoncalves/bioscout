@@ -378,13 +378,30 @@ def read_trc(path: str) -> Tuple[np.ndarray, Dict[str, np.ndarray], float]:
     names = [n for n in lines[3].split("\t")[2:] if n.strip()]
     rows = []
     for line in lines[5:]:
-        tok = line.split()
+        if not line.strip():
+            continue
+        # SPLIT ON TABS AND KEEP THE EMPTY CELLS. A .trc marks an occluded
+        # marker with three empty fields, and `line.split()` — splitting on
+        # whitespace — deletes them, so every marker AFTER the gap shifts three
+        # columns left and is read as a different marker. On a trial where most
+        # markers have gaps that is most frames, and nothing downstream can tell:
+        # the pelvis quietly becomes whichever marker slid into its columns, the
+        # speed comes out at 0.45 m/s for a 5.8 m/s sprint, and the trial is
+        # classified "static". The row is a fixed-width record; treat it as one.
+        tok = line.rstrip("\r\n").split("\t") if "\t" in line else line.split()
         if len(tok) < 3:
             continue
-        try:
-            rows.append([float(x) for x in tok])
-        except ValueError:
-            continue          # occlusion rows with empty fields
+        vals = []
+        for x in tok:
+            x = x.strip()
+            if x in ("", "nan", "NaN", "NAN"):
+                vals.append(np.nan)
+            else:
+                try:
+                    vals.append(float(x))
+                except ValueError:
+                    vals.append(np.nan)
+        rows.append(vals)
     if not rows:
         return np.array([]), {}, rate
 
@@ -392,6 +409,16 @@ def read_trc(path: str) -> Tuple[np.ndarray, Dict[str, np.ndarray], float]:
     arr = np.full((len(rows), width), np.nan)
     for i, r in enumerate(rows):
         arr[i, :len(r)] = r
+    # Drop frames with no marker at all — the blank padding an export leaves
+    # when the capture is longer than the tracked segment. Keeping them does
+    # not add information, it just stretches every duration and rate estimate
+    # over time in which nothing was measured.
+    if arr.shape[1] > 2:
+        _any = np.isfinite(arr[:, 2:]).any(axis=1)
+        if _any.any() and not _any.all():
+            _lo = int(np.argmax(_any))
+            _hi = int(len(_any) - np.argmax(_any[::-1]))
+            arr = arr[_lo:_hi]
 
     time = arr[:, 1]
     data: Dict[str, np.ndarray] = {}

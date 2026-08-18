@@ -119,8 +119,103 @@ pip install -e .
 **4 — Verify:**
 
 ```bash
-python -m bioscout --install     # prints a dependency status table
+bioscout utils install     # prints a dependency status table
 ```
+
+---
+
+## Command line
+
+Ten verbs. Every one takes `--help` of its own, and `bioscout help <verb>` is the
+same thing.
+
+```
+bioscout                 launch the GUI
+bioscout help [VERB]     the verb list, or one verb's detail
+bioscout init            create a project: folders, models, settings template
+bioscout gui             launch the GUI
+bioscout run             the pipeline: IK -> ID -> MA -> SO -> CEINMS -> JRA
+bioscout session         new / export / classify / ingest / reset
+bioscout model           check / edit / compare / ma / validate / joint-centres
+bioscout tps             build an MRI-personalised model
+bioscout plot            figures, summaries, Collings ranking
+bioscout utils           env / install / md2pdf / pylance
+bioscout lab             EXPERIMENTAL 3.0: video and wearable tracking
+```
+
+`bioscout -h` needs nothing but the standard library — no conda check, no
+OpenSim import — so it still answers on a machine where the environment is
+half-built, which is when you need it most.
+
+```bash
+bioscout run 021 --session pre,post --replace
+bioscout session new simulations/022/pre        # opens a dialog
+bioscout model check models --strict
+bioscout plot --list
+bioscout help run
+```
+
+### Coming from the flags
+
+Every old flag still works. It is hidden from `--help` and prints one line
+naming its replacement, so existing scripts keep running while you migrate.
+They will be removed one release after that.
+
+| old | new |
+|---|---|
+| `--run_subject X --REPLACE` | `run X --replace` |
+| `-b settings.py` | `run --batch settings.py` |
+| `--new-session P --from-session Q --body-mass M` | `session new P` (a dialog asks) |
+| `--c3d-export P` | `session export P` |
+| `--classifier P` | `session classify P` |
+| `--ingest-c3d F --subject S --session N` | `session ingest F --subject S --session N` |
+| `--reset --reset-dry-run --reset-raw` | `session reset --dry-run --raw` |
+| `--model-edit`, `--edit` | `model edit` |
+| `--compare-models`, `--scale-setups` | `model compare --scale-setups` |
+| `--change-moment-arms`, `--ma` | `model ma` |
+| `--joint-centres`, `--jc` | `model joint-centres` |
+| `--summary -overall -s -t -p` | `plot summary --overall --subject --trial --project` |
+| `--collings --skip --metric --side --top` | `plot collings --skip --metric --side --top` |
+| `--env`, `--env-create` | `utils env`, `utils env --create` |
+| `--install` | `utils install` |
+| `--md2pdf --toc --bib --outdir` | `utils md2pdf --toc --bib --outdir` |
+| `--pylance-fix` | `utils pylance` |
+| `--shots`, `--load-report`, `--add_subject` | `lab shots`, `lab load-report`, `lab add-subject` |
+
+The point was not shorter names. The flat parser had grown to 66 options, and
+**25 of them existed only to modify another flag** — their help began
+*"With `--X`:"*. `--top` and `--side` mean nothing without `--collings`; `--toc`
+and `--bib` mean nothing without `--md2pdf`. Under a verb they are simply that
+verb's options, and the root help is ten lines.
+
+### `bioscout model check` — the one to run after moving anything
+
+OpenSim resolves a mesh path **relative to the folder holding the `.osim`**. Move
+a model, rename a `Geometry/` folder, or write a personalised model into a new
+subfolder, and OpenSim opens it with every muscle, marker and joint intact and
+**no bones at all** — no exception, nothing in the log.
+
+```bash
+bioscout model check                      # the project's model folders
+bioscout model check models --strict      # fail on anything not portable
+bioscout model check models --json geometry.json
+```
+
+It reads XML only — no OpenSim needed — and reports *which tier* resolved each
+mesh, because "found it" is not the useful answer:
+
+| tier | meaning |
+|---|---|
+| `local` | the model's own folder or its `Geometry/`. **Portable — the only pass.** |
+| `parent` | `../Geometry`. Fine in a project tree, breaks if the model alone is copied. |
+| `bundled` | only bioscout's own `Geometry/`. Renders only because bioscout is installed. |
+| `search` | only via `--search` or `$OPENSIM_HOME`. Machine-local. |
+| `absolute` | an absolute path. Points somewhere *else* on another computer. |
+| `case` | only by ignoring filename case. Works on Windows, fails on Linux. |
+| `empty` / `missing` | zero-byte mesh / not found. **No bone will be drawn.** |
+
+Anything but `local` warns; `--strict` makes it a failure. The same check runs at
+warn level every time a model is loaded during a run.
 
 ---
 
@@ -204,7 +299,7 @@ bioscout --c3d-export  "simulations/<Subject>/<Session>"
 bioscout --classifier  "simulations/<Subject>/<Session>" --write-session-yaml
 ```
 
-The full walkthrough, including what `--new-session` deliberately does *not*
+The full walkthrough, including what `session new` deliberately does *not*
 guess, is in [docs/SESSION_LAYOUT.md](docs/SESSION_LAYOUT.md).
 
 ### Resolving folder names — never join them by hand
@@ -331,9 +426,8 @@ C:/…/Powerlifiting/c3dfiles/25_03_31/Walking_02.c3d
    `simulations/<subject>/<session>/<trial>/inputs/c3dfile.c3d` and creates the
    `models/<subject>/<session>/` folder:
    ```bash
-   python -m bioscout --ingest-c3d "C:/…/Powerlifiting/c3dfiles/25_03_31" \
+   bioscout session ingest "C:/…/Powerlifiting/c3dfiles/25_03_31" \
      --subject Athlete_04 --session 25_03_31
-   # add --reset-dry-run to preview without copying
    ```
 
 3. **Drop the scaled model** at `models/Athlete_04/25_03_31/scaled.osim` (matching
@@ -341,40 +435,39 @@ C:/…/Powerlifiting/c3dfiles/25_03_31/Walking_02.c3d
 
 4. **Run** — `--export` regenerates markers/GRF/EMG + `trial_settings.xml` from each c3d:
    ```bash
-   python -m bioscout --run_subject Athlete_04 --session 25_03_31 --export --REPLACE
+   bioscout run Athlete_04 --session 25_03_31 --export --replace
    ```
 
-(`--ingest-c3d` is also available on the Python API as `session.ingest_c3d(source=…)`.)
+(`session ingest` is also available on the Python API as `session.ingest_c3d(source=…)`.)
 
 ---
 
 ## Running the pipeline
 
 > The commands below are the **stable OpenSim / CEINMS pipeline** (the focus of
-> 2.x). `python -m bioscout --help` also lists a **"player tracking —
-> EXPERIMENTAL"** group (`--shots`, `--load-report`, `--zepp-pull`,
-> `--add_subject`, …) — those are the markerless-video / wearables features
-> **targeted for bioscout 3.0 and not stable yet**. Ignore them for pipeline
-> work; they're documented in [Future add-ons](#future-add-ons).
+> 2.x). `bioscout lab` holds the markerless-video / wearables features
+> (`lab shots`, `lab load-report`, `lab add-subject`) — **targeted for bioscout
+> 3.0 and not stable yet**. Ignore them for pipeline work; they're documented in
+> [Future add-ons](#future-add-ons).
 
 **Command line** — run the full pipeline (SO + CEINMS) for one subject:
 
 ```bash
 cd /path/to/my_project
-python -m bioscout --run_subject Athlete_03_Cateli
+bioscout run Athlete_03_Cateli
 ```
 
 Restrict scope, force a rebuild, or re-export inputs from C3D:
 
 ```bash
-python -m bioscout --run_subject Athlete_03_Cateli --session 25_03_31 --trial Walking_02
-python -m bioscout --run_subject Athlete_03_Cateli --REPLACE      # overwrite existing outputs
-python -m bioscout --run_subject Athlete_03_Cateli --export       # regenerate inputs/ from c3d first
+bioscout run Athlete_03_Cateli --session 25_03_31 --trial Walking_02
+bioscout run Athlete_03_Cateli --replace      # overwrite existing outputs
+bioscout run Athlete_03_Cateli --export       # regenerate inputs/ from c3d first
 ```
 
-`--session` and `--trial` accept comma-separated lists; `--run_subject` with no
-name runs every subject in `settings.py`. Runs are **idempotent** — a stage is
-skipped when its output already exists unless `--REPLACE` is given.
+`--session` and `--trial` accept comma-separated lists; `bioscout run` with no
+subject runs every subject in `settings.py`. Runs are **idempotent** — a stage is
+skipped when its output already exists unless `--replace` is given.
 
 ### Running individual steps on one trial
 
@@ -712,33 +805,33 @@ per trial by adding `<analysis_leg>r</analysis_leg>` to that trial's
 
 ### Resetting trials to inputs-only
 
-`--reset` strips generated outputs (IK/ID/MA/SO/JRA results, `setup_*.xml`,
+`session reset` strips generated outputs (IK/ID/MA/SO/JRA results, `setup_*.xml`,
 `MuscleAnalysis/`, `Execution*/`, filtered EMG, plots, CEINMS calibration, …)
 back to the raw inputs, so a trial re-runs clean. It **keeps** each trial's
 `inputs/` folder (the C3D lives inside it) and `trial_settings.xml`, and makes a
 **timestamped backup** (`simulations_backup_<ts>/`) before deleting anything.
 
-`--reset` follows the same scoping as everything else — pass `--trial` to reset
+`session reset` follows the same scoping as everything else — pass `--trial` to reset
 one trial, `--session` for a whole session, or no scope to reset the entire
 `simulations/` folder:
 
 ```bash
 # reset only, no run
-python -m bioscout --reset --trial Walking_02            # one trial (keeps whole inputs/)
-python -m bioscout --reset --session 25_03_31            # a whole session
-python -m bioscout --reset                               # the entire simulations/ folder
-python -m bioscout --reset --trial Walking_02 --reset-dry-run   # preview, touch nothing
-python -m bioscout --reset --trial Walking_02 --reset-raw       # prune inputs/ to just the c3d + trial_settings.xml
+bioscout session reset --trial Walking_02            # one trial (keeps whole inputs/)
+bioscout session reset --session 25_03_31            # a whole session
+bioscout session reset                               # the entire simulations/ folder
+bioscout session reset --trial Walking_02 --dry-run  # preview, touch nothing
+bioscout session reset --trial Walking_02 --raw      # prune inputs/ to just the c3d + trial_settings.xml
 
-# reset-then-run: combine with --run_subject (resets exactly the trials it will run)
-python -m bioscout --run_subject Athlete_03_Cateli --session 25_03_31 --trial Walking_02 --reset --REPLACE
+# reset-then-run: `run --reset` resets exactly the trials it is about to run
+bioscout run Athlete_03_Cateli --session 25_03_31 --trial Walking_02 --reset --replace
 
 # add --export to also regenerate inputs/ (markers/GRF/EMG) from the C3D
-python -m bioscout --run_subject Athlete_03_Cateli --session 25_03_31 --trial Walking_02 --reset --export --REPLACE
+bioscout run Athlete_03_Cateli --session 25_03_31 --trial Walking_02 --reset --export --replace
 ```
 
 When scoped to a trial, sibling trials and session-level files are left
-untouched. Because `inputs/` is preserved, a plain `--reset` already gives a
+untouched. Because `inputs/` is preserved, a plain `session reset` already gives a
 clean recompute; add `--export` only when you also want inputs rebuilt from the
 C3D.
 
@@ -782,15 +875,15 @@ Session.reset_project(".", sessions="25_03_31", dry_run=True)  # whole project, 
 
 ---
 
-## Muscle ranking across models — `--collings`
+## Muscle ranking across models — `bioscout plot collings`
 
 Which muscles a model leans on, ranked, with every model side by side and the
 disagreement drawn on:
 
 ```bash
-python -m bioscout --collings "simulations/Athlete_03/25_03_31"
-python -m bioscout --collings "simulations/Athlete_03/25_03_31" --skip gpk_mri cateli_mri
-python -m bioscout --collings . --trial Walking_03 --metric impulse --top 15 --side _l
+bioscout plot collings "simulations/Athlete_03/25_03_31"
+bioscout plot collings "simulations/Athlete_03/25_03_31" --skip gpk_mri cateli_mri
+bioscout plot collings . --trial Walking_03 --metric impulse --top 15 --side _l
 ```
 
 One ranked panel per model iteration, ordered by **peak muscle force** of each
@@ -807,7 +900,7 @@ panel on its right, red = lower, dotted = dropped out of the top N.
 
 | flag | meaning |
 |---|---|
-| `--collings [SESSION]` | session folder (the one holding `session.yaml`); defaults to `.`. Pointing at a project or subject folder works too if exactly one session sits below it. |
+| `plot collings [SESSION]` | session folder (the one holding `session.yaml`); defaults to `.`. Pointing at a project or subject folder works too if exactly one session sits below it. |
 | `--skip A B ...` | iterations to leave out, case-insensitive |
 | `--trial NAME[,NAME]` | restrict to these trials (default: all) |
 | `--metric peak\|impulse` | rank by peak force (default) or force impulse |

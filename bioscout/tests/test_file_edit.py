@@ -432,3 +432,74 @@ class TestFlowMap(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSameIndentBlockSequences(_TmpFile):
+    """Entries whose value is a block list at the SAME column as the key.
+
+    PyYAML's own dump writes exactly this shape (emg_map in every real
+    session.yaml), and `_entry_bounds` used to treat the "- item" lines as
+    siblings. `delete_entry` then removed only the key line and the orphaned
+    items were swallowed by the PREVIOUS entry's list — muscles silently
+    remapped to the wrong EMG channel. Found 2026-08-18 building the CEINMS
+    Setup tab; these pin the fix.
+    """
+
+    YAML = (
+        "subject: '021'\n"
+        "emg_map:\n"
+        "  Voltage_1-VM:\n"
+        "  - vasmed_r\n"
+        "  - vasint_r\n"
+        "  Voltage_2-VL:\n"
+        "  - vaslat_r\n"
+        "  Voltage_3-RF:\n"
+        "  - recfem_r\n"
+        "body_mass: 61.3\n"
+    )
+
+    def _doc(self, text=None):
+        return load_document(self.write("session.yaml", text or self.YAML))
+
+    def test_entry_source_includes_the_items(self):
+        doc = self._doc()
+        src = doc.entry_source(doc.map_node("emg_map"), "Voltage_2-VL")
+        self.assertIn("Voltage_2-VL:", src)
+        self.assertIn("- vaslat_r", src)
+        self.assertNotIn("Voltage_3-RF", src)
+
+    def test_delete_takes_the_items_with_the_key(self):
+        doc = self._doc()
+        doc.delete_entry(doc.map_node("emg_map"), "Voltage_2-VL")
+        data = yaml.safe_load(doc.dumps())
+        self.assertNotIn("Voltage_2-VL", data["emg_map"])
+        # THE bug: the orphaned "- vaslat_r" used to join the previous list
+        self.assertEqual(data["emg_map"]["Voltage_1-VM"],
+                         ["vasmed_r", "vasint_r"])
+        self.assertEqual(data["emg_map"]["Voltage_3-RF"], ["recfem_r"])
+
+    def test_replace_entry_swaps_block_list_for_flow(self):
+        doc = self._doc()
+        doc.replace_entry(doc.map_node("emg_map"), "Voltage_3-RF",
+                          "[recfem_r, vasint_r]")
+        data = yaml.safe_load(doc.dumps())
+        self.assertEqual(data["emg_map"]["Voltage_3-RF"],
+                         ["recfem_r", "vasint_r"])
+        self.assertEqual(data["emg_map"]["Voltage_2-VL"], ["vaslat_r"])
+        # untouched lines stay byte-identical
+        self.assertIn("  Voltage_1-VM:\n  - vasmed_r\n", doc.dumps())
+        self.assertIn("body_mass: 61.3", doc.dumps())
+
+    def test_replace_entry_adds_when_absent(self):
+        doc = self._doc()
+        doc.replace_entry(doc.map_node("emg_map"), "Voltage_9-NEW",
+                          "[soleus_r]")
+        data = yaml.safe_load(doc.dumps())
+        self.assertEqual(data["emg_map"]["Voltage_9-NEW"], ["soleus_r"])
+
+    def test_dash_prefixed_key_is_still_a_sibling(self):
+        # a mapping KEY that merely starts with "-" must not be mistaken for
+        # a sequence item of the entry above it
+        doc = self._doc("m:\n  a: 1\n  '-weird': 2\n")
+        src = doc.entry_source(doc.map_node("m"), "a")
+        self.assertNotIn("-weird", src)

@@ -244,16 +244,24 @@ class ConsoleTerminal(ctk.CTkFrame):
             captured_output = io.StringIO()
             captured_error = io.StringIO()
 
+            # One PERSISTENT namespace for the whole session. eval/exec with
+            # no globals ran every line in a fresh scope, so `a = 2` followed
+            # by `a` was a NameError — a REPL that forgets its variables.
+            if not hasattr(self, "_py_namespace"):
+                self._py_namespace = {"__builtins__": __builtins__}
+            ns = self._py_namespace
+
             # Execute command
             with redirect_stdout(captured_output), redirect_stderr(captured_error):
                 try:
                     # Try to evaluate as expression first
-                    result = eval(command)
+                    result = eval(command, ns)
                     if result is not None:
                         print(result)
+                        ns["_"] = result       # like the real REPL
                 except SyntaxError:
                     # If it fails, try to execute as statement
-                    exec(command)
+                    exec(command, ns)
 
             # Display output
             output = captured_output.getvalue()

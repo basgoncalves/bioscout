@@ -215,6 +215,54 @@ def _is_ceinms(force_type) -> bool:
     return str(force_type).upper().startswith("CEIN")
 
 
+# --------------------------------------------------------------------------- #
+# geometry sanity, at the moment a model is loaded
+# --------------------------------------------------------------------------- #
+_GEOMETRY_CHECKED: dict = {}
+
+
+def warn_if_geometry_unresolved(model_path, force=False) -> bool:
+    """Warn once per model when its bone meshes cannot be found. True if clean.
+
+    OpenSim resolves a mesh filename relative to the folder holding the .osim,
+    so a model that has been moved — or whose Geometry folder has — loads with
+    every muscle, marker and joint intact and NO BONES, silently. That model
+    still solves: IK, ID and SO do not touch the meshes. What it breaks is every
+    visual check a human would use to notice something else is wrong.
+
+    Warn, never raise: a missing mesh does not make a solve incorrect, and this
+    is called on the hot path of every stage. ``bioscout model check`` is the
+    deliberate, non-zero-exit version of the same check.
+    """
+    key = os.path.abspath(str(model_path))
+    if not force and key in _GEOMETRY_CHECKED:
+        # Cache the VERDICT, not merely the fact of having warned: a caller that
+        # uses the return value must get the same answer on the second load as
+        # on the first, without printing twice.
+        return _GEOMETRY_CHECKED[key]
+    try:
+        from bioscout.model import verify_model
+        report = verify_model(key)
+    except Exception:
+        _GEOMETRY_CHECKED[key] = True
+        return True                     # never let a sanity check break a run
+    if report.error or not report.refs:
+        _GEOMETRY_CHECKED[key] = True
+        return True
+    bad = report.failing
+    _GEOMETRY_CHECKED[key] = not bad
+    if not bad:
+        return True
+    names = ", ".join(sorted({r.name for r in bad})[:4])
+    more = "" if len(bad) <= 4 else f" (+{len(bad) - 4} more)"
+    print(f"[geometry] {os.path.basename(key)}: {len(bad)} of {report.n_refs} bone "
+          f"meshes not found — OpenSim will open this model WITHOUT those bones: "
+          f"{names}{more}")
+    print(f"[geometry] run `bioscout model check {os.path.dirname(key)}` for the "
+          f"full report. Solving is unaffected; visual checks are not.")
+    return False
+
+
 @dataclass
 class Subject:
     """One SUBJECT-SESSION config: the identity (``subject``/``name``) plus the
@@ -364,15 +412,18 @@ class Subject:
         out = []
         for _n in names:
             try:
-                out.append(_S(_fsd(_n), _it))
+                # subject=self.name is not optional: "pre" is a session name
+                # every participant has, and resolving it without a subject
+                # returns the lowest id that owns one.
+                out.append(_S(_fsd(_n, subject=self.name), _it))
             except Exception as _e:
                 print(f'[Subject] {self.name}: session {_n} -> {_e}')
         return out
 
     def get_session(self, name):
-        """Session by name."""
+        """Session by name, within THIS subject."""
         from bioscout.utils.session import Iteration as _S, find_session_dir as _fsd
-        return _S(_fsd(name), self._iteration())
+        return _S(_fsd(name, subject=self.name), self._iteration())
 
     def trials(self, session=None, force_type="SO"):
         """List of Trial objects for one session (default: self.session)."""
@@ -962,17 +1013,38 @@ class Project:
         check_settings_version(self.settings, self.dir, verbose=verbose)
 
         # If the settings (e.g. a freshly scaffolded template) declares no
-        # subjects, populate them by scanning models/ so the project is usable.
+        # subjects, populate them so the project is usable.
+        #
+        # A SUBJECT IS A PARTICIPANT, and participants live in simulations/ —
+        # one folder per person, each holding their sessions. models/ only
+        # looked like the same list back when it happened to hold one folder
+        # per participant; the moment a project organises models by MODEL
+        # (Catelli/, Rajagopal_FAIS/, personalised/) that coincidence breaks and
+        # `bioscout run 022` answers "subject 022 not found; have ['Catelli',
+        # 'Rajagopal_FAIS', 'personalised']" — naming model families as if they
+        # were people. simulations/ is the authoritative list; models/ stays as
+        # the fallback for projects that genuinely key models by participant and
+        # have not exported anything yet.
         try:
             _bs = getattr(self.settings, "BatchSettings", None)
             if _bs is not None and not getattr(_bs, "SUBJECTS", None):
-                subs = self.discover_subjects()
+                subs, _src = [], "models/"
+                _sim = getattr(self.utils, "SIMULATIONS_DIR", None) or \
+                       os.path.join(str(self.dir), "simulations")
+                _pids = [d for d in subjects_in_simulations(_sim)
+                         if not d.startswith((".", "_"))]
+                if _pids:
+                    subs, _src = self.discover_subjects(names=_pids,
+                                                        models_dir=_sim), "simulations/"
+                if not subs:
+                    subs = self.discover_subjects()
                 if subs:
                     _bs.SUBJECTS = subs
                     if not getattr(_bs, "model_config", None):
                         _bs.model_config = build_model_config(subs)
                     if verbose:
-                        print(f"[bioscout] discovered {len(subs)} subject(s) from models/")
+                        print(f"[bioscout] discovered {len(subs)} subject(s) "
+                              f"from {_src}: {', '.join(s.name for s in subs)}")
         except Exception:
             pass
 
@@ -1040,10 +1112,11 @@ class Project:
         os.makedirs(d, exist_ok=True)
         return d
 
-    def discover_subjects(self, session=None, **kw):
-        """Auto-build Subjects from this project's models/ folder (see
+    def discover_subjects(self, session=None, models_dir=None, **kw):
+        """Auto-build Subjects by scanning a folder — this project's models/ by
+        default, ``models_dir`` to scan somewhere else (see
         bioscout.discover_subjects)."""
-        return discover_subjects(self.utils.MODELS_DIR,
+        return discover_subjects(models_dir or self.utils.MODELS_DIR,
                                  session=session or getattr(self.settings, "SESSION", None), **kw)
 
     def migrate_settings(self, write=False, verbose=True):
@@ -2823,6 +2896,18 @@ class Analyse:
         '''
         if emg_string_list is None:
             emg_string_list = _u.settings.BatchSettings.emg_string_list
+        # session.yaml's emg_map IS the channel list. It is written per subject
+        # from that subject's own c3d and it is the only place the project says
+        # which channel is which muscle; a substring match on "Voltage"/"EMG" is
+        # a guess that goes wrong the moment a lab records unused analog inputs
+        # under similar names (022: 32 "Voltage" channels, 16 of them noise).
+        _emg_channels = None
+        try:
+            from bioscout.utils import emg_filter as _ef
+            _scfg = _ef.session_config_near(self.path) or {}
+            _emg_channels = list((_scfg.get("emg_map") or {}).keys()) or None
+        except Exception:
+            _emg_channels = None
         import exportC3D
 
         print("Exporting C3D file...")
@@ -2848,7 +2933,8 @@ class Analyse:
         # next-to-the-c3d when experimental_dir is unset (flat/legacy layout).
         _exp_out = getattr(self, "experimental_dir", None)
         full_range = exportC3D.main(c3d_filepath=c3d_abs, emg_string_list=emg_string_list,
-                                    create_folder=create_folder, output_dir=_exp_out)
+                                    create_folder=create_folder, output_dir=_exp_out,
+                                    emg_channels=_emg_channels)
 
         # --- Auto gait/task events from the vertical GRF ------------------------
         # Detect foot contacts/offs (needs the plate->foot map in GRF.xml — create
@@ -2970,6 +3056,7 @@ class Analyse:
         shared instance would let one stage's edits leak into another's.
         """
         mp = path or self.model_dir
+        warn_if_geometry_unresolved(mp)
         _os = self._get_openSim()
         import opensim as osim
         _ctx = getattr(_os, "_osim_quiet_ctx", None)
@@ -3353,9 +3440,27 @@ class Analyse:
             comps = [d[g[a]].astype(float).to_numpy() for a in ("x", "y", "z") if a in g]
             if len(comps) < 2:
                 continue
-            peak = float(_np.nanmax(_np.sqrt(sum(v ** 2 for v in comps))))
-            parts.append(f"{jname} {peak/bw:.1f} BW" if bw else f"{jname} {peak:.0f} N")
-        return "[SO result] peak JCF: " + (", ".join(parts) if parts else "n/a")
+            mag = _np.sqrt(sum(v ** 2 for v in comps))
+            # The raw max is an edge artefact, not a result: the first and last
+            # few frames carry the spline derivative at the ends of the window,
+            # and one of them routinely lands two orders of magnitude above the
+            # curve. Report the interior 99th percentile as the peak — that is
+            # what the trial actually did — and name the raw max separately when
+            # it disagrees, so a blown-up boundary is reported rather than
+            # averaged away.
+            _e = int(getattr(_u.settings.BatchSettings, 'jra_edge_frames', 3))
+            core = mag[_e:mag.size - _e] if mag.size > 2 * _e else mag
+            core = core[_np.isfinite(core)]
+            if core.size == 0:
+                continue
+            peak = float(_np.nanpercentile(core, 99))
+            raw = float(_np.nanmax(mag[_np.isfinite(mag)]))
+            u = (lambda v: f"{v/bw:.1f} BW") if bw else (lambda v: f"{v:.0f} N")
+            txt = f"{jname} {u(peak)}"
+            if raw > 3 * peak:
+                txt += f" (edge spike {u(raw)} ignored)"
+            parts.append(txt)
+        return "[SO result] peak JCF (interior p99): " + (", ".join(parts) if parts else "n/a")
 
         # End-of-analysis validation for this trial (muscle lengths + literature).
         # Opt-out via settings.BatchSettings.enable_trial_validation = False.
@@ -3552,6 +3657,83 @@ class Analyse:
         except Exception:
             pass
 
+        # --- robust y-limits ------------------------------------------------
+        # A joint reaction analysis blows up at the ends of the window: the
+        # kinematics are spline-differentiated, so the first and last few frames
+        # carry an edge derivative that is not a force the joint ever saw. ONE
+        # such frame is enough to take the y-axis to 40 000 BW and squash the
+        # entire real curve — 5 BW of running — onto the zero line. The figure
+        # then looks like a flat line with a spike, and says nothing.
+        #
+        # So scale the axis to the body of the data and SAY when something was
+        # left outside. Never silently: a clipped point is annotated with its
+        # true value and time, so an axis that has been rescaled is visibly
+        # different from one that has not.
+        _edge = int(getattr(_u.settings.BatchSettings, 'jra_edge_frames', 3)
+                    if getattr(_u, 'settings', None) else 3)
+        _plo, _phi = 0.5, 99.5
+
+        def _robust_ylim(ax, series, edge=_edge):
+            """Scale ``ax`` to the interior percentile range of ``series``
+            (list of 1-D arrays), annotating anything left outside."""
+            try:
+                core, full = [], []
+                for a in series:
+                    if a is None:
+                        continue
+                    a = np.asarray(a, dtype=float)
+                    a = a[np.isfinite(a)]
+                    if a.size == 0:
+                        continue
+                    full.append(a)
+                    core.append(a[edge:a.size - edge] if a.size > 2 * edge else a)
+                if not core:
+                    return
+                c = np.concatenate(core)
+                f = np.concatenate(full)
+                lo, hi = np.percentile(c, _plo), np.percentile(c, _phi)
+                if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                    return
+                pad = 0.10 * (hi - lo)
+                lo, hi = lo - pad, hi + pad
+                n_out = int(np.sum((f < lo) | (f > hi)))
+                if n_out == 0:
+                    return                     # nothing hidden: leave autoscale
+                ax.set_ylim(lo, hi)
+                _amax = f[np.argmax(np.abs(f))]
+                ax.text(0.99, 0.97,
+                        f"axis clipped — {n_out} pt(s) outside, peak {_amax:,.0f}",
+                        transform=ax.transAxes, ha='right', va='top', fontsize=7,
+                        color='0.35',
+                        bbox=dict(boxstyle='round,pad=0.25', fc='white',
+                                  ec='0.75', lw=0.5, alpha=0.85))
+            except Exception:
+                pass
+
+        # --- do the two results even describe the same thing? ----------------
+        # SO and CEINMS are solved in separate stages and land in separate
+        # files, so a re-run of one leaves the other behind. Overlay them
+        # anyway and you get a figure that reads as a solver comparison but is
+        # actually one window against another — 022/Run_baselineA1 rendered SO
+        # over 3.845-4.805 s against a CEINMS result from before the window was
+        # narrowed, 3.415-4.850, and looked entirely convincing. Compare the
+        # time bases and say so on the figure.
+        _stale = ""
+        try:
+            if so is not None and ce is not None and len(so) and len(ce):
+                _ts, _tc = so['time'].values, ce['time'].values
+                _d0, _d1 = abs(_ts[0] - _tc[0]), abs(_ts[-1] - _tc[-1])
+                if max(_d0, _d1) > 1e-6 or len(_ts) != len(_tc):
+                    _stale = (f"SO {_ts[0]:.3f}-{_ts[-1]:.3f}s ({len(_ts)} frames)  "
+                              f"vs  CEINMS {_tc[0]:.3f}-{_tc[-1]:.3f}s "
+                              f"({len(_tc)} frames)")
+                    self._log(f"[JRA] WARNING: SO and CEINMS were solved over "
+                              f"DIFFERENT windows — {_stale}. One of them is "
+                              f"stale; re-run the other stage before comparing.",
+                              terminal=True)
+        except Exception:
+            pass
+
         # Layout: one JOINT per row; columns = Fx, Fy, Fz, |resultant|.
         _axis = ['Fx', 'Fy', 'Fz']
         nrows = len(joints)
@@ -3561,6 +3743,12 @@ class Analyse:
         _legtxt = ("both legs (R solid, L dashed)" if len(_sides) > 1
                    else ("left leg" if _sides[0][0] == "l" else "right leg"))
         fig.suptitle(f"{title}  —  {_legtxt}", fontsize=18)
+        if _stale:
+            fig.text(0.5, 0.955,
+                     f"NOT COMPARABLE — different time windows:  {_stale}",
+                     ha='center', va='top', fontsize=11, color='#b00020',
+                     bbox=dict(boxstyle='round,pad=0.35', fc='#fdecef',
+                               ec='#b00020', lw=1.0))
         for r in range(nrows):
             for c in range(ncols):
                 axg[r][c].axis('off')
@@ -3569,13 +3757,15 @@ class Analyse:
             # columns 0..2: Fx/Fy/Fz — one line per side (leg) x source (SO/CEINMS)
             for c in range(3):
                 ax = axg[r][c]; ax.axis('on')
+                _ser = []
                 for sd, lsty, slab in _sides:
                     col = jcols_by[sd][j][c]
                     sfx = f" {slab}" if slab else ""
                     s, e = _norm(_get(so, col)), _norm(_get(ce, col))
-                    if s is not None: ax.plot(so['time'].values, s, color='tab:blue', ls=lsty, label=f'SO{sfx}')
-                    if e is not None: ax.plot(ce['time'].values, e, color='tab:red', ls=lsty, label=f'CEINMS{sfx}')
+                    if s is not None: ax.plot(so['time'].values, s, color='tab:blue', ls=lsty, label=f'SO{sfx}'); _ser.append(s)
+                    if e is not None: ax.plot(ce['time'].values, e, color='tab:red', ls=lsty, label=f'CEINMS{sfx}'); _ser.append(e)
                 ax.set_title(f"{j} {_axis[c]}"); ax.set_xlabel("time normalised (s)"); ax.set_ylabel(f"Force ({_unit})")
+                _robust_ylim(ax, _ser)
                 ax.legend(fontsize=8)
 
             # column 3: |resultant| = sqrt(Fx^2+Fy^2+Fz^2) — per side
@@ -3584,13 +3774,15 @@ class Analyse:
                 comps = [_get(df, col) for col in cols3]
                 return (np.sqrt(comps[0]**2 + comps[1]**2 + comps[2]**2)
                         if all(x is not None for x in comps) else None)
+            _ser = []
             for sd, lsty, slab in _sides:
                 _cols3 = jcols_by[sd][j][:3]
                 sfx = f" {slab}" if slab else ""
                 sm, em = _norm(_mag(so, _cols3)), _norm(_mag(ce, _cols3))
-                if sm is not None: ax.plot(so['time'].values, sm, color='tab:blue', ls=lsty, label=f'SO{sfx}')
-                if em is not None: ax.plot(ce['time'].values, em, color='tab:red', ls=lsty, label=f'CEINMS{sfx}')
+                if sm is not None: ax.plot(so['time'].values, sm, color='tab:blue', ls=lsty, label=f'SO{sfx}'); _ser.append(sm)
+                if em is not None: ax.plot(ce['time'].values, em, color='tab:red', ls=lsty, label=f'CEINMS{sfx}'); _ser.append(em)
             ax.set_title(f"{j} |resultant|"); ax.set_xlabel("time normalised (s)"); ax.set_ylabel(f"|F| ({_unit})")
+            _robust_ylim(ax, _ser)
 
             # Overlay literature joint-contact-force bands (xBW) on the resultant
             # subplot when the model is normalised to body weight and a matching
@@ -3685,9 +3877,16 @@ class Analyse:
             # falling back to empty string (filters all non-time columns)
             prefix = _u.emg_normalise.emg_prefix_for(emg_cols)
 
-            _lp = float(getattr(_u.settings.BatchSettings, 'emg_envelope_lowpass_hz', 6.0))
-            filtered = _u.emg_normalise.filter_emg(data, emg_prefix=prefix,
-                                                   lowcut_lp=_lp, sampling_freq=fs)
+            # Every filter parameter, from session.yaml's emg_filter block if it
+            # has one. Before this only the envelope cutoff was reachable; the
+            # band-pass corners and both orders were positional defaults, so a
+            # result could not be reproduced from its session file.
+            from bioscout.utils import emg_filter as _ef
+            _fset = _ef.from_session_dir(self.path, _u.settings.BatchSettings)
+            self._log(f"[EMG] {_ef.describe(_fset)}")
+            filtered = _u.emg_normalise.filter_emg(
+                data, emg_prefix=prefix, sampling_freq=fs,
+                **_ef.to_filter_kwargs(_fset))
             env_cols = [c for c in filtered.columns if c.endswith('_envelope')]
             if not env_cols:
                 self._log("[Warning] filter_emg produced no envelope columns — check EMG prefix")
@@ -3745,10 +3944,12 @@ class Analyse:
             fs = 1.0 / ((t[-1] - t[0]) / (n - 1))
         else:
             fs = getattr(_u.settings.BatchSettings, 'emg_sampling_freq', None) or 1000.0
-        _lp = float(getattr(_u.settings.BatchSettings, 'emg_envelope_lowpass_hz', 6.0))
+        from bioscout.utils import emg_filter as _ef
+        _fset = _ef.from_session_dir(self.path, _u.settings.BatchSettings)
         _pre = _u.emg_normalise.emg_prefix_for(data.columns)
-        filtered = _u.emg_normalise.filter_emg(data, emg_prefix=_pre,
-                                               lowcut_lp=_lp, sampling_freq=fs)
+        filtered = _u.emg_normalise.filter_emg(
+            data, emg_prefix=_pre, sampling_freq=fs,
+            **_ef.to_filter_kwargs(_fset))
         out = filtered[['time']].copy()
         for col in [c for c in filtered.columns if c.endswith('_envelope')]:
             base = col[:-len('_envelope')]

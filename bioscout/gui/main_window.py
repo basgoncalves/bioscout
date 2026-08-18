@@ -60,12 +60,43 @@ from gui.widgets.batch_c3d_export import BatchC3DExport
 from gui.widgets.results_viewer import ResultsViewerTab
 from gui.widgets.trial_analysis import TrialAnalysisTab
 from gui.widgets.emg_analysis_tab import EMGAnalysisTab
-from gui.widgets.training_tracking import TrainingTrackingTab
+# TrainingTrackingTab is deferred too (matplotlib at module level) — see
+# _deferred below; the name is bound after _deferred is defined.
 from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
 # Settings tab removed in 2.0.0b12 — every key it wrote was read by nothing
 # except itself. The one live setting (simulations folder) now lives in the
 # top bar. The widget file is kept for reference; nothing imports it.
 from gui.widgets.console_terminal import ResizablePanelSplitter
+
+# Per-machine GUI settings (window size, UI scale). NOT project settings —
+# see gui/gui_settings.py for why the two are kept apart.
+from gui.gui_settings import apply_appearance, gui_settings
+
+# Merged EMG tab (Processing + Analysis behind one nav entry, sub-tabs on the
+# left). Guarded: when it cannot load, the two separate tabs come back.
+EMGTab = None
+try:
+    from gui.widgets.emg_tab import EMGTab as _EMGTab
+    EMGTab = _EMGTab
+except Exception as _emgtab_err:                               # noqa: BLE001
+    print(f"[main_window] merged EMG tab unavailable: {_emgtab_err}", flush=True)
+
+# CEINMS Setup tab (Data curation): emg_map / calibration trials / file
+# inventory, writing session.yaml surgically. Guarded like every optional tab.
+CEINMSSetupTab = None
+try:
+    from gui.widgets.ceinms_setup import CEINMSSetupTab as _CEINMSSetupTab
+    CEINMSSetupTab = _CEINMSSetupTab
+except Exception as _cs_err:                                   # noqa: BLE001
+    print(f"[main_window] CEINMS Setup tab unavailable: {_cs_err}", flush=True)
+
+# Settings tab. Guarded like the other optional tabs.
+SettingsTab = None
+try:
+    from gui.widgets.settings_tab import SettingsTab as _SettingsTab
+    SettingsTab = _SettingsTab
+except Exception as _st_err:                                   # noqa: BLE001
+    print(f"[main_window] SettingsTab unavailable: {_st_err}", flush=True)
 
 # File Editor is new in 2.0.0b9. Guarded like the other optional tabs so a
 # failure inside it degrades to "tab missing" rather than "app won't start".
@@ -76,23 +107,25 @@ try:
 except Exception as _fe_err:
     print(f"[main_window] FileEditorTab unavailable: {_fe_err}", flush=True)
 
-# Recording tab imports mediapipe/cv2 at module level — a native crash there
-# would kill the whole process.  Import it lazily so any failure is catchable.
-RecordingTab = None
-try:
-    from gui.widgets.recording import RecordingTab as _RecordingTab
-    RecordingTab = _RecordingTab
-except Exception as _rec_err:
-    print(f"[main_window] RecordingTab unavailable: {_rec_err}", flush=True)
+# Recording / Video Analysis import mediapipe + cv2 at module level, and
+# Training Tracking imports matplotlib — several SECONDS of launch cost for
+# tabs most sessions never open. The old code imported them here "guarded",
+# which still paid the full import at launch. They are now DEFERRED: the
+# import happens on the first click, inside _ensure_tab_loaded, and a failure
+# there costs that tab, not the app.
+def _deferred(module, attr):
+    def load(parent, *args):
+        import importlib
+        cls = getattr(importlib.import_module(module), attr)
+        return cls(parent, *args)
+    load.__name__ = attr
+    return load
 
-VideoAnalysisTab = None
-try:
-    from gui.widgets.video_analysis import VideoAnalysisTab as _VideoAnalysisTab
-    VideoAnalysisTab = _VideoAnalysisTab
-except Exception as _va_err:
-    import traceback as _tb
-    print(f"[main_window] VideoAnalysisTab unavailable: {_va_err}", flush=True)
-    _tb.print_exc()
+
+RecordingTab = _deferred("gui.widgets.recording", "RecordingTab")
+VideoAnalysisTab = _deferred("gui.widgets.video_analysis", "VideoAnalysisTab")
+TrainingTrackingTab = _deferred("gui.widgets.training_tracking",
+                                "TrainingTrackingTab")
 
 # Try to import libraries for better multi-monitor support
 MONITOR_DETECTION_AVAILABLE = False
@@ -101,16 +134,11 @@ try:
     from screeninfo import get_monitors
     MONITOR_DETECTION_AVAILABLE = True
 except ImportError:
-    # Try to install silently
-    try:
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pygetwindow", "screeninfo", "-q"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        import pygetwindow as gw
-        from screeninfo import get_monitors
-        MONITOR_DETECTION_AVAILABLE = True
-    except:
-        pass  # Will fall back to other methods
+    # NO pip-install here. This used to shell out to pip SYNCHRONOUSLY at
+    # import time — a network call before the window could even appear, and
+    # on a slow or offline connection it was most of a "very slow launch".
+    # Multi-monitor placement just degrades to the Tk fallbacks.
+    pass
 
 
 def _guess_project_dir() -> str:
@@ -200,7 +228,38 @@ class MainWindow(ctk.CTk):
         self.positioning_complete = False
         self._map_event_bound = False  # Prevent multiple Map event bindings
 
-        if fullscreen:
+        # Per-machine look-and-feel, applied before ANY sizing happens: widget
+        # scaling must precede widget construction (or half the app renders at
+        # the old size until redrawn), and window scaling must precede the
+        # geometry restore below — geometry() multiplies by the scaling in
+        # force at CALL time, so restoring first and scaling second re-sizes
+        # the window twice, which is most of "scaling doesn't work very well".
+        self.gui_settings = apply_appearance()
+        # PRECEDENCE: "Start maximised" (default ON) beats the remembered
+        # geometry. The first version had it the other way round, so one close
+        # with the window un-maximised saved a geometry that then overrode
+        # maximising on every later launch — "why does the app not open full
+        # size any more". The saved geometry only applies when the user has
+        # turned Start maximised OFF in Settings.
+        self._restored_geometry = False
+        if self.gui_settings.get("window.start_maximised", True):
+            fullscreen = True
+            self.fullscreen = True
+        else:
+            _saved_geometry = str(self.gui_settings.get("window.geometry", "")
+                                  or "")
+            if (self.gui_settings.get("window.remember", True)
+                    and _saved_geometry and not fullscreen):
+                try:
+                    self.geometry(_saved_geometry)
+                    self.minsize(1200, 700)
+                    self._restored_geometry = True
+                except Exception:                              # noqa: BLE001
+                    self._restored_geometry = False
+
+        if self._restored_geometry:
+            pass                       # geometry already applied above
+        elif fullscreen:
             # Start maximized to avoid graphics glitches and use the whole screen.
             # 'zoomed' maximizes the window (keeps the title bar / taskbar) on
             # Windows; '-zoomed' is the Linux equivalent. Try each safely so a
@@ -237,7 +296,8 @@ class MainWindow(ctk.CTk):
             logger.error(f"Configuration load error: {e}")
             self.config_manager = ConfigManager()
 
-        ctk.set_appearance_mode("dark")
+        # Theme only here — appearance mode and BOTH scalings were already
+        # applied at the top of __init__, before the geometry restore.
         ctk.set_default_color_theme("blue")
 
         self._setup_ui()
@@ -432,53 +492,76 @@ class MainWindow(ctk.CTk):
         title_label.grid(row=0, column=0, padx=20, pady=(16, 8), sticky="ew")
 
         self.nav_buttons = {}
-        # Pipeline order — the same order as the runner block in settings.py:
-        # capture -> export -> EMG -> scale -> IK/ID -> MA -> SO -> CEINMS ->
-        # results. The old order was the order the tabs were written in, which
-        # mixed scopes (Session, Batch, Results) with single tools (C3D Export,
-        # Model Scaling) and told you nothing about what depends on what.
-        _all_tabs = [
-            ("Recording",          None),
-            ("Video Analysis",     None),
-            ("C3D Export",       None),
-            ("Trial Analysis",     None),
-            ("EMG Processing",     None),
-            ("EMG Analysis",       None),
-            ("Model Scaling",      None),
-            ("CEINMS Calibration", None),
-            ("Results",            None),
-            ("Training Tracking",  None),
-            ("File Editor",        None),
+        # GROUPED BY WHAT YOU ARE DOING, not by the order the tabs were written.
+        # A flat list of eleven buttons made "which of these do I need next?" a
+        # reading exercise; the sections answer it: capture the data, curate it,
+        # simulate it, look at the results.
+        #
+        # Order INSIDE a section is still the pipeline order.
+        NAV_SECTIONS = [
+            ("Record",        ["Recording", "Video Analysis"]),
+            # "EMG Analysis" is the MERGED tab (Processing + Analysis as left
+            # sub-tabs, gui/widgets/emg_tab.py). The separate "EMG Processing"
+            # entry only reappears when the merged tab failed to import.
+            ("Data curation", ["C3D Export", "EMG Analysis", "CEINMS Setup"]
+             + ([] if EMGTab is not None else ["EMG Processing"])),
+            ("Simulations",   ["Model Scaling", "Trial Analysis",
+                               "Session Analysis", "CEINMS Calibration"]),
+            ("Results",       ["Results", "Training Tracking"]),
+            ("Project",       ["File Editor", "Settings"]),
         ]
-        tabs = [(name, i + 1) for i, (name, _r) in enumerate(_all_tabs)
-                if (name != "File Editor" or FileEditorTab is not None)
-                and (name != "EMG Processing" or EMGProcessingTab is not None)
-                and (name != "Recording" or RecordingTab is not None)
-                and (name != "Video Analysis" or VideoAnalysisTab is not None)]
-        # Rows are numbered here rather than in the list above: hard-coded row
-        # numbers meant inserting one tab silently overlapped another, and the
-        # status frame below had to be renumbered by hand every time.
-        self._nav_last_row = len(tabs)
-        # One empty row after the buttons takes all the slack, so the
-        # nav stays a solid block and Status/Help sit at the bottom.
-        sidebar.grid_rowconfigure(self._nav_last_row + 1, weight=1)
+        # A tab that failed to import, or does not exist yet ("Session
+        # Analysis"), is simply absent — and a section left with no tabs at all
+        # does not print its heading over empty space.
+        def _available(name):
+            if name == "File Editor":
+                return FileEditorTab is not None
+            if name == "EMG Processing":
+                return EMGProcessingTab is not None
+            if name == "Recording":
+                return RecordingTab is not None
+            if name == "Video Analysis":
+                return VideoAnalysisTab is not None
+            if name == "Settings":
+                return SettingsTab is not None
+            if name == "CEINMS Setup":
+                return CEINMSSetupTab is not None
+            return name in getattr(self, "tab_definitions", {}) or \
+                name in ("C3D Export", "Trial Analysis", "EMG Analysis",
+                         "Model Scaling", "CEINMS Calibration", "Results",
+                         "Training Tracking")
 
-        for tab_name, row in tabs:
-            btn = ctk.CTkButton(
-                sidebar,
-                text=tab_name,
-                command=lambda t=tab_name: self.switch_tab(t),
-                fg_color="#2d2d2d",
-                hover_color="#3d3d3d",
-                border_width=2,
-                border_color="#404040"
-            )
-            btn.grid(row=row, column=0, padx=10, pady=6, sticky="ew")
-            self.nav_buttons[tab_name] = btn
+        # The nav lives in its OWN frame, packed rather than gridded. The old
+        # code numbered sidebar rows by hand — including a version label pinned
+        # to row=16 — so adding a tab silently overlapped the status box. One
+        # container means the sidebar grid has four rows, forever.
+        nav_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav_frame.grid(row=1, column=0, sticky="new", padx=0, pady=0)
+        sidebar.grid_rowconfigure(2, weight=1)     # slack pushes status down
+
+        for section, names in NAV_SECTIONS:
+            names = [n for n in names if _available(n)]
+            if not names:
+                continue
+            ctk.CTkLabel(
+                nav_frame, text=section.upper(), anchor="w",
+                font=("Segoe UI", 10, "bold"), text_color="#7a8290",
+            ).pack(fill="x", padx=14, pady=(12, 3))
+            for tab_name in names:
+                btn = ctk.CTkButton(
+                    nav_frame,
+                    text=tab_name,
+                    command=lambda t=tab_name: self.switch_tab(t),
+                    fg_color="#2d2d2d",
+                    hover_color="#3d3d3d",
+                    border_width=2,
+                    border_color="#404040",
+                )
+                btn.pack(fill="x", padx=10, pady=3)
+                self.nav_buttons[tab_name] = btn
 
         status_frame = ctk.CTkFrame(sidebar, corner_radius=8)
-        status_frame.grid(row=self._nav_last_row + 2, column=0,
-                          padx=10, pady=10, sticky="ew")
+        status_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
 
         ctk.CTkLabel(status_frame, text="Status:", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
         self.status_label = ctk.CTkLabel(status_frame, text="Ready", text_color="#28a745", font=("Segoe UI", 10))
@@ -486,8 +569,7 @@ class MainWindow(ctk.CTk):
 
         # Utility buttons row (Help + Screen Record)
         button_frame = ctk.CTkFrame(sidebar)
-        button_frame.grid(row=self._nav_last_row + 3, column=0,
-                          padx=10, pady=10, sticky="ew")
+        button_frame.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         button_frame.grid_columnconfigure(0, weight=1)
         button_frame.grid_columnconfigure(1, weight=1)
 
@@ -504,8 +586,9 @@ class MainWindow(ctk.CTk):
                       ).grid(row=1, column=0, columnspan=2, padx=0, pady=(4, 0),
                              sticky="ew")
 
-        version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}", text_color="#666666", font=("Segoe UI", 8))
-        version_label.grid(row=16, column=0, padx=10, pady=5, sticky="ew")
+        version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}",
+                                     text_color="#666666", font=("Segoe UI", 8))
+        version_label.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
 
     def _create_main_area(self) -> None:
         """Create main content area with tabs and resizable console."""
@@ -534,8 +617,15 @@ class MainWindow(ctk.CTk):
             self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
         self.tab_definitions.update({
             "Trial Analysis": {"class": TrialAnalysisTab, "args": (self.config_manager, self.update_status)},
-            "EMG Analysis": {"class": EMGAnalysisTab, "args": (self.config_manager, self.update_status)},
-            "C3D Export": {"class": BatchC3DExport, "args": ()},
+            # merged tab when it imported; the plain analysis tab otherwise
+            "EMG Analysis": {"class": EMGTab or EMGAnalysisTab,
+                             "args": (self.config_manager, self.update_status)},
+            # Given the same (config_manager, status) pair as every other tab.
+            # It used to be constructed with args=(), which is why it was the
+            # only tab with no way to report status and no place to remember
+            # anything between launches.
+            "C3D Export": {"class": BatchC3DExport,
+                           "args": (self.config_manager, self.update_status)},
             "Model Scaling": {"class": ModelScalingTab, "args": (self.config_manager, self.update_status)},
             "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
             "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
@@ -548,6 +638,14 @@ class MainWindow(ctk.CTk):
         if FileEditorTab is not None:
             self.tab_definitions["File Editor"] = {
                 "class": FileEditorTab,
+                "args": (self.config_manager, self.update_status)}
+        if SettingsTab is not None:
+            self.tab_definitions["Settings"] = {
+                "class": SettingsTab,
+                "args": (self.config_manager, self.update_status)}
+        if CEINMSSetupTab is not None:
+            self.tab_definitions["CEINMS Setup"] = {
+                "class": CEINMSSetupTab,
                 "args": (self.config_manager, self.update_status)}
 
         # Initialize tabs dict - will be populated on demand (lazy loading)
@@ -1073,9 +1171,37 @@ class MainWindow(ctk.CTk):
         help_text += "6. View results in Results tab\n"
         messagebox.showinfo("Help", help_text)
 
+    def _save_window_geometry(self) -> None:
+        """Remember where the window was, if the user asked us to.
+
+        Skipped while maximised: Tk reports the maximised size as the geometry,
+        so saving it would restore a window that LOOKS maximised but is not,
+        and un-maximising it would then snap to the full screen."""
+        try:
+            if not self.gui_settings.get("window.remember", True):
+                return
+            if str(self.state()) == "zoomed":
+                return
+            geom = self.winfo_geometry()
+            # winfo_geometry() is REAL pixels, but CTk's geometry() multiplies
+            # by the window scaling before applying. Saved raw and restored
+            # through geometry(), a 120 %-scaled window grows 20 % on every
+            # launch. Divide the scale back out so the round trip is stable.
+            rev = getattr(self, "_reverse_geometry_scaling", None)
+            if callable(rev):
+                try:
+                    geom = rev(geom)
+                except Exception:                              # noqa: BLE001
+                    pass
+            if geom and "x" in geom:
+                self.gui_settings.set("window.geometry", geom)
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"could not save window geometry: {exc}")
+
     def on_closing(self) -> None:
         """Handle application closing."""
         if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            self._save_window_geometry()
             logger.info("Application closed")
             self.destroy()
 

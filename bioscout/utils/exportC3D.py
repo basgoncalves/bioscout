@@ -471,7 +471,59 @@ def rotate_data_table(table, axis, deg):
         vec_rotated = R.multiply(vec)
         table.setRowAtIndex(i, vec_rotated)
 
-def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_dir=None):
+def _resolve_emg_channels(analog_labels, declared, patterns):
+    """Which analog channels are EMG, and say plainly how that was decided.
+
+    ``declared`` is the session's own list — the ``emg_map`` keys from
+    session.yaml. When it exists it WINS, because it is the only statement in
+    the project of which channel is which muscle, written per subject from that
+    subject's own c3d.
+
+    The fallback is a substring match on ``patterns``, and it is a guess. On
+    022 it was a wrong one: that c3d carries 32 channels containing the word
+    "Voltage" — 16 named ``Voltage_<n>-<MUSCLE>`` at 0.4-3.4 V, which are the
+    EMG and are exactly what session.yaml maps, and 16 bare ``Voltage_<n>`` at
+    0.01-0.04 V, which are unused inputs recording nothing but noise. The
+    pattern took all 32, so emg.mot carried sixteen junk channels that no map
+    referenced and nothing downstream could distinguish from real muscle.
+
+    Returns ``(indices, note, missing)``.
+    """
+    if not declared:
+        idx = []
+        for i, label in enumerate(analog_labels):
+            for pat in patterns:
+                if pat.lower() in label.lower():
+                    # ONE index per channel: a label like
+                    # 'Voltage_EMG1_vast_lat_l' matches several patterns, and
+                    # without stopping here the column was appended once per
+                    # match, so emg.mot got duplicate columns and write_mot's
+                    # label selection returned a 2-D frame.
+                    idx.append(i)
+                    break
+        return idx, f"matched {patterns} (no emg_map in session.yaml)", []
+
+    # Exact first, then case-insensitive. Nothing fuzzier: guessing which
+    # channel a declared name meant is how a muscle ends up driven by its
+    # neighbour's signal.
+    by_exact = {l: i for i, l in enumerate(analog_labels)}
+    by_lower = {}
+    for i, l in enumerate(analog_labels):
+        by_lower.setdefault(l.lower(), i)
+    idx, missing = [], []
+    for name in declared:
+        j = by_exact.get(name)
+        if j is None:
+            j = by_lower.get(str(name).lower())
+        if j is None:
+            missing.append(name)
+        elif j not in idx:
+            idx.append(j)
+    return idx, f"{len(idx)} of {len(declared)} channel(s) named in session.yaml", missing
+
+
+def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True,
+               output_dir=None, emg_channels=None):
     output_dir = output_dir or os.path.dirname(c3d_filepath)
     print(f"Reading C3D file: {c3d_filepath}")
     try:
@@ -564,21 +616,27 @@ def export_emg(c3d_filepath, emg_strings_list=['emg'], reset_time=True, output_d
     print(f"Successfully exported {analog_path}")
 
     # Write EMG MOT
-    emg_indices = []
-    print(f"[DEBUG] Looking for EMG patterns: {emg_strings_list}")
-    print(f"[DEBUG] Available analog labels: {analog_labels[:10]}...")  # Show first 10 labels
-
-    for i, label in enumerate(analog_labels):
-        for emg_str in emg_strings_list:
-            if label.lower().__contains__(emg_str.lower()):
-                emg_indices.append(i)
-                print(f"Found EMG channel: '{label}' at index {i}")
-                # ONE index per channel. A label like 'Voltage_EMG1_vast_lat_l'
-                # matches several patterns in emg_string_list ('EMG' AND
-                # 'Voltage'); without this break the same column was appended
-                # once per match, so emg.mot got duplicated columns and
-                # write_mot's label selection returned a 2-D frame.
-                break
+    print(f"[EMG] {len(analog_labels)} analog channel(s) in the c3d")
+    emg_indices, _how, _missing = _resolve_emg_channels(
+        analog_labels, emg_channels, emg_strings_list)
+    print(f"[EMG] channel source: {_how}")
+    for _i in emg_indices:
+        print(f"[EMG]   {analog_labels[_i]}  (analog index {_i})")
+    if _missing:
+        # A declared channel the c3d does not have is a muscle that will have no
+        # excitation. Say so here, where the c3d is open and the answer is
+        # obvious, not three stages later as a CEINMS error.
+        print(f"[EMG] WARNING: session.yaml names {len(_missing)} channel(s) "
+              f"this c3d does not contain: {', '.join(map(str, _missing))}")
+    if emg_channels:
+        _guess = {i for i, l in enumerate(analog_labels)
+                  if any(p.lower() in l.lower() for p in emg_strings_list)}
+        _extra = sorted(_guess - set(emg_indices))
+        if _extra:
+            print(f"[EMG] {len(_extra)} channel(s) look like EMG but are not in "
+                  f"emg_map, so they are NOT exported: "
+                  f"{', '.join(analog_labels[i] for i in _extra[:12])}"
+                  + (" ..." if len(_extra) > 12 else ""))
 
     emg_mot_path = os.path.join(output_dir, "emg.mot")
 
@@ -869,7 +927,8 @@ def get_time_range_from_c3d(c3d_filepath):
     return None
 
 
-def main(c3d_filepath, emg_string_list=['emg'], create_folder=False, output_dir=None):
+def main(c3d_filepath, emg_string_list=['emg'], create_folder=False,
+         output_dir=None, emg_channels=None):
     """Export C3D data to TRC / GRF.mot / EMG.mot files.
 
     Parameters
@@ -913,7 +972,8 @@ def main(c3d_filepath, emg_string_list=['emg'], create_folder=False, output_dir=
         _tb.print_exc()
 
     try:
-        export_emg(c3d_filepath, emg_strings_list=emg_string_list, output_dir=output_dir)
+        export_emg(c3d_filepath, emg_strings_list=emg_string_list,
+                   output_dir=output_dir, emg_channels=emg_channels)
     except BaseException as e:
         import traceback as _tb
         print(f"An error occurred while exporting EMG data: {type(e).__name__}: {e}")
@@ -938,10 +998,17 @@ def _qc_figures(tdir):
     # ---- EMG: raw vs filtered+normalised (matches Analyse.plot_emg_processing) ----
     try:
         raw = _u.load_any_data_file(os.path.join(tdir, "emg.mot"))
-        try:
-            norm = _u.load_any_data_file(os.path.join(tdir, "emg_filtered_normalised.mot"))
-        except Exception:
-            norm = None
+        # The normalised file exists only after the session-wide EMG
+        # normalisation has run; a freshly exported trial has emg_filtered.mot
+        # at most. Take the best file present rather than falling straight to
+        # raw-only — the figure's whole point is raw vs processed.
+        norm = None
+        for _name in ("emg_filtered_normalised.mot", "emg_filtered.mot"):
+            try:
+                norm = _u.load_any_data_file(os.path.join(tdir, _name))
+                break
+            except Exception:
+                norm = None
         tr = pd.to_numeric(raw["time"], errors="coerce").to_numpy(float)
         tn = (pd.to_numeric(norm["time"], errors="coerce").to_numpy(float)
               if norm is not None else None)
@@ -958,7 +1025,13 @@ def _qc_figures(tdir):
             if norm is not None and ch in norm.columns:
                 a2 = a.twinx()
                 a2.plot(tn, pd.to_numeric(norm[ch], errors="coerce"), color="tab:red", lw=1.5)
-                a2.set_ylim(-0.05, 1.05); a2.tick_params(labelsize=7, colors="tab:red")
+                # clamp to 0-1 only when the data IS normalised — the
+                # filtered-but-unnormalised fallback is in volts and a fixed
+                # 0-1 axis would flatten it invisibly
+                _vals = pd.to_numeric(norm[ch], errors="coerce")
+                if _vals.max() is not None and float(_vals.max() or 0) <= 1.5:
+                    a2.set_ylim(-0.05, 1.05)
+                a2.tick_params(labelsize=7, colors="tab:red")
                 a2.set_ylabel("norm", fontsize=7, color="tab:red")
             a.set_title(str(ch).replace("EMG_Channels_", ""), fontsize=8)
             a.tick_params(labelsize=7); a.set_ylabel("raw", fontsize=7); a.margins(x=0)

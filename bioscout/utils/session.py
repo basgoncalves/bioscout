@@ -2200,7 +2200,8 @@ class Iteration:
         return f"{self.name}/{self.iteration}"
 
     @classmethod
-    def open(cls, iteration, session=None, project_dir=None, verbose=False):
+    def open(cls, iteration, session=None, project_dir=None, verbose=False,
+             subject=None):
         """Back-compat: open ONE iteration by (iteration, session-id).
 
         Prefer ``Session.open(path).iteration(iteration)`` in new code. Resolves
@@ -2219,12 +2220,24 @@ class Iteration:
         # package, not this project. (Falls back to find_session_dir after
         # bootstrap for non-standard layouts.)
         _root = os.path.abspath(project_dir or os.getcwd())
-        _hits = glob.glob(os.path.join(_root, "simulations", "*", session, "session.yaml"))
-        session_dir = os.path.dirname(sorted(_hits)[0]) if _hits else None
+        _hits = sorted(glob.glob(os.path.join(
+            _root, "simulations", str(subject) if subject else "*",
+            session, "session.yaml")))
+        # A session NAME is only unique within a participant. "pre" belongs to
+        # everyone, so taking sorted(hits)[0] quietly opened the lowest id that
+        # had one — the run was labelled 022 and solved 009. Refuse instead.
+        if len(_hits) > 1 and not subject:
+            _who = [os.path.basename(os.path.dirname(os.path.dirname(h))) for h in _hits]
+            raise ValueError(
+                f"session={session!r} is ambiguous — {len(_hits)} participants "
+                f"have one: {', '.join(_who[:8])}{' ...' if len(_who) > 8 else ''}. "
+                f"Pass subject=, or open the folder directly with "
+                f"Session.open(<path>).iteration({iteration!r}).")
+        session_dir = os.path.dirname(_hits[0]) if _hits else None
         _run_name = f"{os.path.basename(session_dir) if session_dir else session}/{iteration}"
         _bootstrap_project(session_dir, _run_name, project_dir, verbose)
         if session_dir is None:      # non-standard layout: retry now SIMULATIONS_DIR is set
-            session_dir = find_session_dir(session, project_dir)
+            session_dir = find_session_dir(session, project_dir, subject=subject)
         it = cls(session_dir, iteration)
         if not os.path.isdir(it.path):
             raise FileNotFoundError(
@@ -2790,20 +2803,32 @@ class Iteration:
         return host.ceinms_uncalibrated_model
 
     # -- model scaling ------------------------------------------------------
-    def _resolve_model_file(self, rel):
-        """Resolve a session.yaml model path (models/ , generic models/ , project root)."""
+    def _resolve_model_file(self, rel, key="so_model"):
+        """Resolve a session.yaml path through the one shared rule.
+
+        ``key`` selects the base order (see :mod:`bioscout.utils.session_paths`).
+        It matters: a markerset is a project asset and a model is searched from
+        the iteration folder outward. Everything used to go through the model
+        search, so ``markerset: setup_files/markers_FAIS.xml`` resolved
+        correctly only because that search's last fallback happened to be the
+        project root — right answer, wrong reason, and no way to tell.
+
+        Unresolvable values are returned unchanged, as before, so a caller that
+        wants to raise its own error still can.
+        """
         if not rel:
             return None
-        if os.path.isabs(rel):
-            return rel
         from bioscout import utils as _u
+        from bioscout.utils.session_paths import resolve as _resolve_path
         md = str(getattr(_u, "MODELS_DIR", "") or "")
-        pd = str(getattr(_u, "PROJECT_DIR", None) or (os.path.dirname(md) if md else os.getcwd()))
-        for base in (md, os.path.join(pd, "generic models"), pd):
-            cand = os.path.join(base, rel)
-            if os.path.exists(cand):
-                return cand
-        return rel
+        pd = str(getattr(_u, "PROJECT_DIR", None)
+                 or (os.path.dirname(md) if md else os.getcwd()))
+        got = _resolve_path(key, rel, session_dir=self.session_dir, project_dir=pd,
+                            iteration_dir=iteration_dir(self.session_dir, self.iteration))
+        note = got.note()
+        if note:
+            print(f"[paths] {note}")
+        return str(got) if got.ok else rel
 
     def link_geometry(self, generic_model_path, name="Geometry"):
         """Link the generic model's ``Geometry/`` beside the scaled model.
@@ -2914,7 +2939,7 @@ class Iteration:
         import shutil
         from bioscout.utils import get_openSim as _get_os; _os = _get_os()
         it = (self._cfg.get("iterations") or {}).get(self.iteration) or {}
-        generic = self._resolve_model_file(it.get("generic"))
+        generic = self._resolve_model_file(it.get("generic"), "generic")
         if not generic or not os.path.exists(generic):
             print(f"[Session] [ERROR] {self.label}: generic model not found: "
                   f"{it.get('generic')!r} — nothing downstream can run.")
@@ -2942,7 +2967,7 @@ class Iteration:
         # body it does not have. Session-level only would force one set on every
         # model. The `or` keeps every existing session.yaml working unchanged.
         markerset = self._resolve_model_file(
-            it.get("markerset") or self._cfg.get("markerset"))
+            it.get("markerset") or self._cfg.get("markerset"), "markerset")
         linear = bool(it.get("linear_scaling", True) if linear_scaling is None else linear_scaling)
         mplace = bool(it.get("marker_placer", False) if marker_placer is None else marker_placer)
         n_eval = int(n_eval if n_eval is not None else (it.get("opt_neval", 10) or 10))
@@ -3081,13 +3106,20 @@ class Iteration:
         return so_path
 
     def export_trials(self, trials=None, export_src=None, *,
-                      replace=False, normalise=True, log=print):
+                      replace=False, normalise=True, detect=True, log=print):
         """Model-INDEPENDENT c3d export for this session's trials: ingest loose c3d ->
         markers/GRF/EMG into the SHARED ``experimental/<trial>/`` folder, filter EMG,
         then (``normalise``) run the session-wide EMG normalise. The raw inputs are
         shared by every iteration, so this writes ONCE regardless of which iteration
         anchors it — prefer :meth:`Session.export` over per-iteration ``run(export=True)``.
-        Returns the list of trials exported."""
+
+        ``detect`` (default True) then runs movement detection over what was just
+        exported, writing ``movement_detection.yaml`` and ``movement_detection.png``
+        into each trial folder, beside the data they describe. It reads the markers
+        and GRF the export just wrote, so this is the moment where it is cheapest —
+        and it never touches ``session.yaml``: a disagreement is reported, not
+        applied. Set ``detect=False`` to skip it. Returns the list of trials
+        exported."""
         names = ([trials] if isinstance(trials, str)
                  else list(trials)) if trials else self._trial_names()
         if export_src:
@@ -3115,10 +3147,54 @@ class Iteration:
                 self.run_emg_normalise(replace=replace, write_trials=names)
             except Exception as e:
                 log(f"  [emg normalise ERROR]: {e}")
+        if detect and done:
+            # Weigh the participant BEFORE classifying. The detector's force
+            # thresholds are in body weights; with body_mass unset it falls back
+            # to a fraction of peak, which is weaker. The static trial has only
+            # just been exported, so this is the first moment the plates can be
+            # read — and the last moment before anything needs the number.
+            try:
+                import yaml as _y
+                _yp = os.path.join(self.session_dir, "session.yaml")
+                _c = _y.safe_load(open(_yp, encoding="utf-8")) or {}
+                if _c.get("body_mass") in (None, "", 0):
+                    _m = body_mass_from_static(self.session_dir,
+                                               _c.get("static_trial"))
+                    if _m:
+                        _c["body_mass"] = _m
+                        _ORDER = ["subject", "session", "static_trial", "body_mass"]
+                        _o = {_k: _c[_k] for _k in _ORDER if _k in _c}
+                        _o.update({_k: _v for _k, _v in _c.items() if _k not in _o})
+                        with open(_yp, "w", encoding="utf-8") as _fh:
+                            _y.safe_dump(_o, _fh, sort_keys=False, allow_unicode=True)
+                        log(f"  [export] body_mass was unset -> {_m} kg "
+                            f"(weighed on the plates, not entered)")
+                    else:
+                        log("  [export] body_mass unset and not measurable from "
+                            "the static trial — detection thresholds will be "
+                            "relative, not in body weights.")
+            except Exception as e:
+                log(f"  [export] body_mass warn: {type(e).__name__}: {e}")
+            # Movement detection is part of the export, not a separate command
+            # you have to remember to run: it needs exactly the markers and GRF
+            # that were just written, and its answer belongs in the trial folder
+            # next to them. A failure here warns — the export itself succeeded
+            # and the pipeline can run without a classification.
+            try:
+                os.chdir(self.session_dir)      # the loop above chdir'd into a trial
+            except Exception:
+                pass
+            try:
+                from bioscout.movement_detector.session import classify_session
+                classify_session(self.session_dir, per_trial=True, quiet=True)
+            except Exception as e:
+                log(f"  [detect WARN] movement detection skipped: "
+                    f"{type(e).__name__}: {e}")
         return done
 
     def run(self, trials=None,
             export=False, export_src=None, *,
+            detect=True,
             do_scale=False,
             do_exbiomec=False,
             do_muscle_analysis=False,
@@ -3134,8 +3210,10 @@ class Iteration:
                         :meth:`scale_model`, reading session.yaml). Does not need
                         trials. Use when you want scale + analysis in one call.
           export      : (re)build inputs from c3d + refresh window + filter EMG,
-                        then session-wide EMG normalise. ``export_src`` first
-                        distributes loose ``*.c3d`` into each trial's inputs/.
+                        then session-wide EMG normalise, then movement detection
+                        into each ``2_experimental/<trial>/`` (``detect=False``
+                        skips that last part). ``export_src`` first distributes
+                        loose ``*.c3d`` into each trial's inputs/.
           do_exbiomec : external biomechanics only (IK -> ID). Muscle Analysis
                         is its own stage — see ``do_muscle_analysis``.
           do_muscle_analysis : Muscle Analysis (muscle lengths + moment arms).
@@ -3243,9 +3321,11 @@ class Iteration:
             log("=" * 72)
 
         if export:
-            _stage("C3D export -> EMG filter -> session EMG normalise", trials=names)
+            _stage("C3D export -> EMG filter -> session EMG normalise -> "
+                   "movement detection", trials=names)
             res["export"] = self.export_trials(names, export_src=export_src,
-                                               replace=replace, log=log)
+                                               replace=replace, log=log,
+                                               detect=detect)
 
         def _close_figs():
             """Drop every pyplot figure created by the last trial.
@@ -3662,11 +3742,14 @@ class Session:
             out[name] = self.iteration(name).run(do_scale=do_scale, **kw)
         return out
 
-    def export(self, trials=None, export_src=None, *, replace=False, normalise=True):
+    def export(self, trials=None, export_src=None, *, replace=False,
+               normalise=True, detect=True):
         """Session-level c3d export, done ONCE. The raw markers/GRF/EMG are model-
         INDEPENDENT and shared by every iteration (they live in ``experimental/<trial>/``),
         so exporting per-iteration just repeats identical work. This ingests loose c3d
-        -> markers/GRF/EMG -> filters EMG -> runs the session-wide EMG normalise, once.
+        -> markers/GRF/EMG -> filters EMG -> runs the session-wide EMG normalise ->
+        classifies each trial (``detect``, writing ``movement_detection.yaml`` and
+        ``.png`` into the trial folder), once.
         Prefer this over per-iteration ``run(export=True)``::
 
             s = Session.open(path)
@@ -3687,7 +3770,7 @@ class Session:
             try:
                 return Iteration(self.session_dir, _scratch).export_trials(
                     trials=trials, export_src=export_src, replace=replace,
-                    normalise=normalise)
+                    normalise=normalise, detect=detect)
             finally:
                 # Remove the scratch anchor completely. Deleting it only when
                 # empty left `3_iterations/_export/<trial>/{ceinms,inputs,...}`
@@ -3708,7 +3791,8 @@ class Session:
                 except OSError:
                     pass
         return self.iteration(its[0]).export_trials(
-            trials=trials, export_src=export_src, replace=replace, normalise=normalise)
+            trials=trials, export_src=export_src, replace=replace,
+            normalise=normalise, detect=detect)
 
     def scale_model(self, iterations=None, **kw):
         """Convenience: scale EVERY iteration's model (scaling only, no analysis).
@@ -4449,13 +4533,31 @@ class Session:
 # ---------------------------------------------------------------------------
 # open_session / find_session_dir — locate a session on disk (back-compat)
 # ---------------------------------------------------------------------------
-def find_session_dir(session, project_dir=None):
+def find_session_dir(session, project_dir=None, subject=None):
     """Locate the athlete/session folder holding session.yaml for ``session``
-    (layout: ``simulations/<athlete>/<session>/session.yaml``)."""
+    (layout: ``simulations/<athlete>/<session>/session.yaml``).
+
+    ``subject`` scopes the search to one participant, and you almost always want
+    it: a session NAME like "pre" is not unique — every participant in the study
+    has one. Without a subject this used to glob ``*/pre/session.yaml`` and
+    return ``sorted(hits)[0]``, i.e. the lowest participant id that happens to
+    have a folder by that name. Asking for subject 022's "pre" therefore solved
+    009's data, under 022's name, silently. An ambiguous name with no subject is
+    now an error rather than a coin toss.
+    """
     from bioscout import utils
     sim = str(getattr(utils, "SIMULATIONS_DIR", "")
               or os.path.join(project_dir or os.getcwd(), "simulations"))
-    hits = glob.glob(os.path.join(sim, "*", session, "session.yaml"))
+    if os.path.isabs(session) and os.path.exists(os.path.join(session, "session.yaml")):
+        return session                      # already a session folder
+    if subject:
+        cand = os.path.join(sim, str(subject), session)
+        if os.path.exists(os.path.join(cand, "session.yaml")):
+            return cand
+        raise FileNotFoundError(
+            f"no session.yaml for subject={subject!r} session={session!r} "
+            f"(looked for {os.path.join(sim, str(subject), session, 'session.yaml')})")
+    hits = sorted(glob.glob(os.path.join(sim, "*", session, "session.yaml")))
     if not hits:
         cand = session if os.path.isabs(session) else os.path.join(sim, session)
         if os.path.exists(os.path.join(cand, "session.yaml")):
@@ -4463,16 +4565,25 @@ def find_session_dir(session, project_dir=None):
         raise FileNotFoundError(
             f"no session.yaml for session={session!r} under {sim} "
             f"(looked for */{session}/session.yaml)")
-    return os.path.dirname(sorted(hits)[0])
+    if len(hits) > 1:
+        _who = [os.path.basename(os.path.dirname(os.path.dirname(h))) for h in hits]
+        raise ValueError(
+            f"session={session!r} is ambiguous — {len(hits)} participants have "
+            f"one: {', '.join(_who[:8])}{' ...' if len(_who) > 8 else ''}. "
+            f"Pass subject= (or an absolute session path); picking the first "
+            f"would silently solve the wrong participant's data.")
+    return os.path.dirname(hits[0])
 
 
-def open_session(iteration, session=None, project_dir=None, verbose=False):
+def open_session(iteration, session=None, project_dir=None, verbose=False,
+                 subject=None):
     """Back-compat: open ONE iteration by (iteration, session-id), returning a
     runnable :class:`Iteration`.
 
     Prefer ``Session.open(path).iteration("gpk_mri")`` in new code.
     """
-    return Iteration.open(iteration, session=session, project_dir=project_dir, verbose=verbose)
+    return Iteration.open(iteration, session=session, project_dir=project_dir,
+                          verbose=verbose, subject=subject)
 
 
 # batch orchestrator (loops subjects/sessions) is defined in bioscout.pipeline;

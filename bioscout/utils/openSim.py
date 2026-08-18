@@ -3458,38 +3458,52 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
                         # them — filling those (e.g. with 0,0,0 or a long straight
                         # line) plants markers far from the body and makes IK
                         # diverge / fail.
-                        _MAX_GAP = 20  # frames; gaps longer than this stay empty
+                        # Fill what can be filled, honestly.
+                        #
+                        # This used to be a straight-line interpolation over
+                        # gaps of up to 20 frames and nothing else. It reported
+                        # "Filled 0 of 178168" on 022's running trials and moved
+                        # on, and IK then solved a pelvis that was unobserved
+                        # for a third of the window — which OpenSim does not
+                        # complain about, because a marker it cannot see costs
+                        # it nothing. bioscout.utils.gapfill does the two things
+                        # that actually work: spline through short gaps, and
+                        # reconstruct longer ones from the other markers on the
+                        # same segment, refusing when it cannot do so to a
+                        # measured tolerance. What it refuses stays empty.
                         _nan_count = int(_np.isnan(_A[:, 2:]).sum())
                         if _nan_count > 0:
-                            _filled = 0
-                            for _c in range(2, _w):
-                                _col = _A[:, _c]
-                                _isn = _np.isnan(_col)
-                                if not _isn.any():
-                                    continue
-                                _valid = _np.where(~_isn)[0]
-                                if _valid.size < 2:
-                                    continue  # nothing reliable to interpolate from
-                                _first, _last = int(_valid[0]), int(_valid[-1])
-                                _i2 = _first + 1
-                                while _i2 <= _last:
-                                    if _isn[_i2]:
-                                        _j = _i2
-                                        while _j <= _last and _isn[_j]:
-                                            _j += 1
-                                        _gap = _j - _i2
-                                        if _gap <= _MAX_GAP:
-                                            _x0, _x1 = _i2 - 1, _j
-                                            _y0, _y1 = _col[_x0], _col[_x1]
-                                            for _k in range(_i2, _j):
-                                                _col[_k] = _y0 + (_y1 - _y0) * (_k - _x0) / (_x1 - _x0)
-                                                _filled += 1
-                                        _i2 = _j
-                                    else:
-                                        _i2 += 1
-                                _A[:, _c] = _col
-                            print(f"[IK] Filled {_filled} of {_nan_count} marker NaNs "
-                                  f"(short gaps only; longer gaps left as missing)...")
+                            from bioscout.utils import gapfill as _gf
+                            _nmk = (_w - 2) // 3
+                            _cube = _A[:, 2:2 + 3 * _nmk].reshape(len(_rows), _nmk, 3)
+                            try:
+                                _names = [c.strip() for c in
+                                          _lines[_fr].rstrip('\r\n').split('\t')[2:]
+                                          if c.strip()][:_nmk]
+                            except Exception:
+                                _names = None
+                            _filledA, _rep = _gf.fill_array(_cube, _names)
+                            _rep.path = _mf
+                            for _ln in _gf.format_report(_rep).splitlines():
+                                print(f"[IK] {_ln}")
+                            _A[:, 2:2 + 3 * _nmk] = _filledA.reshape(len(_rows), -1)
+                            # Say what is still solvable. A window that keeps
+                            # frames nothing constrains is a window that will
+                            # produce kinematics nobody should trust, and this
+                            # is the last moment anyone is looking.
+                            try:
+                                _s0, _e0, _L0, _why0 = _gf.usable_window(_filledA, _names)
+                                _tcol = _A[:, 1]
+                                if _L0 and _L0 < 0.95 * len(_rows):
+                                    print(f"[IK] {_why0}")
+                                    print(f"[IK] markers support at most "
+                                          f"time_range: [{_tcol[_s0]:.3f}, "
+                                          f"{_tcol[_e0 - 1]:.3f}] "
+                                          f"({_tcol[_e0 - 1] - _tcol[_s0]:.3f} s) — "
+                                          f"solving wider than this fits a pose "
+                                          f"nothing observed.")
+                            except Exception:
+                                pass
                             _out = list(_hdr)
                             for _i in range(_A.shape[0]):
                                 _v = _A[_i]

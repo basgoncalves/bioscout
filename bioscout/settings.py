@@ -757,9 +757,9 @@ if __name__ == "__main__":
                         print(f"[check] {n}: not in this session — skipping")
                         continue
                     _it = s_.iteration(n)
-                    mks = _it._resolve_model_file(s_._cfg.get("markerset"))
+                    mks = _it._resolve_model_file(s_._cfg.get("markerset"), "markerset")
                     itcfg = (s_._cfg.get("iterations") or {}).get(n) or {}
-                    gen = _it._resolve_model_file(itcfg.get("generic"))
+                    gen = _it._resolve_model_file(itcfg.get("generic"), "generic")
                     if not gen or not os.path.exists(gen):
                         print(f"[check] {n}: generic not found ({itcfg.get('generic')!r})")
                         continue
