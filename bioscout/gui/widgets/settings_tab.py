@@ -52,6 +52,11 @@ class SettingsTab(ctk.CTkFrame):
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
+        # Every change ALREADY writes to disk immediately — this button exists
+        # because an auto-saving page with no Save button reads as an
+        # unsaveable page. It re-writes the file and says where it went.
+        ctk.CTkButton(footer, text="💾 Save settings", width=150,
+                      command=self._save_now).pack(side="left", padx=(0, 8))
         ctk.CTkButton(footer, text="Reset to defaults", width=150,
                       fg_color="#5a3a00", hover_color="#7a5000",
                       command=self._reset).pack(side="left")
@@ -253,6 +258,14 @@ class SettingsTab(ctk.CTkFrame):
             var.set(str(self.settings.get(key, "")))
         self.geom_label.configure(text="Saved geometry: not saved yet")
         self._saved("reset to defaults")
+
+    def _save_now(self):
+        ok = self.settings.save()
+        self.status.configure(
+            text=(f"✓ all settings saved to {settings_path()}" if ok
+                  else f"✗ could not write {settings_path()}"),
+            text_color=("#28a745" if ok else "#dc3545"))
+        self.after(4000, lambda: self.status.configure(text=""))
 
     def _saved(self, what):
         # The store writes on every set(), so "saved" is a statement of fact —

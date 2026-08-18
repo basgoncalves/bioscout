@@ -171,6 +171,14 @@ class MainWindow(ctk.CTk):
 
     def __init__(self, fullscreen=False):
         """Initialize main window."""
+        # Scaling/theme BEFORE the window exists. set_window_scaling on an
+        # ALREADY-CREATED window makes CTk re-apply its geometry via deferred
+        # callbacks, which ran AFTER state("zoomed") and popped the window out
+        # of maximised — but only at scale != 100 %, which is why it escaped
+        # testing. Applied first, the window is born at the right scaling and
+        # nothing is rewritten later.
+        self.gui_settings = apply_appearance()
+
         # Detect terminal monitor in background thread to avoid blocking UI
         self.detected_terminal_monitor = None
         self._start_monitor_detection()
@@ -228,13 +236,8 @@ class MainWindow(ctk.CTk):
         self.positioning_complete = False
         self._map_event_bound = False  # Prevent multiple Map event bindings
 
-        # Per-machine look-and-feel, applied before ANY sizing happens: widget
-        # scaling must precede widget construction (or half the app renders at
-        # the old size until redrawn), and window scaling must precede the
-        # geometry restore below — geometry() multiplies by the scaling in
-        # force at CALL time, so restoring first and scaling second re-sizes
-        # the window twice, which is most of "scaling doesn't work very well".
-        self.gui_settings = apply_appearance()
+        # (gui_settings/scaling were applied at the very top of __init__,
+        # before the window existed — see the comment there.)
         # PRECEDENCE: "Start maximised" (default ON) beats the remembered
         # geometry. The first version had it the other way round, so one close
         # with the window un-maximised saved a geometry that then overrode
@@ -308,6 +311,21 @@ class MainWindow(ctk.CTk):
         # Reposition onto the correct monitor shortly after mainloop starts
         if not fullscreen:
             self.bind("<Map>", self._on_window_mapped, add=True)
+        else:
+            # Re-assert maximised once the event loop has drained whatever
+            # sizing callbacks the toolkit queued during construction. A
+            # no-op when the state stuck the first time.
+            def _rezoom():
+                try:
+                    if str(self.state()) != "zoomed":
+                        self.state("zoomed")
+                except Exception:                              # noqa: BLE001
+                    try:
+                        self.attributes("-zoomed", True)
+                    except Exception:                          # noqa: BLE001
+                        pass
+            self.after(150, _rezoom)
+            self.after(700, _rezoom)
 
         logger.debug("Application initialized")
 
