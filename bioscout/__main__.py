@@ -237,6 +237,13 @@ parser.add_argument('--export', '--c3d', dest='export', action='store_true',
 # ONLY the named stages run. The call site states the whole selection — this
 # is what replaces the DO_SO/DO_CEINMS/... block in a project settings.py,
 # where a selection persisted from one afternoon silently shaped the next.
+parser.add_argument('--do-scale', '--scale', dest='do_scale',
+                    action='store_true',
+                    help="With --run_subject: build the session's personalised "
+                         "model (generic + static trial -> ScaleTool). Runs "
+                         "after --export, before the solve stages, so "
+                         "`--export --scale --exbiomec` is the whole chain for "
+                         "a session that has never been analysed.")
 parser.add_argument('--do-exbiomec', '--exbiomec', dest='do_exbiomec',
                     action='store_true',
                     help="With --run_subject: external biomechanics only "
@@ -475,7 +482,9 @@ if getattr(args, 'run_subject', None) is not None:
     # CEINMS); any stage flag = ONLY the named stages. This replaces the
     # DO_SO/DO_CEINMS block in a project settings.py — see the flag comments
     # at the parser.
-    _rs_picked   = args.do_exbiomec or args.do_so or args.do_ceinms
+    _rs_picked   = (args.do_exbiomec or args.do_so or args.do_ceinms
+                    or args.do_scale)
+    _rs_scale    = bool(args.do_scale)
     _rs_exbio    = bool(args.do_exbiomec)
     _rs_so       = bool(args.do_so) if _rs_picked else True
     _rs_ceinms   = bool(args.do_ceinms) if _rs_picked else True
@@ -487,7 +496,8 @@ if getattr(args, 'run_subject', None) is not None:
     _rs_logpath  = os.path.join(_rs_ldir, f"bioscout_{_rs_now:%Y%m%d_%H%M%S}.log")
     print(f"[run_subject] project={_rs_project}  subject={_rs_subject or 'ALL'}  "
           f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
-          f"replace={args.replace}  stages: exbiomec={_rs_exbio} "
+          f"replace={args.replace}  stages: export={args.export} "
+          f"scale={_rs_scale} exbiomec={_rs_exbio} "
           f"so={_rs_so} ceinms={_rs_ceinms}", flush=True)
     print(f"[run_subject] log -> {_rs_logpath}", flush=True)
 
@@ -514,7 +524,7 @@ if getattr(args, 'run_subject', None) is not None:
         f"\n{'=' * 72}\n"
         f"=== run_subject  subject={_rs_subject or 'ALL'}  "
         f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
-        f"replace={args.replace}  export={args.export}  "
+        f"replace={args.replace}  export={args.export}  scale={_rs_scale}  "
         f"exbiomec={_rs_exbio} so={_rs_so} ceinms={_rs_ceinms}   {_rs_ts}\n"
         f"{_RS_DISCLAIMER}\n"
         f"{'=' * 72}\n")
@@ -533,7 +543,7 @@ if getattr(args, 'run_subject', None) is not None:
         _bioscout.pipeline.run_subject(
             project_dir=_rs_project, subject=_rs_subject,
             sessions=_rs_sessions, trials=_rs_trials, replace=args.replace,
-            export=args.export, reset=args.reset,
+            export=args.export, reset=args.reset, do_scale=_rs_scale,
             do_exbiomec=_rs_exbio, do_so=_rs_so, do_ceinms=_rs_ceinms)
     except Exception as _rs_e:
         import traceback as _rs_tb
@@ -1680,7 +1690,9 @@ def run_subject_mode() -> int:
     # Stage selection: no stage flag = the historical full pipeline (SO +
     # CEINMS); any stage flag = ONLY the named stages. See the flag comments
     # at the parser — this replaces settings.py's DO_* block.
-    _picked = args.do_exbiomec or args.do_so or args.do_ceinms
+    _picked = (args.do_exbiomec or args.do_so or args.do_ceinms
+               or args.do_scale)
+    do_scale = bool(args.do_scale)
     do_exbiomec = bool(args.do_exbiomec)
     do_so = bool(args.do_so) if _picked else True
     do_ceinms = bool(args.do_ceinms) if _picked else True
@@ -1691,7 +1703,8 @@ def run_subject_mode() -> int:
     logpath = os.path.join(ldir, f"run_{subject or 'all'}_{ts}.log")
     print(f"[run_subject] project={project}  subject={subject or 'ALL'}  "
           f"sessions={sessions or 'ALL'}  trials={trials or 'ALL'}  replace={args.replace}  "
-          f"stages: exbiomec={do_exbiomec} so={do_so} ceinms={do_ceinms}",
+          f"stages: export={args.export} scale={do_scale} "
+          f"exbiomec={do_exbiomec} so={do_so} ceinms={do_ceinms}",
           flush=True)
     print(f"[run_subject] log -> {logpath}", flush=True)
 
@@ -1716,7 +1729,7 @@ def run_subject_mode() -> int:
         bioscout.pipeline.run_subject(
             project_dir=project, subject=subject,
             sessions=sessions, trials=trials, replace=args.replace,
-            export=args.export, reset=args.reset,
+            export=args.export, reset=args.reset, do_scale=do_scale,
             do_exbiomec=do_exbiomec, do_so=do_so, do_ceinms=do_ceinms)
         return 0
     except Exception as e:

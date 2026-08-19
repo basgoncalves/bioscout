@@ -90,6 +90,13 @@ class TestTranslation(unittest.TestCase):
             self.legacy(["run", "023", "--exbiomec", "--ceinms"]),
             ["--run_subject", "023", "--do-exbiomec", "--do-ceinms"])
         self.assertNotIn("--do-so", self.legacy(["run", "023"]))
+        # the whole chain for a session that has never been analysed, in the
+        # order the pipeline runs it
+        self.assertEqual(
+            self.legacy(["run", "023", "--session", "pre", "--export",
+                         "--scale", "--exbiomec"]),
+            ["--run_subject", "023", "--session", "pre", "--export",
+             "--do-scale", "--do-exbiomec"])
 
     def test_run_batch_wins(self):
         """--batch is a different entry point; it must not be mixed with --run_subject."""

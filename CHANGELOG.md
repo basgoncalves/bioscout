@@ -100,11 +100,17 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
   them (no `--trial`, empty `BatchSettings.trial_list`) — static and
   normalisation-only trials excluded. Before, the run printed `trials=[]`
   and every stage loop silently did nothing, which read as a clean run.
-- **Per-stage flags on `bioscout run`** — `--exbiomec`, `--so`, `--ceinms`
-  (legacy forms `--do-*`). No stage flag = the full pipeline (SO + CEINMS,
-  unchanged); ANY stage flag = only the named stages. This is what replaces
-  the `DO_SO`/`DO_CEINMS` block in a project settings.py: run selection is
-  stated at the call site each time, never persisted in a file.
+- **Per-stage flags on `bioscout run`** — `--scale`, `--exbiomec`, `--so`,
+  `--ceinms` (legacy forms `--do-*`). No stage flag = the full pipeline (SO +
+  CEINMS, unchanged); ANY stage flag = only the named stages. This is what
+  replaces the `DO_SO`/`DO_CEINMS` block in a project settings.py: run
+  selection is stated at the call site each time, never persisted in a file.
+  `--scale` closes the last gap that forced people out of the CLI —
+  `bioscout run <subj> --session <s> --export --scale --exbiomec` is now the
+  whole chain for a session that has never been analysed (`run_subject`
+  gained the matching `do_scale=` parameter, run after export and before the
+  solve stages). The run summary line reports every stage's count, not just
+  SO and CEINMS.
 - **`project.yaml` replaces the copied per-project `settings.py`**
   (IMPLEMENTATIONS §2.9 steps 1+2). `utils/project_config.py` applies the
   nearest `project.yaml` on top of whatever settings resolved, so every

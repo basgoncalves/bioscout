@@ -272,7 +272,7 @@ def reset_simulations(project_dir=None, backup=True, dry_run=False,
 
 def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                 replace=False, do_so=True, do_ceinms=True, export=False,
-                do_exbiomec=False, export_src=None,
+                do_exbiomec=False, do_scale=False, export_src=None,
                 extra_trials=(), reset=False, verbose=True):
     """Run the FULL analysis pipeline for one (or every) subject.
 
@@ -306,6 +306,11 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
         ``True`` recomputes and overwrites everything.
     do_so, do_ceinms : bool
         Toggle the SO stage / the CEINMS stage.
+    do_scale : bool
+        Build each selected session's personalised model (generic + static
+        trial -> ScaleTool) before the solve stages. Runs after ``export``,
+        so ``export=True, do_scale=True, do_exbiomec=True`` is the whole
+        chain for a session that has never been analysed.
     reset : bool
         ``True`` first strips the trials that are about to run back to inputs-only
         (keeps ``inputs/`` + ``trial_settings.xml``, with a timestamped backup) via
@@ -437,6 +442,20 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                     except Exception as e:
                         log(f"  [export ERROR] {subj.name}/{tn}: {e}")
 
+            # Scaling: generic + static -> this iteration's personalised model.
+            # AFTER export (which produces the static TRC scaling reads) and
+            # BEFORE the solve stages (which need the model that comes out of
+            # it), so `--export --scale --exbiomec` runs the chain in one call.
+            # Not trial-scoped: a session has one model, built from its static
+            # trial, whatever subset of trials is being solved.
+            if do_scale:
+                try:
+                    sess.scale_model(replace=replace)
+                    res.setdefault("scale", []).append(sess.name)
+                    log(f"  [scale ok] {subj.name}/{sess.name}")
+                except Exception as e:
+                    log(f"  [scale ERROR] {subj.name}/{sess.name}: {e}")
+
             if do_exbiomec:                          # external biomechanics only
                 for tn in trials_run:
                     try:
@@ -515,7 +534,10 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                     log(f"  [CEINMS calibration ERROR] {subj.name}: {e}")
 
     log(f"\n[run_subject] done: "
-        + "; ".join(f"{s}/{ss}: SO={len(r['so'])} CEINMS={len(r['ceinms'])}"
+        + "; ".join(f"{s}/{ss}: export={len(r.get('export') or [])} "
+                    f"scale={len(r.get('scale') or [])} "
+                    f"exbiomec={len(r.get('exbiomec') or [])} "
+                    f"SO={len(r['so'])} CEINMS={len(r['ceinms'])}"
                     for s, sd in results.items() for ss, r in sd.items()))
     return results
 
