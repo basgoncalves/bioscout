@@ -4051,13 +4051,20 @@ class Session:
         for name in self.iterations:
             block = (cfg.get("iterations") or {}).get(name) or {}
             mfile = block.get("so_model") or block.get("ceinms_model")
-            mark = ""
+            bits = []
+            if not block:
+                bits.append("on disk, NOT declared in session.yaml")
+            elif not os.path.isdir(_layout.iteration_path(self.session_dir, name)):
+                bits.append("declared, no folder yet")
             if mfile:
-                got = self.iteration(name).resolve_model_file(mfile) \
-                    if hasattr(self.iteration(name), "resolve_model_file") else None
-                mark = "  [model OK]" if got and os.path.exists(str(got)) \
-                    else "  [model MISSING]"
-            log(f"    - {name}{'  ->  ' + str(mfile) if mfile else ''}{mark}")
+                try:
+                    got = self.iteration(name).resolve_model_file(mfile)
+                except Exception:                              # noqa: BLE001
+                    got = None
+                bits.append("model OK" if got and os.path.exists(str(got))
+                            else "model MISSING")
+            log(f"    - {name}{'  ->  ' + str(mfile) if mfile else ''}"
+                + (f"   [{'; '.join(bits)}]" if bits else ""))
         return None
 
     @property
@@ -4093,8 +4100,12 @@ class Session:
                         and d not in self._NON_ITERATION_DIRS
                         and not d.startswith(".") and not d.startswith("_")
                         and "_backup_" not in d}
-        cfg = {it for it in (self._cfg.get("iterations") or {})
-               if os.path.isdir(_layout.iteration_path(self.session_dir, it))}
+        # Everything session.yaml DECLARES, folder or no folder. It used to be
+        # filtered by `os.path.isdir(...)`, which hid exactly what `iteration()`
+        # is happy to create: declare a second arm, and `s.iterations` kept
+        # saying there was one until something happened to make its directory.
+        # The declaration is the truth; the folder appears when the arm runs.
+        cfg = set(self._cfg.get("iterations") or {})
         return sorted(on_disk | cfg)
 
     def iteration(self, name):
@@ -4921,8 +4932,8 @@ class Session:
     def __iter__(self):
         return (self.iteration(n) for n in self.iterations)
 
-    def __repr__(self):
-        return f"<Session {self.name} — iterations={self.iterations}>"
+    # (__repr__ lives at the top of the class — the one that used to sit here
+    #  shadowed it, because a later definition wins.)
 
 
 # ---------------------------------------------------------------------------
