@@ -312,6 +312,136 @@ choices live at the call site.** Any future feature that wants a new
 setting must first answer which of the five kinds it is — and if the answer
 is "code", it goes in bioscout, not in the project.
 
+### 2.10 One vocabulary: the stage registry the four surfaces should share
+
+*(2026-08-19. §2.9 fixed WHERE a fact lives. This fixes what things are
+CALLED — the complaint that "the terminal, the yaml and the GUI all have
+different names and the pipeline diverges a bit".)*
+
+**Diagnosis: the same stage has four names.** bioscout has four surfaces —
+the GUI nav, the CLI verbs, the config files, the Python API — and each grew
+its own words for the same six things:
+
+| the actual stage | GUI tab (section) | CLI | Python | config keys |
+|---|---|---|---|---|
+| c3d → trc/mot/EMG | **C3D Export** (Data curation) | `session export`, `run --export` | `it.run(export=True)`, `export_trials()` | `emg_filter`, `c3d_source` |
+| what is each trial | *(a checkbox inside C3D Export)* | `session classify` | `classify_session()` | `trials.<t>.type` |
+| generic + static → model | **Model Scaling** (Simulations) | `run --scale` | `it.scale_model()` | `iterations.<i>.{linear_scaling, marker_placer, muscle_opt, opt_neval}` |
+| IK → ID → MA | **Trial Analysis** (Simulations) | `run --exbiomec` | `do_exbiomec=` | `trials.<t>.time_range` |
+| SO → JRA | *(also Trial Analysis)* | `run --so` | `do_so=` | `iterations.<i>.{so_model, mvic_factor}` |
+| EMG max → calibrate → execute | **CEINMS Setup** (Data curation) **+ CEINMS Calibration** (Simulations) | `run --ceinms` | `do_ceinms=`, `calibrate()`, `prepare_ceinms()` | `ceinms:`, `emg_map`, `trials.<t>.calibration` |
+
+Read that table as a user and the pipeline genuinely does look like it
+diverges: "external biomechanics" is a word only this codebase uses, ONE
+CEINMS stage is split across TWO GUI sections in two different groups, and
+"Trial Analysis" is the name of a tab that runs two of the flag-level
+stages. Nothing here is broken — it is all the same code underneath — but a
+user cannot get from the GUI to the CLI without a translation table, and
+that table only exists in someone's head.
+
+**The rule: one list, everything else derived.** A stage should be declared
+ONCE, in the package, and every surface should generate its own presentation
+of that declaration rather than hard-coding a parallel one:
+
+```python
+# bioscout/stages.py — the single source of truth
+STAGES = [
+  Stage(id="export",   title="C3D Export",     group="Prepare",
+        reads="1_c3dfiles/<trial>.c3d",
+        writes="2_experimental/<trial>/marker_experimental.trc",
+        config=("emg_filter",), run=Iteration.export_trials),
+  Stage(id="classify", title="Detect trial types", group="Prepare", ...),
+  Stage(id="scale",    title="Model Scaling",  group="Model",   ...),
+  Stage(id="kinetics", title="IK / ID / MA",   group="Solve",   ...),  # was "exbiomec"
+  Stage(id="so",       title="Static Optimisation", group="Solve", ...),
+  Stage(id="ceinms",   title="CEINMS",         group="Solve",   ...),
+  Stage(id="results",  title="Figures & tables", group="Results", ...),
+]
+```
+
+and then:
+
+* **CLI** — `bioscout run --<id>` flags are generated from `STAGES`; so is
+  `bioscout run --help`, which gains the reads/writes line for free. Adding
+  a stage stops meaning "remember to add the flag in two dispatch paths"
+  (which is exactly how `--so` reached a dead code path this week).
+* **GUI** — `NAV_SECTIONS` is built from `group` + `title` instead of the
+  hand-written list in `main_window.py`, so a tab cannot be named one thing
+  in the sidebar and another on the command line. The two CEINMS entries
+  become one tab with sub-tabs (setup / calibrate / execute), which is what
+  the EMG tab already did for the same reason.
+* **`run_check.STAGE_OUTPUTS` disappears into `Stage.writes`.** This is the
+  strongest evidence the registry is the right shape: that dict already IS a
+  partial stage registry (id → the file the stage must produce), written
+  independently for the verify table. Two declarations of the same fact is
+  one too many.
+* **Docs** — the pipeline table in the README and the notebook's control
+  panel are generated, so they cannot drift from the code.
+
+**Naming, stated once.** `exbiomec` becomes `kinetics` (IK/ID/MA — the
+quantities, not a category invented for a folder name); the folder
+`external_biomechanics/` keeps its name for one release with the new one
+accepted as an alias. Stage ids are lowercase single words and are the ONLY
+identifier that appears in a flag, a dict key or a log line; `title` is the
+only string a human-facing surface shows.
+
+**project.yaml by section (schema 2).** With stage groups defined, the flat
+`batch:`/`ceinms:` split — which mirrors two settings CLASSES, an
+implementation detail of the file being replaced — becomes sections that
+mirror the stages a user is actually thinking about:
+
+```yaml
+schema: 2
+name: FAIS
+
+capture:            # facts about the rig, true before bioscout runs
+  emg_label_pattern: Voltage
+  emg_sampling_freq: 2000
+  trc_lateral_axis: X
+
+curation:           # captures -> analysable inputs
+  emg_filter: {bandpass_low: 10, bandpass_high: 500, notch: 50}
+  emg_map: {Voltage_1-VM: [vasmed_r], ...}
+  trial_type_pattern: '(.+?)_?(\d+)$'
+  foot_markers: {right: [RHEE, RMT5], left: [LHEE, LMT5]}
+
+model:              # scaling defaults for this lab
+  markerset: models/utils/markers_FAIS.xml
+  marker_weights: {...}
+
+solve:              # what the solvers need
+  dof_list: [hip_flexion_r, knee_angle_r, ...]
+  ceinms: {alpha: 10, beta: 1, gamma: 1000}
+
+results:            # what the figures group by
+  muscle_groups: {R Vasti: [vasint_r, vaslat_r, vasmed_r], ...}
+  jra_columns: [...]
+```
+
+**The cost, stated honestly:** schema 1 works because a key's name IS the
+settings attribute, which is what makes `bioscout project init` round-trip
+exactly. Sections break that, so schema 2 needs an explicit
+`SECTION_KEY -> settings attribute` table in `project_config.py`. That table
+is a real maintenance burden — but it is ~40 lines of data, it is
+diffable, and `bioscout project migrate` can rewrite 1 → 2 mechanically. The
+alternative is a file organised around two Python classes nobody outside
+bioscout has heard of.
+
+**Migration, non-breaking, in five steps:**
+
+1. `bioscout/stages.py` with the registry, `Stage.writes` populated from
+   today's `run_check.STAGE_OUTPUTS` (behaviour-neutral: the dict moves).
+2. `run_check.verify_run` reads the registry. Nothing else changes yet.
+3. CLI flags generated from it; the old spellings (`--exbiomec`) become
+   documented aliases that print the new form once.
+4. GUI `NAV_SECTIONS` generated from it; CEINMS Setup + CEINMS Calibration
+   merge into one tab with sub-tabs.
+5. project.yaml schema 2 + `bioscout project migrate`; schema 1 keeps
+   loading, with the same one-line deprecation note settings.py gets.
+
+Steps 1–2 are worth doing on their own even if the rest waits: they delete a
+duplicated declaration rather than adding an abstraction.
+
 ---
 
 ## 3. The model side: personalisation, model trees, model verification
