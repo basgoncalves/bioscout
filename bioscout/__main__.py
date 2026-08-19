@@ -232,6 +232,23 @@ parser.add_argument('--export', '--c3d', dest='export', action='store_true',
                     help="With --run_subject: (re)export inputs from c3d "
                          "(markers/GRF/EMG + trial settings) and filter EMG before "
                          "running IK/ID/MA/SO + CEINMS.")
+# Per-stage toggles for --run_subject. The rule: with NO stage flag the full
+# pipeline runs (SO + CEINMS, the historical default); with ANY stage flag,
+# ONLY the named stages run. The call site states the whole selection — this
+# is what replaces the DO_SO/DO_CEINMS/... block in a project settings.py,
+# where a selection persisted from one afternoon silently shaped the next.
+parser.add_argument('--do-exbiomec', '--exbiomec', dest='do_exbiomec',
+                    action='store_true',
+                    help="With --run_subject: external biomechanics only "
+                         "(IK -> ID -> muscle analysis). Any stage flag replaces "
+                         "the default full pipeline.")
+parser.add_argument('--do-so', '--so', dest='do_so', action='store_true',
+                    help="With --run_subject: the SO stage "
+                         "(IK/ID/MA -> SO -> muscle moments -> JRA).")
+parser.add_argument('--do-ceinms', '--ceinms', dest='do_ceinms',
+                    action='store_true',
+                    help="With --run_subject: the CEINMS stage "
+                         "(EMG normalise + calibrate -> execution -> JRA).")
 parser.add_argument('--reset', action='store_true',
                     help="Strip trials back to inputs-only (keeps inputs/ + "
                          "trial_settings.xml; timestamped backup made first). "
@@ -1649,12 +1666,21 @@ def run_subject_mode() -> int:
     sessions = [s.strip() for s in args.session.split(',')] if args.session else None
     trials = [t.strip() for t in args.trial.split(',')] if args.trial else None
 
+    # Stage selection: no stage flag = the historical full pipeline (SO +
+    # CEINMS); any stage flag = ONLY the named stages. See the flag comments
+    # at the parser — this replaces settings.py's DO_* block.
+    _picked = args.do_exbiomec or args.do_so or args.do_ceinms
+    do_exbiomec = bool(args.do_exbiomec)
+    do_so = bool(args.do_so) if _picked else True
+    do_ceinms = bool(args.do_ceinms) if _picked else True
+
     ts = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
     ldir = os.path.join(project, 'logs')
     os.makedirs(ldir, exist_ok=True)
     logpath = os.path.join(ldir, f"run_{subject or 'all'}_{ts}.log")
     print(f"[run_subject] project={project}  subject={subject or 'ALL'}  "
-          f"sessions={sessions or 'ALL'}  trials={trials or 'ALL'}  replace={args.replace}",
+          f"sessions={sessions or 'ALL'}  trials={trials or 'ALL'}  replace={args.replace}  "
+          f"stages: exbiomec={do_exbiomec} so={do_so} ceinms={do_ceinms}",
           flush=True)
     print(f"[run_subject] log -> {logpath}", flush=True)
 
@@ -1679,7 +1705,8 @@ def run_subject_mode() -> int:
         bioscout.pipeline.run_subject(
             project_dir=project, subject=subject,
             sessions=sessions, trials=trials, replace=args.replace,
-            export=args.export, reset=args.reset)
+            export=args.export, reset=args.reset,
+            do_exbiomec=do_exbiomec, do_so=do_so, do_ceinms=do_ceinms)
         return 0
     except Exception as e:
         print(f"[run_subject] FAILED: {type(e).__name__}: {e}", flush=True)

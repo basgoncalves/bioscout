@@ -80,6 +80,17 @@ class TestTranslation(unittest.TestCase):
             self.legacy(["run", "021", "--trial", "RunA1", "--export", "--reset"]),
             ["--run_subject", "021", "--trial", "RunA1", "--export", "--reset"])
 
+    def test_run_stage_flags(self):
+        """The DO_* replacement: any stage flag translates; none = none (the
+        legacy side then defaults to the full SO + CEINMS pipeline)."""
+        self.assertEqual(
+            self.legacy(["run", "023", "--session", "pre", "--so"]),
+            ["--run_subject", "023", "--session", "pre", "--do-so"])
+        self.assertEqual(
+            self.legacy(["run", "023", "--exbiomec", "--ceinms"]),
+            ["--run_subject", "023", "--do-exbiomec", "--do-ceinms"])
+        self.assertNotIn("--do-so", self.legacy(["run", "023"]))
+
     def test_run_batch_wins(self):
         """--batch is a different entry point; it must not be mixed with --run_subject."""
         self.assertEqual(self.legacy(["run", "--batch", "settings.py"]), ["-b", "settings.py"])

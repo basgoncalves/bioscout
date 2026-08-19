@@ -58,6 +58,7 @@ VERBS = ("help", "init", "gui", "run", "session", "model", "tps", "plot",
 _EPILOG = """\
 examples:
   bioscout run 021 --session pre,post --replace
+  bioscout run 023 --session pre --so          (only the SO stage)
   bioscout model check models --strict
   bioscout session new simulations/022/pre
   bioscout plot --list
@@ -117,6 +118,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="recompute outputs that already exist (default: skip them)")
     r.add_argument("--export", action="store_true",
                    help="(re)export markers/GRF/EMG from the c3d first")
+    # Stage flags. No stage flag = the full pipeline (SO + CEINMS); any stage
+    # flag = ONLY the named stages. The call site states the whole selection —
+    # this replaces the DO_SO/DO_CEINMS block in a project settings.py.
+    r.add_argument("--exbiomec", action="store_true",
+                   help="stage: external biomechanics only (IK -> ID -> MA)")
+    r.add_argument("--so", action="store_true",
+                   help="stage: static optimisation (IK/ID/MA -> SO -> JRA)")
+    r.add_argument("--ceinms", action="store_true",
+                   help="stage: CEINMS (calibrate -> execute -> JRA)")
     r.add_argument("--reset", action="store_true",
                    help="strip trials back to inputs-only, then run")
     r.add_argument("--batch", metavar="FILE",
@@ -365,6 +375,9 @@ def _to_legacy(ns: argparse.Namespace) -> List[str]:      # noqa: C901 — a fla
         _flag(out, "--trial", ns.trial)
         _flag(out, "--REPLACE", ns.replace, store_true=True)
         _flag(out, "--export", ns.export, store_true=True)
+        _flag(out, "--do-exbiomec", ns.exbiomec, store_true=True)
+        _flag(out, "--do-so", ns.so, store_true=True)
+        _flag(out, "--do-ceinms", ns.ceinms, store_true=True)
         _flag(out, "--reset", ns.reset, store_true=True)
         _flag(out, "--project", ns.project)
         return out

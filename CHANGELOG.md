@@ -85,6 +85,11 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **Per-stage flags on `bioscout run`** — `--exbiomec`, `--so`, `--ceinms`
+  (legacy forms `--do-*`). No stage flag = the full pipeline (SO + CEINMS,
+  unchanged); ANY stage flag = only the named stages. This is what replaces
+  the `DO_SO`/`DO_CEINMS` block in a project settings.py: run selection is
+  stated at the call site each time, never persisted in a file.
 - **`project.yaml` replaces the copied per-project `settings.py`**
   (IMPLEMENTATIONS §2.9 steps 1+2). `utils/project_config.py` applies the
   nearest `project.yaml` on top of whatever settings resolved, so every
