@@ -85,6 +85,17 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **Scaling ignored `session.yaml`'s `static_trial:`** — `scale_model`
+  defaulted to a hardcoded `"Static_01"`, so a session whose static trial is
+  named anything else (`static1`, the FAIS convention) scaled against a trial
+  that does not exist: "static TRC not found", no model written, and every
+  IK/ID/MA/SO/CEINMS stage failing for every trial — with the session file
+  naming the right trial all along. The session now owns the name.
+- **c3d export failed for any trial never analysed before.** `export_c3d`
+  writes into the shared `2_experimental/<trial>/`, but the loop then
+  `chdir`-ed into the ITERATION's trial folder, which does not exist yet for
+  a fresh trial — `WinError 2`, reported as `[export ERROR]` for every such
+  trial. The bare folder is created first (no stage scaffolding).
 - **`bioscout run` discovers trials from session.yaml** when nothing names
   them (no `--trial`, empty `BatchSettings.trial_list`) — static and
   normalisation-only trials excluded. Before, the run printed `trials=[]`

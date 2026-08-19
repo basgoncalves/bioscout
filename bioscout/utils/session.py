@@ -2985,7 +2985,7 @@ class Iteration:
                   f'    mklink /J "{dst}" "{src_geo}"')
             return None
 
-    def scale_model(self, static_trial="Static_01", n_eval=None, mvic_factor=None,
+    def scale_model(self, static_trial=None, n_eval=None, mvic_factor=None,
                     mass=None, replace=True, muscle_opt=True, marker_placer=None,
                     linear_scaling=None, increase_mvic=None):
         """Scale THIS iteration's model into its folder, driven by session.yaml.
@@ -3000,9 +3000,16 @@ class Iteration:
 
         Parameters
         ----------
-        static_trial : str
+        static_trial : str, optional
             Name of the static trial whose markers drive scaling/registration.
             Read from the SHARED ``experimental/<static_trial>/marker_experimental.trc``.
+            Defaults to session.yaml's ``static_trial:`` — NOT to a hardcoded
+            name. It used to default to ``"Static_01"``, so a session whose
+            static trial is called anything else (``static1``, the FAIS
+            convention) scaled against a trial that does not exist: "static
+            TRC not found", no model, and every downstream stage failing for
+            every trial, with the session file naming the right trial all
+            along.
         n_eval : int, optional
             Number of Modenese2015 muscle-optimisation evaluations. Defaults to
             this iteration's ``opt_neval`` in session.yaml (or 10). Ignored when
@@ -3044,6 +3051,9 @@ class Iteration:
             reads them."""
         import shutil
         from bioscout.utils import get_openSim as _get_os; _os = _get_os()
+        # session.yaml owns the static trial's NAME (see the parameter docs).
+        if not static_trial:
+            static_trial = str(self._cfg.get("static_trial") or "Static_01")
         it = (self._cfg.get("iterations") or {}).get(self.iteration) or {}
         generic = self._resolve_model_file(it.get("generic"), "generic")
         if not generic or not os.path.exists(generic):
@@ -3235,6 +3245,14 @@ class Iteration:
             try:
                 t = self.trial(tn)
                 t.export_c3d()
+                # export_c3d writes into the SHARED 2_experimental/<trial>/, so
+                # the ITERATION's own trial folder need not exist yet — and for
+                # a trial that has never been analysed it does not. chdir into a
+                # missing folder raised WinError 2 and the whole export of that
+                # trial was reported as failed, on a session where nothing was
+                # actually wrong. Create the bare folder (no stage scaffolding —
+                # the stages make their own).
+                os.makedirs(t.path, exist_ok=True)
                 os.chdir(t.path)
                 tr = t.get_time_range()
                 if tr:
