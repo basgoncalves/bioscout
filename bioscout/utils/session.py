@@ -3044,7 +3044,7 @@ class Iteration:
             return None
 
     def scale_model(self, static_trial=None, n_eval=None, mvic_factor=None,
-                    mass=None, replace=True, muscle_opt=True, marker_placer=None,
+                    mass=None, replace=True, muscle_opt=None, marker_placer=None,
                     linear_scaling=None, increase_mvic=None):
         """Scale THIS iteration's model into its folder, driven by session.yaml.
 
@@ -3083,14 +3083,17 @@ class Iteration:
         replace : bool
             If False and both output models already exist, skip and return the SO
             model path. If True, rebuild.
-        muscle_opt : bool
+        muscle_opt : bool, optional
             True  -> run the (slow, minutes) Modenese2015 muscle-parameter
-                     optimisation, producing ``scaled_opt_N<n>.osim`` as the force
-                     model. Needed for SO/CEINMS.
-            False -> stop after ``scaled.osim`` and use it directly as the force
-                     model (keeps the generic's OFL/TSL — right for a validated
-                     MRI/personalised model). Fast; enough for external
-                     biomechanics (IK/ID/MA).
+                     optimisation, producing ``<subject>_scaled_opt_N<n>.osim``
+                     as the force model. Needed for SO/CEINMS.
+            False -> stop after the scaled model and use it directly as the
+                     force model (keeps the generic's OFL/TSL — right for a
+                     validated MRI/personalised model). Fast; enough for
+                     external biomechanics (IK/ID/MA).
+            Defaults to this iteration's ``muscle_opt:`` in session.yaml
+            (True when absent), so "this model is not re-fit" is recorded with
+            the model rather than retyped at every call site.
         marker_placer : bool, optional
             Override ScaleTool's MarkerPlacer stage. Default: session.yaml
             ``marker_placer`` (else False).
@@ -3144,6 +3147,14 @@ class Iteration:
             it.get("markerset") or self._cfg.get("markerset"), "markerset")
         linear = bool(it.get("linear_scaling", True) if linear_scaling is None else linear_scaling)
         mplace = bool(it.get("marker_placer", False) if marker_placer is None else marker_placer)
+        # Modenese2015 muscle optimisation is the slow step (minutes per
+        # subject), and it is a MODELLING decision, not a run-time one: whether
+        # this iteration's force model is re-fit to the generic's muscle-tendon
+        # operating ranges, or keeps what the generic carries. So it reads from
+        # session.yaml like its siblings above (`muscle_opt: false`), with the
+        # keyword still overriding for a one-off.
+        muscle_opt = bool(it.get("muscle_opt", True) if muscle_opt is None
+                          else muscle_opt)
         n_eval = int(n_eval if n_eval is not None else (it.get("opt_neval", 10) or 10))
         # MVIC isometric-force multiplier for the SO model. Precedence:
         # mvic_factor (explicit) > increase_mvic (deprecated alias) > session.yaml

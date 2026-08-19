@@ -85,6 +85,18 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **`muscle_opt` is a session.yaml key**, alongside `linear_scaling` and
+  `marker_placer` — `muscle_opt: false` on an iteration skips the slow
+  Modenese2015 optimisation and uses the scaled model directly as the force
+  model. Whether a model is re-fit is a modelling decision recorded with the
+  model, not something retyped at every call site; the keyword still
+  overrides for a one-off.
+- **`project init` wrote the same lab fact twice.** A settings.py that set
+  `CEINMSSettings.emg_muscle_mapping = BatchSettings.emg_muscle_mapping`
+  produced two identical blocks in project.yaml — exactly the duplication the
+  file exists to end. Shared facts are now written once under `batch:` and
+  mirrored onto CEINMSSettings on load; a project whose CEINMS mapping
+  genuinely differs still writes it explicitly, and that wins.
 - **Scaling wrote its models into the ITERATION folder**, while session.yaml
   named `models/personalised/<subject>/…` — so scaling "succeeded" and the
   very next stage could not find the model it had just built (the loud

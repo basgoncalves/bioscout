@@ -100,6 +100,34 @@ class TestExtract(unittest.TestCase):
         data = pc.extract(proj, baseline=_ns_settings())
         self.assertEqual(data.get("batch"), {"emg_sampling_freq": 2000})
 
+    def test_shared_lab_fact_is_not_written_twice(self):
+        """settings.py routinely sets CEINMSSettings.emg_muscle_mapping =
+        BatchSettings.emg_muscle_mapping; a faithful extraction then wrote two
+        identical 70-line blocks — the drift project.yaml exists to end."""
+        m = {"EMG02": ["gasmed_l"]}
+        proj = types.SimpleNamespace(
+            BatchSettings=type("B", (), {"emg_muscle_mapping": m}),
+            CEINMSSettings=type("C", (), {"emg_muscle_mapping": m,
+                                          "alpha": 10}))
+        data = pc.extract(proj, baseline=_ns_settings())
+        self.assertIn("emg_muscle_mapping", data["batch"])
+        self.assertNotIn("emg_muscle_mapping", data.get("ceinms") or {})
+        self.assertEqual(data["ceinms"]["alpha"], 10)   # the rest survives
+        base = _ns_settings()
+        pc.apply(base, data)
+        self.assertEqual(base.CEINMSSettings.emg_muscle_mapping, m)
+
+    def test_a_genuinely_different_ceinms_value_is_kept_and_wins(self):
+        m, other = {"A": ["x"]}, {"B": ["y"]}
+        proj = types.SimpleNamespace(
+            BatchSettings=type("B", (), {"emg_muscle_mapping": m}),
+            CEINMSSettings=type("C", (), {"emg_muscle_mapping": other}))
+        data = pc.extract(proj, baseline=_ns_settings())
+        self.assertEqual(data["ceinms"]["emg_muscle_mapping"], other)
+        base = _ns_settings()
+        pc.apply(base, data)
+        self.assertEqual(base.CEINMSSettings.emg_muscle_mapping, other)
+
     def test_code_is_never_extracted_and_tuples_become_lists(self):
         proj = _ns_settings(helper=lambda: 1, dofs=("hip", "knee"))
         data = pc.extract(proj, baseline=_ns_settings())

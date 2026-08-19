@@ -64,6 +64,16 @@ _RUN_PREFIXES = ("RUN_", "DO_")
 _PATH_ATTRS = {"PROJECT_ROOT", "MODELS_DIR", "SIMULATIONS_DIR", "RESULTS_DIR",
                "SETUP_FILES_DIR", "setup_files_folder"}
 
+#: Lab facts that BOTH settings classes expose, because both CEINMS and the
+#: rest of the pipeline need them. A project's settings.py typically set them
+#: twice (``CEINMSSettings.emg_muscle_mapping = BatchSettings.emg_muscle_mapping``),
+#: and a faithful extraction copied the duplicate into project.yaml — two
+#: identical 70-line blocks, which is precisely the drift the file exists to
+#: end. Declared ONCE under ``batch:`` and mirrored on apply; a project that
+#: genuinely needs them to differ still says so by writing the ``ceinms:``
+#: entry explicitly, which then wins.
+_MIRRORED_TO_CEINMS = ("emg_muscle_mapping",)
+
 
 def _package_dir():
     """The bioscout package folder (…/bioscout), for telling the bundled
@@ -131,6 +141,18 @@ def apply(base, data, source="project.yaml"):
         target = _ensure_section(base, cls_name)
         for k, v in mapping.items():
             setattr(target, str(k), v)
+            n += 1
+    # Mirror the shared lab facts onto CEINMSSettings when the file declares
+    # them only once (see _MIRRORED_TO_CEINMS). An explicit `ceinms:` entry is
+    # applied above and is NOT overwritten here.
+    _batch = data.get("batch") or {}
+    _ceinms = data.get("ceinms") or {}
+    _shared = [k for k in _MIRRORED_TO_CEINMS
+               if k in _batch and k not in _ceinms]
+    if _shared:
+        target = _ensure_section(base, "CEINMSSettings")
+        for k in _shared:
+            setattr(target, k, _batch[k])
             n += 1
     if data.get("log_type") is not None:
         base.LOG_TYPE = str(data["log_type"])
@@ -251,6 +273,15 @@ def extract(settings_module, baseline=None):
                 if k not in ref or ref[k] != v}
         if diff:
             data[section] = diff
+    # Never write the same lab fact twice: a settings.py that assigned
+    # CEINMSSettings.emg_muscle_mapping = BatchSettings.emg_muscle_mapping
+    # produced two identical blocks. Dropped here, mirrored back on apply.
+    _b, _c = data.get("batch") or {}, data.get("ceinms") or {}
+    for k in _MIRRORED_TO_CEINMS:
+        if k in _b and k in _c and _b[k] == _c[k]:
+            del _c[k]
+    if "ceinms" in data and not _c:
+        del data["ceinms"]
     lt = getattr(settings_module, "LOG_TYPE", None)
     if lt is not None and lt != getattr(baseline, "LOG_TYPE", None):
         data["log_type"] = str(lt)
