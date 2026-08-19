@@ -2387,7 +2387,11 @@ class Iteration:
           1. an absolute path, as given
           2. relative to THIS iteration folder        (the classic location)
           3. relative to the session folder            (explicit ../ paths)
-          4. ``<project>/models/<name>``               (the shared model library)
+          4. the project models library, in order:
+             ``<project>/<mfile>`` verbatim (project-relative paths),
+             ``models/personalised/<subject>/<name>``,
+             ``models/generic/<name>`` and one level of family subfolders,
+             ``models/<name>`` (flat legacy layout, kept working)
         A session.yaml can therefore keep just the filename and store the model
         once in the project's models/ folder, shared by every session and
         iteration of that subject.
@@ -2408,12 +2412,39 @@ class Iteration:
         # session assumed at <project>/simulations/<subject>/<session>
         roots.append(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(self.session_dir)))))
+        subject = os.path.basename(os.path.dirname(
+            os.path.abspath(self.session_dir)))
+        name = os.path.basename(mfile)
         for root in roots:
             if not root:
                 continue
-            p = os.path.join(str(root), "models", os.path.basename(mfile))
+            root = str(root)
+            # 4a. A project-relative path, verbatim — session.yaml can say
+            #     models/personalised/021/021_Rajagopal2015_FAI.osim and mean
+            #     exactly that, whichever session reads it.
+            p = os.path.normpath(os.path.join(root, mfile))
             if os.path.exists(p):
                 return p
+            # 4b. Bare filename against the ORGANISED library:
+            #     personalised/<subject>/ first (a subject model belongs to a
+            #     subject), then generic/ and one level of family subfolders
+            #     (generic/Rajagopal_FAIS/, generic/Catelli/, ...), then the
+            #     flat legacy models/ root last so old projects keep working.
+            candidates = [
+                os.path.join(root, "models", "personalised", subject, name),
+                os.path.join(root, "models", "generic", name),
+            ]
+            gen_dir = os.path.join(root, "models", "generic")
+            if os.path.isdir(gen_dir):
+                try:
+                    for fam in sorted(os.listdir(gen_dir)):
+                        candidates.append(os.path.join(gen_dir, fam, name))
+                except OSError:
+                    pass
+            candidates.append(os.path.join(root, "models", name))
+            for p in candidates:
+                if os.path.exists(p):
+                    return p
         return None
 
     def trial_config(self, name, force_type="SO"):
