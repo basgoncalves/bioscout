@@ -195,6 +195,99 @@ found in a group figure), residual/reserve saturation reports.
   dataset in under 30 minutes; the FAIS/Powerlifting projects as case
   studies; every silent-failure trap above documented until it is fixed.
 
+### 2.9 Retiring `settings.py` — the design that replaces it
+
+*(2026-08-19, after the FAIS models/ reorg made most of settings.py
+redundant in practice. This section is the concrete design behind §2.1's
+one-paragraph sketch; §2.1's verbs are the interface, this is the data model
+under them.)*
+
+**Diagnosis first.** The reason a copied `settings.py` keeps hurting is not
+that it is long — it is that one file conflates FIVE kinds of thing that have
+different owners, different lifetimes and different change rates, and only by
+separating them does the "functions repeated per project drift into version
+skew" problem actually disappear:
+
+| what settings.py holds today | what it really is | where it belongs |
+|---|---|---|
+| `Subject`, `Inputs`, `build_model_config`, the runner functions | **library code** | bioscout, versioned ONCE, upgraded by `pip install -U`. Copying code into projects is the entire drift problem — the Powerlifting copy is 112 lines ahead of the template while both claim schema `2.0.0b1`, and `check_settings_version` cannot see it because you cannot diff the *shape* of arbitrary code |
+| marker conventions, EMG rig channel names, plate mapping, filter defaults | **lab facts** (true for every session this lab records) | a small declarative `project.yaml` at the project root — data, not code |
+| trials, time windows, body mass, models, emg_map, calibrations | **session facts** | `session.yaml` — already done; the models/markerset/emg_filter moves of 2026-08-18/19 completed it |
+| `SUBJECTS = ["021"]`, `TRIALS = [...]`, `DO_SO`, `--replace` | **run selection** (true for one afternoon) | the CALL SITE — CLI flags, the notebook control panel, the GUI. Never persisted: a selection written into a settings file is why "run the pipeline" silently re-ran one subject from March |
+| `MODELS_DIR`, `SIMULATIONS_DIR`, ... | **paths** | convention. The folder layout (`models/{generic,personalised,utils}`, `simulations/<subject>/<session>`, `results/`) IS the configuration; only a deviation needs stating |
+
+**The replacement: `project.yaml`.** Everything a project legitimately needs
+to declare fits in ~20 data-only lines:
+
+```yaml
+# project.yaml — lab facts and deviations from convention. No code.
+schema: 1
+name: FAIS
+lab:
+  markerset: models/utils/markers_FAIS.xml     # session.yaml may override
+  trc_axes: yzx
+  emg_label_pattern: "Voltage"
+  emg_filter: {bandpass_low: 10, bandpass_high: 500, notch: 50}
+defaults:
+  iteration: rajagopal_fai
+  algorithms: [SO, CEINMS]
+# paths: only if the convention is broken, e.g.
+# paths: {simulations: simulations_test}
+```
+
+Being data buys what code can never have: the schema can be validated on
+load, diffed between projects, and MIGRATED explicitly (`bioscout project
+migrate` rewrites schema 1 → 2 with a backup, the same way session.yaml
+edits go through span patches). "Template drift" stops being silent because
+there is no template to copy — `bioscout project init` *generates* the file,
+and an old file is upgraded, not diverged from.
+
+**Discovery instead of declaration.** The batch runner stops reading
+`SUBJECTS`/`SESSIONS` from anywhere. It enumerates
+`simulations/*/*/session.yaml` — the sessions that exist ARE the cohort —
+and the CLI narrows: `bioscout run --subjects 021 022 --sessions pre post`.
+`Project()` already auto-populates subjects this way when settings.py
+declares none; make that the only path.
+
+**The escape hatch, fenced.** Some logic is genuinely project-specific and
+genuinely code — FAIS's "trial `RunL*` means post-fatigue", the task-split
+labeller. That goes in an OPTIONAL `project_hooks.py` with a documented
+3-function interface (`label_trial(name) -> dict`, `classify_overrides`,
+`on_export_done`), imported if present. One small file with a stable
+interface is auditable; a 999-line file where config and code interleave is
+not. Everything else that today reaches into settings
+(`figure_jcf_polar.py`'s `import settings as CFG`, movement_detector's
+settings-above-the-session lookup, `emg_filter`'s BatchSettings tier) reads
+`project.yaml` through one accessor: `bioscout.project_config(path)` — one
+loader, one cache, one schema check.
+
+**Migration, non-breaking, in four steps:**
+
+1. `Project()` prefers `project.yaml`, falls back to `settings.py` with a
+   one-line deprecation note. Nothing breaks on day one.
+2. `bioscout project init` writes a `project.yaml` FROM an existing
+   settings.py (the lab facts are mechanically extractable — BatchSettings
+   attributes map 1:1), so migrating a project is one command plus a diff
+   review.
+3. Consumers move to `project_config()`: the figure scripts, the movement
+   detector, the emg_filter precedence tier (which becomes
+   session.yaml → project.yaml → bioscout defaults — same three tiers,
+   with data replacing code in the middle).
+4. Delete the bundled 999-line template from the package; `init_project`
+   scaffolds `project.yaml` + folder layout instead. `settings.py` in old
+   projects keeps working through step 1's fallback until the projects
+   migrate themselves.
+
+**Answering the design question directly:** no, per-project `settings.py`
+is not a good organisation, and the failure mode is exactly the one
+observed — code copied per project ages independently, and the version
+check that should catch it cannot, because code has no diffable schema. The
+rule that fixes it for good: **code lives in the package, facts live in
+data files (project.yaml for the lab, session.yaml for the session),
+choices live at the call site.** Any future feature that wants a new
+setting must first answer which of the five kinds it is — and if the answer
+is "code", it goes in bioscout, not in the project.
+
 ---
 
 ## 3. The model side: personalisation, model trees, model verification
@@ -393,7 +486,9 @@ registered model rather than an ad-hoc file, the plots are free.
    CEINMS results forever.
 3. ~~Geometry resolution check + `--model` (3.2)~~ — **done
    2026-08-17.** Found 3 broken and 56 non-portable models on the first run.
-4. `bioscout run` + `bioscout.yaml` + first-class `--session` (2.1, 2.3).
+4. `bioscout run` + `project.yaml` + first-class `--session` (2.1, 2.3, 2.9 —
+   2.9 is the data model; FAIS is the pilot: its settings.py is already
+   functionally redundant after the session.yaml/models moves).
 5. Results layer + provenance (2.4, 2.5).
 6. `model-diff` invariants wired into `model_edit apply` (3.3), then the torsion
    back-end and plausibility gate (3.1, 3.4).
