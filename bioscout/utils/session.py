@@ -3307,7 +3307,7 @@ class Iteration:
             do_so=False,
             do_ceinms=False,
             calibrate=False, calibration_trials=None,
-            replace=False, skip_done=None,
+            replace=False,
             log=print, **_ignored):
         """Run the pipeline for THIS iteration.
 
@@ -3351,8 +3351,16 @@ class Iteration:
         if "do_muscle_analsysis" in _ignored:
             do_muscle_analysis = _ignored.pop("do_muscle_analsysis")
 
-        if skip_done is None:
-            skip_done = not replace
+        # `skip_done` was accepted for years but never read — the skip/reuse
+        # decision is a per-stage MTIME question (each gate logs its own
+        # reason, e.g. the CEINMS prep "muscle lengths newer than the model"
+        # check), not a run-level flag. A documented parameter that silently
+        # does nothing is a silent failure of its own, so say so.
+        if "skip_done" in _ignored:
+            _ignored.pop("skip_done")
+            log("  [run] note: `skip_done` is ignored — stages decide to skip "
+                "on their own (existing/newer-than-model output) and log why; "
+                "use replace=True to force a re-run.")
         if do_scale:
             try:
                 self.scale_model(replace=replace)

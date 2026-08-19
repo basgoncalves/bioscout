@@ -62,8 +62,14 @@ bioscout verb behind them.
   refuse to emit a duplicate key.
 - **[fixed 2026-08-19 via the verify table] TRC export silently skips trials** it cannot process; the run
   summary does not name them.
-- **[open] The mtime gate** ("output newer than input → skip") surprises
-  users after any file copy/restore; there is no `--why-skipped` explanation.
+- **[fixed 2026-08-19] The mtime gate** ("output newer than input → skip")
+  surprises users after any file copy/restore; there is no `--why-skipped`
+  explanation. On inspection the only mtime gate in the codebase (CEINMS
+  prep, MA-vs-model in `Iteration.run`) already logs its reason in every
+  branch — missing / "older than <model>" / "reusing (newer than the
+  model)". The real silent part was `skip_done`: a documented `run()`
+  parameter that was accepted, defaulted and never read. Removed; passing
+  it now prints a note saying stages skip on their own and why.
 - **[fixed 2026-08-19] Windows MAX_PATH.** Session trees + CEINMS execution folder names
   exceed 260 chars at ~220-char project roots; failures appear as "file not
   found" deep inside OpenSim. Needs an up-front path-length check.
@@ -89,8 +95,8 @@ bioscout verb behind them.
   keys on every read (loud warning naming both lines) and
   `write_session_yaml` refuses to emit one; a Windows preflight names paths
   within 40 chars of MAX_PATH before the run starts. Still open from this
-  list: the mtime-gate `--why-skipped` (the only mtime gate found, MA-vs-model,
-  already logs its reason; `skip_done` is currently a dead parameter).*
+  list: none — the mtime-gate item closed 2026-08-19 (its one gate already
+  explains itself; the dead `skip_done` parameter is gone).*
 
 ### Operational
 

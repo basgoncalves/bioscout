@@ -113,6 +113,10 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
   bioscout's own CLI owns the console (`__main__` sets
   `BIOSCOUT_LOG_FILTER=1`); library use — notebooks, scripts, `python -c` —
   passes everything through raw.
+- **`Iteration.run(skip_done=...)` was a dead parameter** — accepted,
+  documented, never read (skipping is a per-stage mtime decision, and each
+  gate already logs its reason). Removed; passing it now prints a note
+  instead of silently doing nothing.
 - **"No model found" warning listed the same candidate twice** (`so_model`
   consulted under both its own key and the requested key), and the trial then
   ran with whatever stale `model_dir` sat in its `trial_settings.xml` — often
