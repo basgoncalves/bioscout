@@ -381,6 +381,29 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                 for t in trial_filter:                    # allow explicitly-named extras
                     if t not in trials_run:
                         trials_run.append(t)
+            # Discovery instead of declaration (IMPLEMENTATIONS §2.9): with no
+            # trials named anywhere — no --trial filter AND an empty
+            # BatchSettings.trial_list — the session's own session.yaml says
+            # what exists. Without this the run printed `trials=[]` and every
+            # stage loop silently did nothing, which read as a clean run.
+            # Static and normalisation-only trials are excluded: they have no
+            # movement to solve.
+            if trial_filter is None and not trials_run:
+                try:
+                    _tblocks = (getattr(sess, "_cfg", None) or {}).get("trials") or {}
+
+                    def _ttype(name):
+                        blk = _tblocks.get(name)
+                        return str((blk or {}).get("type") or "").lower()
+
+                    _skip = ("static", "mvic", "mvc", "norm", "emg")
+                    trials_run = [n for n in sess._trial_names()
+                                  if not _ttype(n).startswith(_skip)]
+                    if trials_run:
+                        log(f"  [run] no trial_list declared — discovered "
+                            f"{len(trials_run)} trial(s) from session.yaml")
+                except Exception as _de:                       # noqa: BLE001
+                    log(f"  [run] trial discovery failed: {_de}")
             res = {"so": [], "ceinms": [], "export": []}
             results[subj.name][sess.name] = res
             log(f"\n=== {subj.name} / {sess.name}  trials={trials_run}  "

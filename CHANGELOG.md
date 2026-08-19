@@ -85,6 +85,10 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **`bioscout run` discovers trials from session.yaml** when nothing names
+  them (no `--trial`, empty `BatchSettings.trial_list`) — static and
+  normalisation-only trials excluded. Before, the run printed `trials=[]`
+  and every stage loop silently did nothing, which read as a clean run.
 - **Per-stage flags on `bioscout run`** — `--exbiomec`, `--so`, `--ceinms`
   (legacy forms `--do-*`). No stage flag = the full pipeline (SO + CEINMS,
   unchanged); ANY stage flag = only the named stages. This is what replaces
