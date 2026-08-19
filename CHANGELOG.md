@@ -85,6 +85,16 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **`inverse_dynamics.png` was mostly blank.** The joint grid sized itself
+  `len(joints)` × `max(DOFs of any one joint)`, so the pelvis — six panels,
+  three moments plus three residual forces — set the width for every row and
+  left the right half of the figure empty: 42 of 66 cells on a 24-inch-wide
+  PNG. Joints now pack into rows of three (`_pack_joint_rows`): a joint wider
+  than a row wraps (pelvis becomes its moments, then its forces), and a joint
+  that fits in what's left of the current row joins it, so the single-DOF
+  joints stop wasting two cells each. 24 panels in 27 cells, half the width,
+  same proximal→distal order and no panel dropped. `<id>_summary.png` shares
+  the layout and gets the same treatment.
 - **`muscle_opt` is a session.yaml key**, alongside `linear_scaling` and
   `marker_placer` — `muscle_opt: false` on an iteration skips the slow
   Modenese2015 optimisation and uses the scaled model directly as the force

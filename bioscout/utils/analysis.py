@@ -1198,6 +1198,56 @@ _ID_PROX_DISTAL = [
     'arm_flex', 'arm_add', 'arm_rot', 'elbow_flex', 'pro_sup', 'wrist_flex', 'wrist_dev',
 ]
 
+#: Panels per row in the joint-grid figures (inverse_dynamics.png,
+#: <id>_summary.png). Three, because the pelvis then falls out as its three
+#: moments on one row and its three residual FORCES on the next — the reading
+#: those panels are for.
+_JOINT_GRID_NCOLS = 3
+
+
+def _pack_joint_rows(joint_bases, row_joints, ncols=_JOINT_GRID_NCOLS):
+    """Lay joints out proximal->distal into rows of at most ``ncols`` panels.
+
+    -> ``[[base, ...], ...]``, one list per row.
+
+    The grid used to be ``nrows = len(joints)`` x ``ncols = max(dofs per
+    joint)``, which meant ONE joint set the width for all of them: the pelvis
+    has six panels (three moments + three residual forces), so every other row
+    carried three empty cells and the right half of the figure was blank —
+    about 55 % of a 24-inch-wide PNG on the FAIS models.
+
+    Two rules fix that without giving up the proximal->distal reading order:
+
+    * a joint bigger than one row WRAPS onto continuation rows (pelvis: 3 + 3);
+    * a joint that fits in what is LEFT of the current row joins it, instead of
+      opening a row of its own — so the single-DOF joints (ankle, subtalar,
+      mtp, elbow, pro_sup) pack together rather than each wasting two cells.
+
+    A joint is never split across rows unless it is genuinely wider than one,
+    so panels for the same joint stay adjacent and in order.
+    """
+    rows, cur = [], []
+    for jname in row_joints:
+        bases = list(joint_bases.get(jname) or [])
+        if not bases:
+            continue
+        if len(bases) > ncols:                 # wrap: pelvis 6 -> 3 + 3
+            if cur:
+                rows.append(cur); cur = []
+            for i in range(0, len(bases), ncols):
+                chunk = bases[i:i + ncols]
+                if len(chunk) == ncols:
+                    rows.append(chunk)
+                else:
+                    cur = chunk                # a short tail can still be filled
+            continue
+        if len(cur) + len(bases) > ncols:      # no room -> start a new row
+            rows.append(cur); cur = []
+        cur.extend(bases)
+    if cur:
+        rows.append(cur)
+    return rows
+
 
 # ---------------------------------------------------------------------------
 # Trial-type-aware gait/task event handling.
@@ -4482,8 +4532,9 @@ class Analyse:
         for base in order:                       # order already DOF-sorted
             joint_bases.setdefault(_joint_of(_stem(base)), []).append(base)
         row_joints = [j for j in _row_order if j in joint_bases]
-        ncols = max(len(v) for v in joint_bases.values())
-        nrows = len(row_joints)
+        packed = _pack_joint_rows(joint_bases, row_joints)
+        nrows = len(packed)
+        ncols = max((len(r) for r in packed), default=1)
 
         fig, axgrid = plt.subplots(nrows, ncols, figsize=(ncols * 4.0, nrows * 2.7),
                                    squeeze=False)
@@ -4494,8 +4545,8 @@ class Analyse:
 
         side_style = {'r': ('tab:blue', 'right'), 'l': ('tab:red', 'left'), 'none': ('black', None)}
         t = id_df['time']
-        for r, jname in enumerate(row_joints):
-            for c, base in enumerate(joint_bases[jname]):
+        for r, row_bases in enumerate(packed):
+            for c, base in enumerate(row_bases):
                 ax = axgrid[r][c]
                 ax.axis('on')
                 for side, colname in groups[base].items():
@@ -4599,8 +4650,9 @@ class Analyse:
         row_joints = [j for j in _row_order if j in joint_bases]
         if not row_joints:
             self._log('[plot_ik_id_summary] no coordinates to plot.'); return None, None
-        ncols = max(len(v) for v in joint_bases.values())
-        nrows = len(row_joints)
+        packed = _pack_joint_rows(joint_bases, row_joints)
+        nrows = len(packed)
+        ncols = max((len(r) for r in packed), default=1)
 
         fig, axg = plt.subplots(nrows, ncols, figsize=(ncols * 4.0, nrows * 2.7), squeeze=False)
         fig.suptitle("IK + ID summary   —   angle (solid, left axis)  |  moment (dashed, right axis)",
@@ -4612,8 +4664,8 @@ class Analyse:
         ta = ang['time'].values
         tm = mom['time'].values
         side_col = {'r': 'tab:blue', 'l': 'tab:red', 'none': 'black'}
-        for r, jname in enumerate(row_joints):
-            for c, base in enumerate(joint_bases[jname]):
+        for r, row_bases in enumerate(packed):
+            for c, base in enumerate(row_bases):
                 ax = axg[r][c]; ax.axis('on')
                 ax2 = ax.twinx()
                 has_mom = False
