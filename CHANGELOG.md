@@ -85,6 +85,19 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **Export failed for every normalisation-only trial.** `Iteration.trial()`
+  deliberately prunes the folder of a trial listed under
+  `normalisation_trials:` (it produces no iteration outputs), so `t.path` did
+  not exist when `export_c3d` chdir'ed into it — `WinError 2`, before any of
+  the export ran, for 41 of 59 trials on FAIS 023/pre. The folder is created
+  in `export_c3d` itself, which is the one place every caller goes through;
+  the empty folder is pruned again by the next `trial()` call.
+- **Normalisation-only trials are skipped by the solve stages, loudly**, with
+  the list printed. They feed the session EMG maximum and produce no
+  iteration outputs, so solving them is a category error, not a failure —
+  previously each one produced its own `[exbiomec ERROR]`. Naming them also
+  surfaces an over-broad `normalisation_trials:` (a real movement trial in
+  that list is silently never analysed); `--trial` forces one through.
 - **The export `chdir` bug had a second copy.** `pipeline.run_subject`'s own
   export loop repeated `t.export_c3d(); os.chdir(t.path)`, so a `bioscout run
   --export` still failed with `WinError 2` on every trial never analysed

@@ -2976,6 +2976,13 @@ class Analyse:
 
         print("Exporting C3D file...")
 
+        # The trial's folder need not exist yet: export is what BUILDS a
+        # trial, and for one never analysed before there is nothing on disk.
+        # chdir into a missing folder raises WinError 2 here — before any of
+        # the export happens — which is why every fresh trial reported
+        # "[export ERROR] ... The system cannot find the file specified".
+        # Fixing it at the callers was not enough: this chdir runs first.
+        os.makedirs(self.path, exist_ok=True)
         os.chdir(self.path)
         c3d_abs = os.path.abspath(self.c3d)
         if not os.path.exists(c3d_abs):

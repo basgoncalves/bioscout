@@ -451,6 +451,35 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                     except Exception as e:
                         log(f"  [export ERROR] {subj.name}/{tn}: {e}")
 
+            # Normalisation-only trials (session.yaml `normalisation_trials`
+            # minus `calibration_trials`) feed the session EMG maximum and
+            # produce no iteration outputs — Iteration.trial() even prunes
+            # their folder. Solving them is not a failure, it is a category
+            # error, so they are SKIPPED here rather than left to fail one
+            # stage at a time (57 [exbiomec ERROR] lines on FAIS 023/pre, 42
+            # of them trials nothing should have solved).
+            #
+            # Named, not silent: `normalisation_trials` is sometimes authored
+            # as "every trial contributing to the EMG max", which would sweep
+            # in real movement trials. Printing the list is what makes that
+            # visible — pass --trial explicitly to force one through.
+            _norm = set(sess._cfg.get("normalisation_trials") or [])
+            _cal = set(sess._cfg.get("calibration_trials") or [])
+            _norm_only = sorted((_norm - _cal) & set(trials_run))
+            if _norm_only and (do_exbiomec or do_so or do_ceinms):
+                if trial_filter is None:
+                    trials_run = [t for t in trials_run if t not in set(_norm_only)]
+                    log(f"  [skip] {len(_norm_only)} normalisation-only trial(s) "
+                        f"— they feed the EMG maximum and produce no iteration "
+                        f"outputs: {', '.join(_norm_only)}")
+                    log(f"  [skip] if any of those is a real movement trial, "
+                        f"take it out of `normalisation_trials:` in "
+                        f"session.yaml (or name it with --trial).")
+                else:
+                    log(f"  [run] solving {len(_norm_only)} trial(s) listed "
+                        f"under `normalisation_trials:` because --trial named "
+                        f"them: {', '.join(_norm_only)}")
+
             # Scaling: generic + static -> this iteration's personalised model.
             # AFTER export (which produces the static TRC scaling reads) and
             # BEFORE the solve stages (which need the model that comes out of
