@@ -428,6 +428,15 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
                     try:
                         t = sess.trial(tn)
                         t.export_c3d()
+                        # export_c3d writes into the SHARED 2_experimental/
+                        # <trial>/, so the ITERATION's trial folder need not
+                        # exist — and for a trial never analysed it does not.
+                        # chdir into a missing folder raised WinError 2 and the
+                        # export was reported failed for every fresh trial (41
+                        # of 59 on FAIS 023/pre). Same fix as
+                        # Iteration.export_trials; this is the second copy of
+                        # the loop.
+                        os.makedirs(t.path, exist_ok=True)
                         os.chdir(t.path)
                         _tr = t.get_time_range()
                         if _tr:

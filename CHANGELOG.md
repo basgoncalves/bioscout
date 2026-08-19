@@ -85,6 +85,16 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **The export `chdir` bug had a second copy.** `pipeline.run_subject`'s own
+  export loop repeated `t.export_c3d(); os.chdir(t.path)`, so a `bioscout run
+  --export` still failed with `WinError 2` on every trial never analysed
+  before — 41 of 59 on FAIS 023/pre, which then cascaded into "joint_angles.mot
+  not found" at ID. Fixed in both loops.
+- **"Scaled model not found: `..\..\models\<subject>\<session>\scaled.osim`"**
+  on sessions whose models were built correctly: `Analyse._resolve_model_dir`
+  only ever looked in the pre-reorg `models/<subject>/<session>/`. It now
+  prefers `models/personalised/<subject>/` (where scaling writes), keeps the
+  old location as a fallback, and recognises the subject-prefixed model names.
 - **`inverse_dynamics.png` was mostly blank.** The joint grid sized itself
   `len(joints)` × `max(DOFs of any one joint)`, so the pelvis — six panels,
   three moments plus three residual forces — set the width for every row and

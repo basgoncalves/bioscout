@@ -2007,7 +2007,16 @@ class Analyse:
             subject, session = subject_session_for_trial(self.path)
             if not subject or not session:
                 return
-            models_dir = os.path.join(_u.MODELS_DIR, subject, session)
+            # models/personalised/<subject>/ is where scaling writes (see
+            # Iteration.models_dir); models/<subject>/<session>/ is the
+            # pre-2026-08-19 layout, kept as a fallback for projects that
+            # still use it. Looking ONLY at the legacy place is why a session
+            # whose models were built correctly still reported
+            # "Scaled model not found: ..\..\models\<subject>\<session>\
+            # scaled.osim" — a path nothing had written to in weeks.
+            _cands = [os.path.join(_u.MODELS_DIR, "personalised", subject),
+                      os.path.join(_u.MODELS_DIR, subject, session)]
+            models_dir = next((d for d in _cands if os.path.isdir(d)), _cands[0])
             avail = ([f for f in os.listdir(models_dir) if f.lower().endswith('.osim')]
                      if os.path.isdir(models_dir) else [])
             factor = getattr(_u.settings.BatchSettings, 'muscle_force_factor', None)
@@ -2028,7 +2037,12 @@ class Analyse:
             # 3) fall back to the base scaled model.
             if not avail:
                 return
-            pick = (next((p for p in ("scaled_opt_N10.osim", "scaled.osim") if p in avail), None)
+            # Subject-prefixed names first: scaling writes <subject>_scaled.osim
+            # (a bare scaled.osim in a shared per-subject models folder would be
+            # overwritten by the next session). Bare names stay for old trees.
+            _wanted = (f"{subject}_scaled_opt_N10.osim", f"{subject}_scaled.osim",
+                       "scaled_opt_N10.osim", "scaled.osim")
+            pick = (next((p for p in _wanted if p in avail), None)
                     or sorted(avail)[0])
             self.model_dir = os.path.relpath(os.path.join(models_dir, pick), self.path)
             self._log(f"[Info] model_dir '{cur}' missing; using {pick}")
