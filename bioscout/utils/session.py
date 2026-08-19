@@ -3937,6 +3937,67 @@ class Session:
     # outputs, logs) — never treated, anchored on, or run as a model.
     _NON_ITERATION_DIRS = _layout.NON_ITERATION_DIRS
 
+    def __repr__(self):
+        """One line that says what this session HAS.
+
+        ``<Session ...>`` alone answered none of the questions you open a
+        session to ask, so every check ("did it find my trials? which
+        iterations? is there a model yet?") cost three more lines.
+        """
+        try:
+            n_t = len(self._trial_names())
+        except Exception:                                      # noqa: BLE001
+            n_t = "?"
+        try:
+            its = self.iterations
+        except Exception:                                      # noqa: BLE001
+            its = []
+        subj = os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
+        return (f"<Session {subj}/{os.path.basename(self.session_dir)}  "
+                f"trials={n_t}  iterations={its or '[]'}>")
+
+    def describe(self, log=print):
+        """Print what this session declares and what it has on disk.
+
+        The counterpart to ``__repr__`` for when one line is not enough:
+        trials by type, which are static / calibration / normalisation, the
+        iterations and the model each names, and whether that model exists.
+        """
+        cfg = self._cfg or {}
+        subj = os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
+        log(f"session   : {subj}/{os.path.basename(self.session_dir)}"
+            f"   ({self.session_dir})")
+        for key in ("subject", "body_mass", "static_trial", "markerset"):
+            if cfg.get(key) is not None:
+                log(f"  {key:<14}: {cfg[key]}")
+        trials = cfg.get("trials") or {}
+        by_type = {}
+        for name, meta in trials.items():
+            by_type.setdefault(str((meta or {}).get("type") or "?"), []).append(name)
+        log(f"  trials        : {len(trials)}"
+            + (f"   ({', '.join(f'{k} x{len(v)}' for k, v in sorted(by_type.items()))})"
+               if by_type else ""))
+        for key in ("calibration_trials", "normalisation_trials"):
+            got = cfg.get(key) or []
+            if got:
+                log(f"  {key:<14}: {len(got)}"
+                    + (f"   {', '.join(got[:6])}{' ...' if len(got) > 6 else ''}"))
+        emg = cfg.get("emg_map") or {}
+        if emg:
+            log(f"  emg_map       : {len(emg)} entry(ies)")
+        log(f"  iterations    : {len(self.iterations)}")
+        for name in self.iterations:
+            block = (cfg.get("iterations") or {}).get(name) or {}
+            mfile = block.get("so_model") or block.get("ceinms_model")
+            mark = ""
+            if mfile:
+                got = self.iteration(name).resolve_model_file(mfile) \
+                    if hasattr(self.iteration(name), "resolve_model_file") else None
+                mark = "  [model OK]" if got and os.path.exists(str(got)) \
+                    else "  [model MISSING]"
+            log(f"    - {name}{'  ->  ' + str(mfile) if mfile else ''}{mark}")
+        return None
+
     @property
     def iterations(self):
         """Model-iteration folders present on disk (the ground truth), unioned

@@ -38,6 +38,11 @@ __all__ = ["open_session_editor", "ask_new_session", "gui_available"]
 _RED = "#c0392b"
 _BLUE = "#2a78d6"
 _MUTED = "gray40"
+#: Every second trial row is tinted. With sixty trials and five ungrouped
+#: tick columns, "which checkbox belongs to which trial" is a real question;
+#: a band is the cheapest answer. Dark-theme-safe (CTk's own surface colours
+#: sit either side of it, so it reads as a tint in both modes).
+_ROW_TINT = "#2b3138"
 
 
 def gui_available() -> bool:
@@ -235,19 +240,27 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
         v_static.set(form.value("static_trial") or "")
 
         section(f"TRIALS ({len(trials)})   â€”   static Â· calibration Â· normalisation Â· type")
-        header = ("trial", "static", "calib", "norm", "type")
+        header = ("trial", "static", "calib", "norm", "type", "")
         for c, text in enumerate(header):
             Label(body, text=text, **colour({}, _MUTED)).grid(
                 row=section.row, column=c, sticky="w", padx=(0, 10))
         section.row += 1
 
         c3ds = set(form.c3d_trials())
-        for name in trials:
+        for _i, name in enumerate(trials):
             r = section.row
             missing = name not in c3ds
             kw = colour({}, _RED) if missing else {}
-            Label(body, text=name + ("  (no c3d)" if missing else ""), **kw).grid(
-                row=r, column=0, sticky="w", padx=(0, 10))
+            # Alternating row tint: sixty checkboxes in five ungrouped columns
+            # is a place to lose your line. CTk takes a per-widget fg_color;
+            # plain Tk takes bg, and a Label with no bg inherits the frame's,
+            # so the stripe has to be set on every widget in the row.
+            _band = (_ROW_TINT if (_i % 2) else None)
+            _rowkw = ({"fg_color": _band} if (ctk and _band)
+                      else ({"bg": _band} if (_band and not ctk) else {}))
+            Label(body, text=name + ("  (no c3d)" if missing else ""),
+                  **kw, **_rowkw).grid(
+                row=r, column=0, sticky="ew", padx=(0, 10))
 
             rb = (ctk.CTkRadioButton if ctk else tk.Radiobutton)
             rb(body, text="", variable=v_static, value=name).grid(row=r, column=1)
@@ -256,6 +269,15 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
             v_nor = tk.BooleanVar(value=name in nor)
             Check(body, text="", variable=v_cal).grid(row=r, column=2)
             Check(body, text="", variable=v_nor).grid(row=r, column=3)
+
+            # A trial in the yaml with no c3d cannot be exported or solved â€”
+            # usually a copy-paste leftover from another session. Offer to
+            # drop it here rather than making the user hand-edit the file.
+            if missing:
+                Button(body, text="delete",
+                       command=lambda n=name: trial_drop(n),
+                       **({"width": 60} if ctk else {})).grid(
+                    row=r, column=5, sticky="w", padx=(8, 0))
 
             v_type = tk.StringVar(value=types.get(name, ""))
             if ctk:
@@ -363,6 +385,24 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
         except Exception as exc:                                  # noqa: BLE001
             messagebox.showerror("bioscout", f"{type(exc).__name__}: {exc}")
 
+    def trial_drop(name):
+        """Remove a trial from session.yaml (offered only for trials with no
+        c3d â€” nothing can export or solve them)."""
+        form = state["form"]
+        if not messagebox.askyesno(
+                "bioscout", f"Remove trial '{name}' from session.yaml?\n\n"
+                            f"It has no c3d, so nothing can export or solve "
+                            f"it. Any folder it may have on disk is NOT "
+                            f"deleted, and the file is backed up first."):
+            return
+        try:
+            form.delete_trial(name)
+            form.save()
+            v_status.set(f"removed trial {name}")
+            load()
+        except Exception as exc:                                  # noqa: BLE001
+            messagebox.showerror("bioscout", f"{type(exc).__name__}: {exc}")
+
     # -- load / create ------------------------------------------------------ #
     def load():
         d = Path(v_dir.get().strip() or ".")
@@ -401,62 +441,72 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
         v_status.set(f"editing {form.path}")
 
     # -- saving ------------------------------------------------------------- #
+    def _collect(form):
+        """Stage every widget's value onto the form.
+
+        Split out of ``save`` so "Show changes" sees the SAME edits Save
+        would write. It used to call ``form.diff()`` on a form that had never
+        been told what the widgets hold â€” so the preview said "(no unsaved
+        changes)" no matter what you had typed, which reads as "my edits were
+        lost". Staging is in-memory; nothing reaches disk until ``form.save``.
+        """
+        for key, var in scalar_vars.items():
+            text = var.get().strip()
+            if text != ("" if form.value(key) is None else str(form.value(key))):
+                form.set_scalar(key, text)
+
+        if v_static.get() and v_static.get() != form.value("static_trial"):
+            form.set_scalar("static_trial", v_static.get())
+
+        cal = [n for n, (c, _, _) in trial_vars.items() if c.get()]
+        nor = [n for n, (_, c, _) in trial_vars.items() if c.get()]
+        if cal != form.list_value("calibration_trials"):
+            form.set_list("calibration_trials", cal)
+        if nor != form.list_value("normalisation_trials"):
+            form.set_list("normalisation_trials", nor)
+
+        types = form.trial_types()
+        for name, (_, _, v_type) in trial_vars.items():
+            want = v_type.get().strip()
+            if want and want != types.get(name, ""):
+                form.set_trial_type(name, want)
+
+        cee = form.value("ceinms") or {}
+        changed = {k: v.get().strip() for k, v in ceinms_vars.items()
+                   if v.get().strip() and v.get().strip() != str(cee.get(k, ""))}
+        if changed:
+            form.set_ceinms(**changed)
+        if bool(cee.get("calibrated", True)) != v_calibrated.get():
+            form.set_ceinms(calibrated="true" if v_calibrated.get() else "false")
+        if v_default_cal.get() and v_default_cal.get() != str(
+                form.value("default_calibration") or ""):
+            form.set_scalar("default_calibration", v_default_cal.get())
+
+        emg_now = {}
+        for key, var in emg_vars.items():
+            text = var.get().strip()
+            if text:
+                emg_now[key] = float(text)
+        if emg_now:
+            form.set_emg_filter(**emg_now)
+
+        blocks = form.iterations()
+        for name, fields in iter_vars.items():
+            block = blocks.get(name, {})
+            for key, (var, kind) in fields.items():
+                want = var.get() if kind == "bool" else var.get().strip()
+                if kind == "bool":
+                    if bool(block.get(key, want)) != want or key not in block:
+                        form.set_iteration_field(name, key, want)
+                elif want and want != str(block.get(key, "")):
+                    form.set_iteration_field(name, key, want)
+
     def save():
         form = state["form"]
         if not form or not form.exists:
             return
         try:
-            for key, var in scalar_vars.items():
-                text = var.get().strip()
-                if text != ("" if form.value(key) is None else str(form.value(key))):
-                    form.set_scalar(key, text)
-
-            if v_static.get() and v_static.get() != form.value("static_trial"):
-                form.set_scalar("static_trial", v_static.get())
-
-            cal = [n for n, (c, _, _) in trial_vars.items() if c.get()]
-            nor = [n for n, (_, c, _) in trial_vars.items() if c.get()]
-            if cal != form.list_value("calibration_trials"):
-                form.set_list("calibration_trials", cal)
-            if nor != form.list_value("normalisation_trials"):
-                form.set_list("normalisation_trials", nor)
-
-            types = form.trial_types()
-            for name, (_, _, v_type) in trial_vars.items():
-                want = v_type.get().strip()
-                if want and want != types.get(name, ""):
-                    form.set_trial_type(name, want)
-
-            cee = form.value("ceinms") or {}
-            changed = {k: v.get().strip() for k, v in ceinms_vars.items()
-                       if v.get().strip() and v.get().strip() != str(cee.get(k, ""))}
-            if changed:
-                form.set_ceinms(**changed)
-            if bool(cee.get("calibrated", True)) != v_calibrated.get():
-                form.set_ceinms(calibrated="true" if v_calibrated.get() else "false")
-            if v_default_cal.get() and v_default_cal.get() != str(
-                    form.value("default_calibration") or ""):
-                form.set_scalar("default_calibration", v_default_cal.get())
-
-            emg_now = {}
-            for key, var in emg_vars.items():
-                text = var.get().strip()
-                if text:
-                    emg_now[key] = float(text)
-            if emg_now:
-                form.set_emg_filter(**emg_now)
-
-            blocks = form.iterations()
-            for name, fields in iter_vars.items():
-                block = blocks.get(name, {})
-                for key, (var, kind) in fields.items():
-                    want = var.get() if kind == "bool" else var.get().strip()
-                    if kind == "bool":
-                        if bool(block.get(key, want)) != want or key not in block:
-                            form.set_iteration_field(name, key, want)
-                    elif want and want != str(block.get(key, "")):
-                        form.set_iteration_field(name, key, want)
-
+            _collect(form)
             if not form.dirty():
                 v_status.set("nothing changed")
                 return
@@ -471,6 +521,11 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
     def show_diff():
         form = state["form"]
         if not form or not form.exists:
+            return
+        try:
+            _collect(form)          # the whole point: preview what SAVE would do
+        except Exception as exc:                                  # noqa: BLE001
+            messagebox.showerror("bioscout", f"{type(exc).__name__}: {exc}")
             return
         save_preview = form.diff() or "(no unsaved changes)"
         win = tk.Toplevel(root)

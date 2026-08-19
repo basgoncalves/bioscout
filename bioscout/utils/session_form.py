@@ -376,6 +376,23 @@ class SessionForm:
     def delete_iteration(self, name: str) -> None:
         self.doc.delete_entry(self.doc.ensure_mapping("iterations"), name)
 
+    def delete_trial(self, name: str) -> None:
+        """Remove a trial from `trials:` and from every list that names it.
+
+        Leaving the name behind in `calibration_trials:` or
+        `normalisation_trials:` would resurrect it as a trial with no block —
+        the same dangling reference the red flags complain about — so the
+        lists are pruned in the same edit. Nothing on disk is touched: the
+        trial's folder, if it has one, is the user's to delete.
+        """
+        self.doc.delete_entry(self.doc.ensure_mapping("trials"), name)
+        for key in ("calibration_trials", "normalisation_trials"):
+            current = self.list_value(key)
+            if name in current:
+                self.set_list(key, [n for n in current if n != name])
+        if self.value("static_trial") == name:
+            self.set_scalar("static_trial", "")
+
     # -- emg filter ---------------------------------------------------------- #
     def emg_filter(self) -> Dict[str, Any]:
         """The effective settings, defaults included, for display."""

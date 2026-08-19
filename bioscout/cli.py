@@ -156,17 +156,43 @@ def build_parser() -> argparse.ArgumentParser:
     sed_.add_argument("--no-gui", action="store_true",
                       help="do not open the editor (there is no flag equivalent yet)")
 
-    se = ss.add_parser("export", help="c3d -> 2_experimental (markers, GRF, EMG)")
+    se = ss.add_parser(
+        "export", help="1_c3dfiles/*.c3d -> 2_experimental/<trial>/ (markers, GRF, EMG)",
+        description="Reads each trial's .c3d from the session's 1_c3dfiles/ and "
+                    "writes, per trial, into 2_experimental/<trial>/: "
+                    "marker_experimental.trc, grf.mot + GRF.xml, emg.mot and the "
+                    "filtered emg_filtered.mot. These are MODEL-INDEPENDENT "
+                    "inputs shared by every iteration, which is why they live "
+                    "beside the session and not inside 3_iterations/.")
     se.add_argument("path", metavar="SESSION_PATH")
 
-    sc = ss.add_parser("classify", help="detect what each trial is, from markers/GRF")
+    sc = ss.add_parser(
+        "classify", help="what is each trial? (reads 2_experimental, writes a report)",
+        description="Reads the markers and GRF already exported into "
+                    "2_experimental/<trial>/ — so run `session export` first — "
+                    "and works out what each trial IS (walking, running, squat, "
+                    "jump, static...). Writes movement_detection.yaml + .png "
+                    "into each trial's folder, plus movement_detection/"
+                    "classification.csv (one row per trial) and "
+                    "session_auto_detection.yaml beside the session. "
+                    "session.yaml is NEVER modified unless you pass "
+                    "--write-yaml, and then only when the session has none: a "
+                    "disagreement is reported for you to accept, not applied.")
     sc.add_argument("path", metavar="SESSION_PATH")
     sc.add_argument("--no-plots", action="store_true", help="skip the per-trial QC figures")
     sc.add_argument("--write-yaml", action="store_true",
                     help="also write session.yaml when the session has none "
                          "(an existing one is never modified)")
 
-    si = ss.add_parser("ingest", help="distribute loose .c3d files into the tree")
+    si = ss.add_parser(
+        "ingest", help="copy loose .c3d from a capture folder INTO a session",
+        description="Takes a folder of raw captures straight off the rig "
+                    "(Walk01.c3d, Squat02.c3d, ...) and files them into "
+                    "simulations/<subject>/<session>/1_c3dfiles/, creating the "
+                    "session folder if needed. This is the step BEFORE "
+                    "`session export`: ingest puts the c3d where bioscout "
+                    "looks for it, export turns it into trc/mot. Skip it if "
+                    "you already copied the c3d in by hand.")
     si.add_argument("folder", metavar="C3D_FOLDER")
     si.add_argument("--subject", required=True)
     si.add_argument("--session", required=True)
