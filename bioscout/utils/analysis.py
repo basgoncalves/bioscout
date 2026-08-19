@@ -3196,6 +3196,25 @@ class Analyse:
 
         # Create IK setup file if it doesn't exist or if replace is True
         _os = self._get_openSim()
+        # Skip on the OUTPUT, never on the setup file.
+        #
+        # This used to read: if the setup XML is missing (or replace), write
+        # it; ELSE log "Inverse Kinematics output already exists" and return.
+        # That checked setup_IK.xml and reported it as the OUTPUT. Any run that
+        # failed AFTER writing the setup — an IK that could not assemble, a
+        # missing model, an interrupted batch — left the XML behind, and from
+        # then on IK returned instantly having done nothing, for every trial,
+        # for ever, unless someone passed --replace. ID then failed with
+        # "Inverse Kinematics motion file not found", which reads like an ID
+        # bug and sent us looking in the wrong place. The message was also not
+        # on the minimal-log whitelist, so at LOG_TYPE=minimal the skip was
+        # completely invisible: 16 trials, no [IK] line anywhere in the log.
+        if os.path.exists(self.ik) and not self.replace:
+            self._log(f'[skip] Inverse Kinematics output already exists: {self.ik}')
+            return
+
+        # The setup XML is an INPUT this step regenerates when absent; its
+        # presence says nothing about whether IK has run.
         if not os.path.exists(self.setup_ik) or self.replace:
             _os.create_setup_IK(osim_modelPath=self.model_dir,
                                 marker_trc=self.markers,
@@ -3203,13 +3222,6 @@ class Analyse:
                                 taskSetPath=None,
                                 time_range=self.time_range,
                                 saveXMLPath=self.setup_ik)
-        else:
-            self._log(f'Inverse Kinematics output already exists: {self.ik}')
-            return
-
-        if os.path.exists(self.ik) and not self.replace:
-            print(f'Inverse Kinematics output already exists: {self.ik}')
-            return
 
         # Run IK using OpenSim API
         try:

@@ -85,6 +85,18 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **IK skipped itself for ever after any failed run — silently.** `run_ik`
+  decided whether to skip by testing `setup_IK.xml`, then reported it as
+  *"Inverse Kinematics output already exists"*. Any run that failed AFTER
+  writing that setup (an IK that could not assemble, a missing model, an
+  interrupted batch) left the XML behind, and from then on IK returned
+  instantly having done nothing — for every trial, permanently, unless
+  `--replace` was passed. ID then failed with "Inverse Kinematics motion file
+  not found", which reads like an ID bug. The message was not on the
+  minimal-log whitelist either, so at `LOG_TYPE=minimal` the skip left no
+  trace at all: 16 failed trials with no `[IK]` line anywhere in the log. It
+  now skips on the OUTPUT (like every other stage) and says so on the
+  whitelist; the setup XML is an input it regenerates when absent.
 - **Export failed for every normalisation-only trial.** `Iteration.trial()`
   deliberately prunes the folder of a trial listed under
   `normalisation_trials:` (it produces no iteration outputs), so `t.path` did
