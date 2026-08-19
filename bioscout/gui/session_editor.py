@@ -235,8 +235,10 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 �
 
         trials = form.trials()
         types = form.trial_types()
-        cal = set(form.list_value("calibration_trials"))
-        nor = set(form.list_value("normalisation_trials"))
+        # Per-trial flags first, legacy lists second — same rule the runtime
+        # uses, so the ticks show what a run would actually do.
+        cal = set(form.trial_role("calibration"))
+        nor = set(form.trial_role("emg_normalisation"))
         v_static.set(form.value("static_trial") or "")
 
         section(f"TRIALS ({len(trials)})   —   static · calibration · normalisation · type")
@@ -458,12 +460,14 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 �
         if v_static.get() and v_static.get() != form.value("static_trial"):
             form.set_scalar("static_trial", v_static.get())
 
-        cal = [n for n, (c, _, _) in trial_vars.items() if c.get()]
-        nor = [n for n, (_, c, _) in trial_vars.items() if c.get()]
-        if cal != form.list_value("calibration_trials"):
-            form.set_list("calibration_trials", cal)
-        if nor != form.list_value("normalisation_trials"):
-            form.set_list("normalisation_trials", nor)
+        # Ticking a box writes the PER-TRIAL flag (the schema going forward),
+        # which is how a session migrates itself the first time it is edited.
+        for _role, _idx in (("calibration", 0), ("emg_normalisation", 1)):
+            was = set(form.trial_role(_role))
+            for name, vs in trial_vars.items():
+                want = bool(vs[_idx].get())
+                if want != (name in was):
+                    form.set_trial_role(name, _role, want)
 
         types = form.trial_types()
         for name, (_, _, v_type) in trial_vars.items():

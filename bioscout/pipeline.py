@@ -463,8 +463,10 @@ def run_subject(project_dir=None, subject=None, sessions=None, trials=None,
             # as "every trial contributing to the EMG max", which would sweep
             # in real movement trials. Printing the list is what makes that
             # visible — pass --trial explicitly to force one through.
-            _norm = set(sess._cfg.get("normalisation_trials") or [])
-            _cal = set(sess._cfg.get("calibration_trials") or [])
+            from bioscout.utils.session import (calibration_trial_names as _cal_of,
+                                                normalisation_trial_names as _nrm_of)
+            _norm = set(_nrm_of(sess._cfg))
+            _cal = set(_cal_of(sess._cfg))
             _norm_only = sorted((_norm - _cal) & set(trials_run))
             if _norm_only and (do_exbiomec or do_so or do_ceinms):
                 if trial_filter is None:

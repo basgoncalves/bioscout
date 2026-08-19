@@ -137,6 +137,33 @@ class SessionForm:
         v = self.data.get(key) or []
         return [str(x) for x in v] if isinstance(v, list) else []
 
+    # -- what each trial is FOR --------------------------------------------- #
+    def trial_role(self, role: str) -> List[str]:
+        """Trials with ``role`` — ``"calibration"`` or ``"emg_normalisation"``.
+
+        Reads the per-trial flag first and the legacy top-level list second,
+        exactly like the runtime (``session.calibration_trial_names``), so the
+        form shows what a run would actually do rather than what the file
+        happens to spell.
+        """
+        try:
+            from bioscout.utils.session import _trial_role
+            return _trial_role(self.data, role)
+        except Exception:                                      # noqa: BLE001
+            legacy = {"calibration": "calibration_trials",
+                      "emg_normalisation": "normalisation_trials"}[role]
+            return self.list_value(legacy)
+
+    def set_trial_role(self, trial: str, role: str, on: bool) -> None:
+        """Write ``trials.<trial>.<role>: true|false``.
+
+        The per-trial flag is the schema going forward; writing it here is
+        what migrates a session the first time someone ticks a box in the
+        editor. The legacy list is left alone — ``_trial_role`` already
+        prefers the flag, so the two cannot disagree about this trial.
+        """
+        self.set_trial_field(trial, role, bool(on))
+
     # -- red flags ---------------------------------------------------------- #
     def problems(self) -> List[str]:
         """Human-readable blockers and warnings, worst first. Empty is good."""

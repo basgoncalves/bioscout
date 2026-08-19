@@ -539,6 +539,61 @@ def yaml_bool(v, default=True):
 
 
 # ---------------------------------------------------------------------------
+# What is each trial FOR? — per-trial flags, with the legacy lists as fallback
+# ---------------------------------------------------------------------------
+#: The per-trial keys that replaced the top-level ``calibration_trials:`` and
+#: ``normalisation_trials:`` lists (2026-08-19)::
+#:
+#:     trials:
+#:       HAB1:
+#:         type: emg_only
+#:         emg_normalisation: true
+#:       SquatNorm4:
+#:         type: squat
+#:         calibration: true
+#:
+#: A trial's facts belong in the trial's own block. The lists could name a
+#: trial that had no block at all — a dangling reference the session editor
+#: has a red flag for precisely because the schema allowed it — and answering
+#: "what is this trial for?" meant reading three places. Both forms are
+#: accepted for one release: where a trial says nothing, the lists still
+#: decide, so no session breaks on the day this lands.
+TRIAL_ROLE_KEYS = {"calibration": "calibration_trials",
+                   "emg_normalisation": "normalisation_trials"}
+
+
+def _trial_role(cfg, role):
+    """Trials with ``role`` (``"calibration"`` / ``"emg_normalisation"``).
+
+    Per-trial flags win where present; the legacy top-level list supplies the
+    rest. Order follows ``trials:`` for flagged trials and the list's own
+    order for legacy ones — calibration order matters (the first trial is the
+    driver), which is the one thing the lists were genuinely better at.
+    """
+    trials = cfg.get("trials") or {}
+    flagged, refused = [], set()
+    for name, meta in trials.items():
+        v = (meta or {}).get(role)
+        if v is None:
+            continue
+        (flagged.append(name) if yaml_bool(v) else refused.add(name))
+    legacy = [n for n in _as_list(cfg.get(TRIAL_ROLE_KEYS[role]))
+              if n not in refused and n not in flagged]
+    return flagged + legacy
+
+
+def calibration_trial_names(cfg):
+    """Trials that calibrate CEINMS, per-trial `calibration:` first."""
+    return _trial_role(cfg, "calibration")
+
+
+def normalisation_trial_names(cfg):
+    """Trials that feed the session EMG maximum, per-trial
+    `emg_normalisation:` first."""
+    return _trial_role(cfg, "emg_normalisation")
+
+
+# ---------------------------------------------------------------------------
 # emg_map: one flat map, or several NAMED maps selected per iteration
 # ---------------------------------------------------------------------------
 #: session.yaml key naming which mapping iterations use when they don't say.
@@ -1127,8 +1182,10 @@ def read_session_yaml(path) -> SessionSpec:
         _dc = data.get(DEFAULT_CALIBRATION_KEY)
         spec.default_calibration = str(_dc) if _dc is not None else None
     spec.ceinms = {str(k): str(v) for k, v in (data.get("ceinms") or {}).items()}
-    spec.normalisation_trials = _as_list(data.get("normalisation_trials"))
-    spec.calibration_trials = _as_list(data.get("calibration_trials"))
+    # Per-trial `calibration:` / `emg_normalisation:` flags win; the legacy
+    # top-level lists fill in the rest (see TRIAL_ROLE_KEYS).
+    spec.normalisation_trials = normalisation_trial_names(data)
+    spec.calibration_trials = calibration_trial_names(data)
 
     for tname, entry in (data.get("trials") or {}).items():
         entry = dict(entry or {})
@@ -1139,6 +1196,11 @@ def read_session_yaml(path) -> SessionSpec:
             out["time_range"] = [float(x) for x in entry["time_range"]]
         if entry.get("events") is not None:
             out["events"] = [float(x) for x in entry["events"]]
+        # Per-trial role flags — carried through so a round-trip does not
+        # quietly drop them back onto the legacy lists.
+        for _role in TRIAL_ROLE_KEYS:
+            if entry.get(_role) is not None:
+                out[_role] = yaml_bool(entry[_role])
         spec.trials[str(tname)] = out
     return spec
 
@@ -2326,8 +2388,8 @@ class Iteration:
         # constructor already created, so 20+ MVIC captures do not each leave
         # an empty {external_biomechanics, ceinms, ...} tree per iteration
         # (reported 2026-08-17, FAIS 022).
-        _norm_only = (name in set(self._cfg.get("normalisation_trials") or [])
-                      and name not in set(self._cfg.get("calibration_trials") or []))
+        _norm_only = (name in set(normalisation_trial_names(self._cfg))
+                      and name not in set(calibration_trial_names(self._cfg)))
         t._scaffold_output_dirs = not _norm_only
         t._apply_inputs_layout()
         self._apply_session_config(t, name, force_type)     # session.yaml is the source of truth

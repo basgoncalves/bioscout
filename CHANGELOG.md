@@ -85,6 +85,21 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **A trial's role lives in the trial's own block.** `trials.<name>.calibration`
+  and `trials.<name>.emg_normalisation` replace the top-level
+  `calibration_trials:` / `normalisation_trials:` lists. The lists could name a
+  trial that had no block at all — the dangling reference the session editor
+  has a red flag for *because the schema allowed it* — and "what is this trial
+  for?" needed three lookups. Both forms are read for one release
+  (`session.calibration_trial_names` / `normalisation_trial_names`): a
+  per-trial flag wins, the list fills in the rest, and an explicit
+  `false` overrides a legacy list entry. Ticking a box in the session editor
+  writes the flag, so a session migrates itself the first time it is edited.
+- **`subject: 023` was being read as 19.** Unquoted, it is OCTAL in YAML 1.1 —
+  and every FAIS id made of digits 0-7 was silently converted (022→18,
+  021→17, 020→16, 013→11, 010→8), while 009/018/019 survived only because 8
+  and 9 are not octal digits. The field never held a "participant number"; it
+  held a corrupted folder id. It is now written quoted.
 - **IK skipped itself for ever after any failed run — silently.** `run_ik`
   decided whether to skip by testing `setup_IK.xml`, then reported it as
   *"Inverse Kinematics output already exists"*. Any run that failed AFTER
