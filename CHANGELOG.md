@@ -82,6 +82,10 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
   `BIOSCOUT_LOG=0` disables bioscout's own file logging when a parent
   process already tees all output (one run = one log file).
 
+- **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
+  exits with unittest's status — handled before the heavy imports, so it
+  starts instantly and still reports in a half-built environment.
+
 ### Changed
 - **All run logs land in `<project>/logs/`** as uniform
   `bioscout_<date>_<time>.txt` — `Session.open`/`Iteration.open` no longer
@@ -103,6 +107,20 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
   `sys.__stdout__` — the kernel process's terminal, not the cell. It now tees
   onto the CURRENT stdout, unfiltered in notebooks (`bioscout/tests/
   test_logging.py` pins both failure modes).
+- **Terminal twin of the same bug**: a plain
+  `python -c "...; print('run ok:', ...)"` never showed its final print — the
+  LOG_TYPE="minimal" whitelist ate it. The filter now applies ONLY when
+  bioscout's own CLI owns the console (`__main__` sets
+  `BIOSCOUT_LOG_FILTER=1`); library use — notebooks, scripts, `python -c` —
+  passes everything through raw.
+- **"No model found" warning listed the same candidate twice** (`so_model`
+  consulted under both its own key and the requested key), and the trial then
+  ran with whatever stale `model_dir` sat in its `trial_settings.xml` — often
+  a legacy `../../models/<subject>/<session>/scaled.osim` path, so the
+  eventual "Model file not found" error named a ghost. Deduped, the warning
+  now names the personalised/generic search roots, and the UNRESOLVED
+  configured model is passed through so downstream errors point at the model
+  the session actually asked for.
 - **UI scaling stability**: scaling applied before geometry restore, geometry
   saved through `_reverse_geometry_scaling` (a 120 % window grew ~20 % per
   launch), Start-maximised takes precedence over the remembered geometry.

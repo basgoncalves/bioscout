@@ -24,6 +24,13 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Mark this process as bioscout-CLI-owned. utils.shared.start_logging applies
+# the LOG_TYPE line filter ONLY when this is set: batch runs get the readable
+# filtered console, while bioscout imported as a library (a notebook, a user's
+# script, `python -c`) passes everything through raw — otherwise the user's own
+# print() calls match no whitelist entry and silently vanish.
+os.environ.setdefault("BIOSCOUT_LOG_FILTER", "1")
+
 # ---------------------------------------------------------------------------
 # The environment bootstrap runs BEFORE every heavy import below, and exits.
 #
@@ -45,6 +52,16 @@ if sys.argv[1:] and sys.argv[1].startswith("-"):
     _hint = _hint_for(sys.argv[1:])
     if _hint:
         print(_hint)
+
+# `bioscout -test` runs the packaged suite and exits — early, before the heavy
+# imports, so the command starts instantly and still reports in a half-built
+# environment (the test modules import what they test and skip what is
+# missing). Exit code follows unittest: 0 all green, 1 otherwise.
+if {"-test", "--test", "-tests", "--tests"} & set(sys.argv[1:]):
+    import unittest
+    from bioscout.tests import suite as _suite
+    _res = unittest.TextTestRunner(verbosity=2).run(_suite())
+    sys.exit(0 if _res.wasSuccessful() else 1)
 
 _ENV_FLAGS = {"--env", "--env-check", "--env_check", "--env-create", "--env_create"}
 if _ENV_FLAGS & set(sys.argv[1:]):

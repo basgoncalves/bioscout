@@ -2583,7 +2583,9 @@ class Iteration:
         # (IK/ID/MA) before the slow muscle-opt has produced scaled_opt_*.
         _tried = []
         for mfile in (it.get(mkey), it.get("so_model"), it.get("ceinms_model"), "scaled.osim"):
-            if not mfile:
+            # dedupe: when mkey IS "so_model" (or the two keys share a value)
+            # the same candidate would be tried — and reported — twice.
+            if not mfile or str(mfile) in _tried:
                 continue
             _tried.append(str(mfile))
             mpath = self.resolve_model_file(mfile)
@@ -2594,7 +2596,16 @@ class Iteration:
             if _tried:               # a model WAS configured but none resolved
                 print(f"[Session] {self.label}: [warn] no model file found for "
                       f"{name} — tried {', '.join(_tried)} in the iteration "
-                      f"folder, the session folder and <project>/models/")
+                      f"folder, the session folder, "
+                      f"<project>/models/personalised/<subject>/ and "
+                      f"<project>/models/generic/")
+                # Still set model_dir — to the model the session ASKED for.
+                # Without this the trial keeps whatever stale value sits in its
+                # trial_settings.xml (often a legacy ../../models/<subj>/<sess>/
+                # relative path from a pre-reorg run), and the downstream
+                # "Model file not found" error names THAT ghost instead of the
+                # configured model, sending the reader to the wrong place.
+                cfg["model_dir"] = _tried[0]
         if self._setup_dir:
             cfg["setup_dir"] = self._setup_dir
         return cfg

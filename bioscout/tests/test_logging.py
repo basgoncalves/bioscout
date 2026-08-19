@@ -112,21 +112,49 @@ class TestStartLogging(unittest.TestCase):
                 shared.in_notebook, shared._log_verbosity = real_nb, real_v
             self.assertIn("2.0.0c1", cell.getvalue())
 
-    def test_console_run_still_filters(self):
-        """Batch behaviour is unchanged: outside a kernel the log stays terse."""
+    def test_cli_run_still_filters(self):
+        """Batch behaviour is unchanged: under bioscout's own CLI (which sets
+        BIOSCOUT_LOG_FILTER=1 in __main__) the console stays terse."""
         with _Reset() as r:
             console = io.StringIO()
             sys.stdout = console
             real_nb, real_v = shared.in_notebook, shared._log_verbosity
             shared.in_notebook = lambda: False
             shared._log_verbosity = lambda: "minimal"
+            old_env = os.environ.get("BIOSCOUT_LOG_FILTER")
+            os.environ["BIOSCOUT_LOG_FILTER"] = "1"
             try:
                 shared.start_logging("test", log_dir=r.dir)
                 before = console.getvalue()
                 print("an ordinary line nobody whitelisted")
             finally:
                 shared.in_notebook, shared._log_verbosity = real_nb, real_v
+                if old_env is None:
+                    os.environ.pop("BIOSCOUT_LOG_FILTER", None)
+                else:
+                    os.environ["BIOSCOUT_LOG_FILTER"] = old_env
             self.assertEqual(console.getvalue(), before)
+
+    def test_library_use_is_not_filtered(self):
+        """The 2026-08-19 terminal twin of the notebook bug: a plain
+        `python -c "...; print('run ok:', ...)"` never showed its final print
+        under LOG_TYPE="minimal". Library use (no BIOSCOUT_LOG_FILTER) must
+        pass the user's own output through raw."""
+        with _Reset() as r:
+            console = io.StringIO()
+            sys.stdout = console
+            real_nb, real_v = shared.in_notebook, shared._log_verbosity
+            shared.in_notebook = lambda: False
+            shared._log_verbosity = lambda: "minimal"
+            old_env = os.environ.pop("BIOSCOUT_LOG_FILTER", None)
+            try:
+                shared.start_logging("test", log_dir=r.dir)
+                print("run ok: False")
+            finally:
+                shared.in_notebook, shared._log_verbosity = real_nb, real_v
+                if old_env is not None:
+                    os.environ["BIOSCOUT_LOG_FILTER"] = old_env
+            self.assertIn("run ok: False", console.getvalue())
 
     def test_writes_a_log_file(self):
         with _Reset() as r:

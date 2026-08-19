@@ -389,10 +389,15 @@ def start_logging(name="run", log_dir=None, filename=None, append=False):
     # cell ran, succeeded, and displayed nothing. In a normal console the two
     # are the same object, so this changes nothing there.
     #
-    # `raw` in a notebook: the LOG_TYPE line filter is for batch logs. A user's
-    # own print() matches no whitelist entry, so under the default
-    # LOG_TYPE="minimal" it would be dropped even after the fix above.
-    _raw = in_notebook()
+    # `raw` unless bioscout's own CLI is driving: the LOG_TYPE line filter is
+    # for batch logs. A user's own print() matches no whitelist entry, so under
+    # the default LOG_TYPE="minimal" it would be dropped — first seen in
+    # notebooks, then again in a plain `python -c "...; print('run ok:', ...)"`
+    # where the final print never reached the terminal. The rule is therefore
+    # about WHO owns the console: `bioscout run ...` (batch/CLI — __main__ sets
+    # BIOSCOUT_LOG_FILTER=1) filters; bioscout imported as a library (notebook,
+    # script, python -c) does not.
+    _raw = in_notebook() or os.environ.get("BIOSCOUT_LOG_FILTER") != "1"
     sys.stdout = _Tee(sys.stdout or sys.__stdout__, f, raw=_raw)
     sys.stderr = _Tee(sys.stderr or sys.__stderr__, f, raw=_raw)
     # OpenSim's C++ [info]/[warning] lines are fd-level, so the Python tee above
