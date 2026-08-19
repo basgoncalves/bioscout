@@ -1154,6 +1154,7 @@ class MainWindow(ctk.CTk):
                 f"Could not start a new instance:\n{e}", parent=self)
             return
         # Close this window and hard-exit so the two instances don't clash.
+        self._release_std_streams()
         try:
             self.destroy()
         finally:
@@ -1216,11 +1217,28 @@ class MainWindow(ctk.CTk):
         except Exception as exc:                               # noqa: BLE001
             logger.debug(f"could not save window geometry: {exc}")
 
+    @staticmethod
+    def _release_std_streams() -> None:
+        """Point sys.stdout/stderr back at the real streams.
+
+        They are redirected into the console WIDGET while the app runs, so any
+        print that happens after destroy() — an atexit hook, a daemon thread,
+        Tcl teardown chatter — writes to a dead Tcl object and explodes as
+        `TclError ... !scrolledtext` + "lost sys.stderr" on every exit. Detach
+        BEFORE the widgets die and those late writes land harmlessly in the
+        terminal instead."""
+        try:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+        except Exception:                                      # noqa: BLE001
+            pass
+
     def on_closing(self) -> None:
         """Handle application closing."""
         if messagebox.askokcancel("Quit", "Do you want to quit?"):
             self._save_window_geometry()
             logger.info("Application closed")
+            self._release_std_streams()
             self.destroy()
 
     def run(self) -> None:

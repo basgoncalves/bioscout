@@ -138,6 +138,13 @@ def suite():
             s.addTests(loader.loadTestsFromTestCase(_cls))
     except Exception as _e:  # pragma: no cover
         print(f"[tests] file_edit tests unavailable: {_e}")
+    # logging: the stdout tee and the two ways it ate notebook output.
+    try:
+        from . import test_logging as _tlog
+        for _cls in (_tlog.TestTee, _tlog.TestStartLogging):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] logging tests unavailable: {_e}")
     # run_check: the anti-silent-failure toolbox (stage-output verification,
     # emg_map validation, duplicate-YAML-key scan, MAX_PATH preflight). Pure
     # stdlib and imported by file path, so it runs EVERYWHERE — these pin the

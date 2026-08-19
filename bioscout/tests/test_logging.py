@@ -86,8 +86,16 @@ class TestStartLogging(unittest.TestCase):
         with _Reset() as r:
             cell = io.StringIO()                 # stands in for ipykernel's stream
             sys.stdout = cell
-            shared.start_logging("test", log_dir=r.dir)
-            print("visible in the cell")
+            # verbosity pinned: this test is about ROUTING, and under a real
+            # project settings module LOG_TYPE="minimal" would filter the
+            # probe line away and fail the test for the wrong reason.
+            real_v = shared._log_verbosity
+            shared._log_verbosity = lambda: "detailed"
+            try:
+                shared.start_logging("test", log_dir=r.dir)
+                print("visible in the cell")
+            finally:
+                shared._log_verbosity = real_v
             self.assertIn("visible in the cell", cell.getvalue())
 
     def test_notebook_output_is_not_filtered(self):
@@ -123,7 +131,12 @@ class TestStartLogging(unittest.TestCase):
     def test_writes_a_log_file(self):
         with _Reset() as r:
             sys.stdout = io.StringIO()
-            shared.start_logging("test", log_dir=r.dir)
+            real_v = shared._log_verbosity
+            shared._log_verbosity = lambda: "detailed"
+            try:
+                shared.start_logging("test", log_dir=r.dir)
+            finally:
+                shared._log_verbosity = real_v
             logs = [f for f in os.listdir(r.dir) if f.endswith(".log")]
             self.assertEqual(len(logs), 1)
             self.assertTrue(logs[0].startswith("bioscout_"))
