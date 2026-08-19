@@ -138,6 +138,18 @@ def suite():
             s.addTests(loader.loadTestsFromTestCase(_cls))
     except Exception as _e:  # pragma: no cover
         print(f"[tests] file_edit tests unavailable: {_e}")
+    # run_check: the anti-silent-failure toolbox (stage-output verification,
+    # emg_map validation, duplicate-YAML-key scan, MAX_PATH preflight). Pure
+    # stdlib and imported by file path, so it runs EVERYWHERE — these pin the
+    # silent-failure traps of IMPLEMENTATIONS §1, whose regressions would by
+    # definition print nothing.
+    try:
+        from . import test_run_check as _rck
+        for _cls in (_rck.TestDuplicateYamlKeys, _rck.TestValidateEmgMap,
+                     _rck.TestVerifyRun, _rck.TestLongPaths):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] run_check tests unavailable: {_e}")
     # plot: the tidy table, the muscle-work integral and the comparison
     # figures. numpy + pandas + matplotlib only — no OpenSim, no scipy — so a
     # collaborator with nothing but the results table can still check it.

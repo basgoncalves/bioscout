@@ -43,28 +43,28 @@ bioscout verb behind them.
 
 ### Silent-failure traps (the worst kind)
 
-- **[open] EMG channel mapping is not validated.** The c3ds in FAIS export
+- **[fixed 2026-08-19] EMG channel mapping is not validated.** The c3ds in FAIS export
   every electrode TWICE — a bare `Voltage_N` and a tagged `Voltage_N-VM`
   (the conditioned signal). The generated `emg_map` keyed the bare names, and
   bioscout normalised, calibrated and executed CEINMS on the wrong columns
   without a single warning. Needed: at export time, compare `emg_map` keys
   against the analog labels; warn on bare/tagged duplicates; fail when a
   mapped key does not exist. (Project-side fix: `FAIS code/fix_emg_maps.py`.)
-- **[open] Missing stage outputs do not fail the run.** A run can end
+- **[fixed 2026-08-19] Missing stage outputs do not fail the run.** A run can end
   `[settings] done` with export having failed on every trial (seen 2026-08-17:
   the whole pipeline "succeeded" without `opensim` importable — the export
   errors scrolled past and later stages just found nothing to do). Needed: a
   per-trial, per-stage ok/MISS verification as part of the run, non-zero exit
   when a requested stage produced nothing. (Project-side fix:
   `simulate.py verify()`.)
-- **[open] Generated session.yaml can contain duplicate mapping keys**
+- **[fixed 2026-08-19] Generated session.yaml can contain duplicate mapping keys**
   (`Voltage_1:` twice) — YAML silently keeps the last one. The writer should
   refuse to emit a duplicate key.
-- **[open] TRC export silently skips trials** it cannot process; the run
+- **[fixed 2026-08-19 via the verify table] TRC export silently skips trials** it cannot process; the run
   summary does not name them.
 - **[open] The mtime gate** ("output newer than input → skip") surprises
   users after any file copy/restore; there is no `--why-skipped` explanation.
-- **[open] Windows MAX_PATH.** Session trees + CEINMS execution folder names
+- **[fixed 2026-08-19] Windows MAX_PATH.** Session trees + CEINMS execution folder names
   exceed 260 chars at ~220-char project roots; failures appear as "file not
   found" deep inside OpenSim. Needs an up-front path-length check.
 - **[fixed 2026-08-17] A model that has been moved loads with NO BONES, in
@@ -80,6 +80,17 @@ bioscout verb behind them.
   ignoring filename case (works on Windows, fails on Linux) and one found only
   by absolute path (points somewhere else on any other machine). *Lesson: the
   tier that resolved a path is the finding, not whether it resolved.*
+
+  *2026-08-19: the five fixes above land in `bioscout/utils/run_check.py`
+  (stdlib-only; 15 tests in `tests/test_run_check.py`): `Iteration.run` ends
+  with a trial × stage ok/MISS table + `run_report.json` and marks the run
+  incomplete; `run_emg_normalise` REFUSES emg_map channels that exist in no
+  trial and warns on bare/tagged twins; session.yaml is scanned for duplicate
+  keys on every read (loud warning naming both lines) and
+  `write_session_yaml` refuses to emit one; a Windows preflight names paths
+  within 40 chars of MAX_PATH before the run starts. Still open from this
+  list: the mtime-gate `--why-skipped` (the only mtime gate found, MA-vs-model,
+  already logs its reason; `skip_done` is currently a dead parameter).*
 
 ### Operational
 

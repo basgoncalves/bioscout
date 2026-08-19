@@ -1238,6 +1238,21 @@ def write_session_yaml(spec: SessionSpec, path=None) -> str:
     # session.yaml is worse than none, because the next command believes it.
     text = yaml.safe_dump(_yamlable(_spec_to_dict(spec)), sort_keys=False,
                           default_flow_style=False, allow_unicode=True)
+    # A writer must never emit a file that lies when read back: YAML keeps
+    # the LAST of two duplicate keys in silence, so a duplicate here becomes
+    # someone else's wrong result later. safe_dump from a dict cannot
+    # normally produce one — this guards the merge/patch paths that build
+    # the spec from several sources, which is where the FAIS duplicates
+    # actually came from.
+    try:
+        from . import run_check as _rc
+        _dups = _rc.duplicate_yaml_keys(text)
+        if _dups:
+            raise ValueError(
+                "refusing to write session.yaml with duplicate keys: "
+                + ", ".join(f"{k!r} (lines {a}/{b})" for k, a, b in _dups))
+    except ImportError:
+        pass
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path
@@ -2173,6 +2188,20 @@ class Iteration:
             import yaml
         except Exception:
             return {}
+        # Duplicate keys are checked on the TEXT: by the time the loader has
+        # run they are gone — yaml.safe_load keeps the last value in silence,
+        # which is how a generated file with `Voltage_1:` twice calibrated on
+        # the wrong data without a word (IMPLEMENTATIONS §1).
+        try:
+            from . import run_check as _rc
+            with open(path, "r", encoding="utf-8", errors="replace") as _fh:
+                _dups = _rc.duplicate_yaml_keys(_fh.read())
+            for _k, _a, _b in _dups:
+                print(f"[session.yaml WARNING] {path}: duplicate key {_k!r} "
+                      f"(lines {_a} and {_b}) — YAML silently keeps line {_b} "
+                      f"and DISCARDS line {_a}. Fix the file.")
+        except Exception:                                      # noqa: BLE001
+            pass
         return load_session_yaml(path)
 
     @staticmethod
@@ -2695,6 +2724,41 @@ class Iteration:
         chans = set()
         for env in envelopes.values():
             chans |= {c for c in env.columns if c != 'time'}
+
+        # -- VALIDATE the emg_map against the labels that actually exist.
+        # The FAIS trap: every electrode exported twice (bare Voltage_N + the
+        # conditioned Voltage_N-VM); a map keyed on the bare names normalised
+        # and CALIBRATED CEINMS on the raw columns without one warning. A
+        # mapped channel that exists nowhere is a hard refusal — normalising
+        # would silently produce nothing for it; a bare name shadowed by a
+        # tagged sibling is a loud warning, because only the rig's owner
+        # knows which column is the signal.
+        try:
+            from . import run_check as _rc
+        except Exception:                                      # noqa: BLE001
+            _rc = None
+        if _rc is not None:
+            try:
+                _map = resolve_emg_map(self._cfg,
+                                       getattr(self, "iteration", None),
+                                       strict=False) or {}
+            except Exception:                                  # noqa: BLE001
+                _map = {}
+            if _map:
+                _v = _rc.validate_emg_map(_map.keys(), chans)
+                for _bare, _tag in _v["suspicious"]:
+                    print(f"[Session] {self.label}: EMG MAP WARNING — map "
+                          f"keys {_bare!r} but the recording also has "
+                          f"{_tag!r}; if the tagged column is the "
+                          f"conditioned signal, the map normalises the RAW "
+                          f"one. Check session.yaml's emg_map.")
+                if _v["missing"]:
+                    raise RuntimeError(
+                        f"emg_map channels not present in any trial's EMG: "
+                        f"{_v['missing']} — available: {sorted(chans)[:12]}"
+                        f"{'...' if len(chans) > 12 else ''}. Fix "
+                        f"session.yaml's emg_map; refusing to normalise "
+                        f"against columns that do not exist.")
         session_max, session_max_trial = {}, {}
         for c in chans:
             best_m, best_t = 0.0, None
@@ -3323,6 +3387,24 @@ class Iteration:
                 os.chdir(_cwd0)
                 return res
 
+        # -- Preflight: Windows MAX_PATH. Session trees + CEINMS execution
+        # folder names blow past 260 chars at ~220-char roots, and the
+        # failure surfaces as "file not found" deep inside OpenSim, hours in
+        # (IMPLEMENTATIONS §1). Warn NOW, with the worst offenders named.
+        if os.name == "nt":
+            try:
+                from . import run_check as _rc
+                _hits = _rc.long_paths(self.path)
+                if _hits:
+                    log(f"  [preflight WARNING] {len(_hits)}+ path(s) within "
+                        f"~40 chars of the Windows 260-char limit — CEINMS "
+                        f"execution folders WILL exceed it. Worst: "
+                        f"({_hits[0][0]} chars) {_hits[0][1]}")
+                    log("  [preflight] shorten the project root path or "
+                        "enable Windows long paths.")
+            except Exception:                                  # noqa: BLE001
+                pass
+
         _itc = (self._cfg.get("iterations") or {}).get(self.iteration, {}) or {}
         _ce = (self._cfg.get("ceinms") or {})
 
@@ -3619,6 +3701,38 @@ class Iteration:
                         log(f"  [CEINMS ERROR] {tn}: {e}")
             except Exception as e:
                 log(f"  [CEINMS calibration ERROR]: {e}")
+
+        # -- VERIFY: did every requested stage actually produce output?
+        # A run used to be able to end "[settings] done" with export failed on
+        # every trial — the errors scrolled past and later stages just found
+        # nothing to do (IMPLEMENTATIONS §1). The log says what was ATTEMPTED;
+        # this says what EXISTS, per trial per stage, and the difference is
+        # printed as a table that cannot scroll past unnoticed.
+        try:
+            from . import run_check as _rc
+            _req = [st for st, on in (("export", export),
+                                      ("exbiomec", do_exbiomec),
+                                      ("muscle_analysis", do_muscle_analysis),
+                                      ("so", do_so), ("ceinms", do_ceinms))
+                    if on]
+            if _req and names:
+                _rep = _rc.verify_run(
+                    self.path, names, _req,
+                    experimental_dir=os.path.join(self.session_dir,
+                                                  "2_experimental"))
+                log("  [verify] stage outputs on disk:")
+                for _ln in _rc.format_report(_rep):
+                    log("  " + _ln)
+                _rc.write_report(_rep, os.path.join(self.path,
+                                                    "run_report.json"))
+                res["report"] = _rep
+                res["ok"] = _rep["ok"]
+                if not _rep["ok"]:
+                    log(f"  [verify] RUN INCOMPLETE — {len(_rep['missing'])} "
+                        f"trial-stage(s) produced no output (see "
+                        f"run_report.json). Fix and re-run those stages.")
+        except Exception as _ve:                               # noqa: BLE001
+            log(f"  [verify] could not verify stage outputs: {_ve}")
 
         os.chdir(_cwd0)
         return res
