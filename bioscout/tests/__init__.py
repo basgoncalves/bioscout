@@ -157,6 +157,17 @@ def suite():
             s.addTests(loader.loadTestsFromTestCase(_cls))
     except Exception as _e:  # pragma: no cover
         print(f"[tests] run_check tests unavailable: {_e}")
+    # project_config: project.yaml replaces the copied settings.py (§2.9
+    # steps 1+2) — overlay precedence, and the extractor never persisting run
+    # selection or paths. Imported by file path, stdlib-only at import.
+    try:
+        from . import test_project_config as _pcfg
+        for _cls in (_pcfg.TestFindProjectYaml, _pcfg.TestApply,
+                     _pcfg.TestExtract, _pcfg.TestInitRoundtrip,
+                     _pcfg.TestOverlay):
+            s.addTests(loader.loadTestsFromTestCase(_cls))
+    except Exception as _e:  # pragma: no cover
+        print(f"[tests] project_config tests unavailable: {_e}")
     # plot: the tidy table, the muscle-work integral and the comparison
     # figures. numpy + pandas + matplotlib only — no OpenSim, no scipy — so a
     # collaborator with nothing but the results table can still check it.

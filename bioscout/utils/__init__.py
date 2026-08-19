@@ -104,6 +104,20 @@ except Exception as e:
     print(f"Error importing settings module: {e}")
     settings = None
 
+# project.yaml overlay — step 1 of docs/IMPLEMENTATIONS.md §2.9. Lab facts as
+# DATA, applied on top of whatever settings module resolved above (the
+# project's legacy settings.py, or bioscout's bundled template when there is
+# none). The precedence every consumer sees through `utils.settings` becomes:
+#   session.yaml -> project.yaml -> settings.py (legacy) -> bioscout defaults
+# No project.yaml = nothing changes (plus one deprecation note when a legacy
+# settings.py is carrying the load). Never fatal: configuration loading must
+# not be the thing that stops a run.
+try:
+    from .project_config import overlay as _pyaml_overlay
+    settings = _pyaml_overlay(settings)
+except Exception as _pc_err:                                   # noqa: BLE001
+    print(f"[project.yaml] overlay skipped: {_pc_err}")
+
 # emg_normalise imported at BOTTOM to break circular import chain
 # (emg_normalise -> openSim -> exportC3D -> utils)
 emg_normalise = None

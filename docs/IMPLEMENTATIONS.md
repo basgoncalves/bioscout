@@ -237,19 +237,19 @@ skew" problem actually disappear:
 to declare fits in ~20 data-only lines:
 
 ```yaml
-# project.yaml — lab facts and deviations from convention. No code.
+# project.yaml — lab facts that differ from bioscout's defaults. No code.
+# (schema 1, as implemented 2026-08-19: attribute names are used VERBATIM —
+# `batch:` keys land on BatchSettings, `ceinms:` keys on CEINMSSettings,
+# which is what makes `bioscout project init`'s round-trip exact.)
 schema: 1
 name: FAIS
-lab:
-  markerset: models/utils/markers_FAIS.xml     # session.yaml may override
-  trc_axes: yzx
-  emg_label_pattern: "Voltage"
-  emg_filter: {bandpass_low: 10, bandpass_high: 500, notch: 50}
-defaults:
-  iteration: rajagopal_fai
-  algorithms: [SO, CEINMS]
-# paths: only if the convention is broken, e.g.
-# paths: {simulations: simulations_test}
+log_type: minimal                    # -> settings.LOG_TYPE
+batch:
+  emg_sampling_freq: 2000
+  emg_muscle_mapping: {Voltage_1-VM: [vasmed_r]}
+  MUSCLE_GROUPS: {quads: [recfem_r, vasmed_r, vaslat_r]}
+ceinms:
+  calibration_trial_names: [SquatA1]
 ```
 
 Being data buys what code can never have: the schema can be validated on
@@ -280,12 +280,19 @@ loader, one cache, one schema check.
 
 **Migration, non-breaking, in four steps:**
 
-1. `Project()` prefers `project.yaml`, falls back to `settings.py` with a
-   one-line deprecation note. Nothing breaks on day one.
-2. `bioscout project init` writes a `project.yaml` FROM an existing
-   settings.py (the lab facts are mechanically extractable — BatchSettings
-   attributes map 1:1), so migrating a project is one command plus a diff
-   review.
+1. **[built 2026-08-19]** `Project()` prefers `project.yaml`, falls back to
+   `settings.py` with a one-line deprecation note. Nothing breaks on day
+   one. *(Implemented as `utils/project_config.py::overlay`, applied once at
+   `utils/__init__` import — every consumer of `utils.settings` sees
+   session.yaml → project.yaml → settings.py → bioscout defaults without
+   changing a line. Run selection (`SUBJECTS`, `RUN_*`, ...) and paths are
+   never read from project.yaml by design.)*
+2. **[built 2026-08-19]** `bioscout project init` writes a `project.yaml`
+   FROM an existing settings.py (the lab facts are mechanically extractable —
+   BatchSettings attributes map 1:1), so migrating a project is one command
+   plus a diff review. *(`init_project_yaml`: data-only attributes, diffed
+   against the bundled template so only deviations are written; `--force`
+   keeps a .bak. 11 tests in `tests/test_project_config.py`.)*
 3. Consumers move to `project_config()`: the figure scripts, the movement
    detector, the emg_filter precedence tier (which becomes
    session.yaml → project.yaml → bioscout defaults — same three tiers,

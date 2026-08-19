@@ -85,6 +85,15 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **`project.yaml` replaces the copied per-project `settings.py`**
+  (IMPLEMENTATIONS §2.9 steps 1+2). `utils/project_config.py` applies the
+  nearest `project.yaml` on top of whatever settings resolved, so every
+  consumer of `utils.settings` sees session.yaml → project.yaml →
+  settings.py (legacy) → bioscout defaults; `bioscout project init` extracts
+  a project's settings.py into `project.yaml` (data-only lab facts that
+  differ from bioscout's defaults — run selection and paths are never
+  persisted). After a review run the settings.py can be deleted; a legacy
+  settings.py keeps working with a one-line deprecation note.
 
 ### Changed
 - **All run logs land in `<project>/logs/`** as uniform

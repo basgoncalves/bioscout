@@ -53,7 +53,7 @@ __all__ = ["VERBS", "build_parser", "route", "main", "legacy_hint"]
 
 #: Root verbs. ``__main__`` checks this before it builds the legacy parser.
 VERBS = ("help", "init", "gui", "run", "session", "model", "tps", "plot",
-         "utils", "lab")
+         "utils", "lab", "project")
 
 _EPILOG = """\
 examples:
@@ -86,6 +86,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- gui ----------------------------------------------------------------- #
     sub.add_parser("gui", help="launch the GUI (also the default with no verb)")
+
+    # -- project ------------------------------------------------------------- #
+    pj = sub.add_parser("project",
+                        help="project-level config (project.yaml)")
+    pjs = pj.add_subparsers(dest="action", metavar="ACTION")
+    pji = pjs.add_parser(
+        "init", help="generate project.yaml from an existing settings.py",
+        description="Extracts the lab facts (BatchSettings/CEINMSSettings "
+                    "data attributes that differ from bioscout's defaults) "
+                    "into a declarative project.yaml. After a review run, "
+                    "the settings.py can be deleted — see "
+                    "docs/IMPLEMENTATIONS.md §2.9.")
+    pji.add_argument("path", nargs="?", default=".", metavar="PROJECT_PATH")
+    pji.add_argument("--force", action="store_true",
+                     help="overwrite an existing project.yaml (a .bak is kept)")
 
     # -- run ----------------------------------------------------------------- #
     r = sub.add_parser(
@@ -491,6 +506,12 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
             argv += ["--json", ns.json]
         return _check(argv)
 
+    if v == "project" and a == "init":
+        # Imports the project's settings.py, which needs the full stack — but
+        # the extraction itself is one call and prints its own verdict.
+        from bioscout.utils.project_config import init_project_yaml
+        return init_project_yaml(ns.path, force=ns.force)
+
     if v == "utils" and a == "env":
         from bioscout.envcheck import ensure
         st = ensure(create=bool(ns.create))
@@ -573,7 +594,7 @@ def route(argv: Sequence[str]) -> Tuple[str, object]:
 
     # A verb with subcommands, given none: show that verb's help rather than
     # silently doing nothing.
-    if ns.verb in ("session", "model", "utils", "lab", "plot") and not getattr(ns, "action", None):
+    if ns.verb in ("session", "model", "utils", "lab", "plot", "project") and not getattr(ns, "action", None):
         parser.parse_args([ns.verb, "--help"])          # exits
 
     code = _direct(ns)
