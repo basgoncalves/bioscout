@@ -138,6 +138,20 @@ def apply(base, data, source="project.yaml"):
     return n
 
 
+#: Announce-once guard. ``bioscout/utils`` is imported under TWO module names
+#: (``bioscout.utils`` and, via the sys.path insert in __main__, top-level
+#: ``utils``), so ``overlay`` runs twice per process — apply both times (each
+#: module object has its own ``settings``), announce once. Keyed on an env var
+#: rather than a module global for the same two-copies reason.
+_ANNOUNCED_ENV = "_BIOSCOUT_PROJECT_YAML_ANNOUNCED"
+
+
+def _announce(msg):
+    if os.environ.get(_ANNOUNCED_ENV) != msg:
+        os.environ[_ANNOUNCED_ENV] = msg
+        print(msg)
+
+
 def overlay(settings_obj, start=None):
     """Apply the nearest project.yaml on top of ``settings_obj`` and return
     the result. With no project.yaml this is a near no-op (one deprecation
@@ -149,9 +163,9 @@ def overlay(settings_obj, start=None):
         if not ypath:
             bfile = getattr(base, "__file__", None)
             if bfile and _package_dir() not in os.path.abspath(bfile):
-                print("[settings] note: per-project settings.py is deprecated "
-                      "— `bioscout project init` generates project.yaml "
-                      "from it (docs/IMPLEMENTATIONS.md §2.9).")
+                _announce("[settings] note: per-project settings.py is "
+                          "deprecated — `bioscout project init` generates "
+                          "project.yaml from it (IMPLEMENTATIONS.md §2.9).")
             return base
         if base is None:
             base = types.SimpleNamespace()
@@ -162,7 +176,7 @@ def overlay(settings_obj, start=None):
         n = apply(base, data)
         legacy = os.path.join(os.path.dirname(ypath), "settings.py")
         tail = " (wins over the legacy settings.py)" if os.path.isfile(legacy) else ""
-        print(f"[project.yaml] {ypath} — {n} fact(s) applied{tail}")
+        _announce(f"[project.yaml] {ypath} — {n} fact(s) applied{tail}")
     except Exception as e:                                     # noqa: BLE001
         print(f"[project.yaml] overlay failed ({e}) — continuing without it")
     return base

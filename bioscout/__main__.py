@@ -471,6 +471,14 @@ if getattr(args, 'run_subject', None) is not None:
     _rs_subject  = None if args.run_subject == '__ALL__' else args.run_subject
     _rs_sessions = [s.strip() for s in args.session.split(',')] if args.session else None
     _rs_trials   = [t.strip() for t in args.trial.split(',')] if args.trial else None
+    # Stage selection: no stage flag = the historical full pipeline (SO +
+    # CEINMS); any stage flag = ONLY the named stages. This replaces the
+    # DO_SO/DO_CEINMS block in a project settings.py — see the flag comments
+    # at the parser.
+    _rs_picked   = args.do_exbiomec or args.do_so or args.do_ceinms
+    _rs_exbio    = bool(args.do_exbiomec)
+    _rs_so       = bool(args.do_so) if _rs_picked else True
+    _rs_ceinms   = bool(args.do_ceinms) if _rs_picked else True
     _rs_now      = _dt.datetime.now()
     _rs_ts       = _rs_now.strftime('%Y-%m-%d %H:%M:%S')          # readable, for the heading
     _rs_ldir     = os.path.join(_rs_project, 'logs')
@@ -479,7 +487,8 @@ if getattr(args, 'run_subject', None) is not None:
     _rs_logpath  = os.path.join(_rs_ldir, f"bioscout_{_rs_now:%Y%m%d_%H%M%S}.log")
     print(f"[run_subject] project={_rs_project}  subject={_rs_subject or 'ALL'}  "
           f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
-          f"replace={args.replace}", flush=True)
+          f"replace={args.replace}  stages: exbiomec={_rs_exbio} "
+          f"so={_rs_so} ceinms={_rs_ceinms}", flush=True)
     print(f"[run_subject] log -> {_rs_logpath}", flush=True)
 
     class _RSTee:
@@ -505,7 +514,8 @@ if getattr(args, 'run_subject', None) is not None:
         f"\n{'=' * 72}\n"
         f"=== run_subject  subject={_rs_subject or 'ALL'}  "
         f"sessions={_rs_sessions or 'ALL'}  trials={_rs_trials or 'ALL'}  "
-        f"replace={args.replace}  export={args.export}   {_rs_ts}\n"
+        f"replace={args.replace}  export={args.export}  "
+        f"exbiomec={_rs_exbio} so={_rs_so} ceinms={_rs_ceinms}   {_rs_ts}\n"
         f"{_RS_DISCLAIMER}\n"
         f"{'=' * 72}\n")
     _rs_fh.flush()
@@ -523,7 +533,8 @@ if getattr(args, 'run_subject', None) is not None:
         _bioscout.pipeline.run_subject(
             project_dir=_rs_project, subject=_rs_subject,
             sessions=_rs_sessions, trials=_rs_trials, replace=args.replace,
-            export=args.export, reset=args.reset)
+            export=args.export, reset=args.reset,
+            do_exbiomec=_rs_exbio, do_so=_rs_so, do_ceinms=_rs_ceinms)
     except Exception as _rs_e:
         import traceback as _rs_tb
         print(f"[run_subject] FAILED: {type(_rs_e).__name__}: {_rs_e}", flush=True)
