@@ -2936,7 +2936,64 @@ class Iteration:
             print(f"[paths] {note}")
         return str(got) if got.ok else rel
 
-    def link_geometry(self, generic_model_path, name="Geometry"):
+    @property
+    def subject_name(self):
+        """This session's subject id — the folder above the session."""
+        return os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
+
+    def models_dir(self, create=False):
+        """Where THIS session's personalised models are written and read:
+        ``<project>/models/personalised/<subject>/``.
+
+        Models are a property of the SUBJECT, not of a session or an
+        iteration: 022's pre, post and sprints sessions all name the same
+        ``models/personalised/022/022_Rajagopal2015_FAI.osim``, because the
+        anatomy did not change between the morning and the afternoon.
+        Writing them into the iteration folder instead — which is what
+        scaling did until 2026-08-19 — scattered one model per
+        subject × session × iteration, none of them where session.yaml said
+        the model was, and left the models tree holding only what had been
+        put there by hand.
+        """
+        from bioscout import utils as _u
+        md = str(getattr(_u, "MODELS_DIR", "") or "")
+        if not md:
+            pd = str(getattr(_u, "PROJECT_DIR", None) or os.getcwd())
+            md = os.path.join(pd, "models")
+        out = os.path.join(md, "personalised", self.subject_name)
+        if create:
+            os.makedirs(out, exist_ok=True)
+        return out
+
+    def model_output_path(self, name, default_stem=None):
+        """Absolute path to WRITE a model named ``name`` to.
+
+        The mirror of :meth:`_resolve_model_file` (which finds a model to
+        READ), so a model lands exactly where session.yaml says it will be
+        looked for:
+
+        * absolute path            -> used as given
+        * contains a separator     -> project-relative, e.g.
+          ``models/personalised/023/023_Rajagopal2015_FAI.osim``
+        * bare filename            -> ``models/personalised/<subject>/``
+
+        The bare-filename case is the one that changed: it used to mean the
+        iteration folder.
+        """
+        if not name:
+            name = default_stem or "scaled.osim"
+        name = str(name)
+        if os.path.isabs(name):
+            return name
+        if os.sep in name or "/" in name:
+            from bioscout import utils as _u
+            md = str(getattr(_u, "MODELS_DIR", "") or "")
+            pd = str(getattr(_u, "PROJECT_DIR", None)
+                     or (os.path.dirname(md) if md else os.getcwd()))
+            return os.path.abspath(os.path.join(pd, name))
+        return os.path.join(self.models_dir(create=True), name)
+
+    def link_geometry(self, generic_model_path, name="Geometry", dest_dir=None):
         """Link the generic model's ``Geometry/`` beside the scaled model.
 
         A scaled .osim keeps the generic's relative mesh references
@@ -2967,9 +3024,10 @@ class Iteration:
                 src_geo = _up
             else:
                 return None
-        dst = os.path.join(self.path, name)
+        dst = os.path.join(dest_dir or self.path, name)
         if os.path.isdir(dst) or os.path.islink(dst):
             return dst                      # already linked (or a real folder)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
             if os.name == "nt":
                 import _winapi
@@ -3113,18 +3171,31 @@ class Iteration:
                               f"Using the measured value.")
                     mass = _m
 
+        # Everything this method writes goes to models/personalised/<subject>/,
+        # which is where session.yaml already says the models are (see
+        # models_dir / model_output_path). Until 2026-08-19 they were written
+        # into the ITERATION folder while session.yaml named
+        # models/personalised/<subject>/... — so scaling "succeeded", the run
+        # then could not find the model it had just built, and the loud
+        # no-model-found warning fired for every trial.
+        _mdir = self.models_dir(create=True)
         os.makedirs(self.path, exist_ok=True)
-        scaled = os.path.join(self.path, "scaled.osim")
+        # The intermediate ScaleTool output is subject-prefixed: a subject's
+        # sessions share one models folder, and a bare "scaled.osim" from
+        # `pre` would be silently overwritten by `post`.
+        scaled = os.path.join(_mdir, f"{self.subject_name}_scaled.osim")
 
         # Config-driven output names (fall back to conventional names). CEINMS uses
         # the force model as-is; SO uses it with isometric force x mvic_factor.
         ceinms_name = it.get("ceinms_model") or (
-            f"scaled_opt_N{n_eval}.osim" if muscle_opt else "scaled.osim")
+            f"{self.subject_name}_scaled_opt_N{n_eval}.osim" if muscle_opt
+            else os.path.basename(scaled))
         so_name = it.get("so_model") or (
-            f"scaled_opt_N{n_eval}_mvicx{mvic_factor:.2f}.osim" if muscle_opt
-            else f"scaled_mvicx{mvic_factor:.2f}.osim")
-        ceinms_path = os.path.join(self.path, ceinms_name)
-        so_path = os.path.join(self.path, so_name)
+            f"{self.subject_name}_scaled_opt_N{n_eval}_mvicx{mvic_factor:.2f}.osim"
+            if muscle_opt
+            else f"{self.subject_name}_scaled_mvicx{mvic_factor:.2f}.osim")
+        ceinms_path = self.model_output_path(ceinms_name)
+        so_path = self.model_output_path(so_name)
 
         if os.path.exists(ceinms_path) and os.path.exists(so_path) and not replace:
             print(f"[Session] {self.label}: models exist: CEINMS={ceinms_name} SO={so_name}")
@@ -3134,10 +3205,16 @@ class Iteration:
         #    if linear_scaling).
         print(f"[Session] {self.label}: scale {os.path.basename(generic)} "
               f"(linear_scaling={linear}, marker_placer={mplace}) + static '{static_trial}'")
-        # Make the meshes reachable from the iteration folder before anything
-        # tries to open the scaled model.
+        # Make the meshes reachable from the folder the scaled model is
+        # written to, before anything tries to open it. The iteration folder
+        # is linked too: older models still sit there, and OpenSim resolves
+        # meshes relative to whichever .osim is opened.
+        self.link_geometry(generic, dest_dir=_mdir)
         self.link_geometry(generic)
-        _os.scale_model(generic, trc, scaled, scale_setup_output_dir=self.path,
+        # The ScaleTool setup XML travels WITH the model it produced rather
+        # than staying in the iteration folder — it is the record of how that
+        # .osim was made, and it is what "View setup XML" should find beside it.
+        _os.scale_model(generic, trc, scaled, scale_setup_output_dir=_mdir,
                         mass=(float(mass) if mass else None), marker_set_file=markerset,
                         linear_scaling=linear, marker_placer=mplace)
 
@@ -3184,13 +3261,15 @@ class Iteration:
         #    model), so its OFL/TSL are kept instead of being re-fit to a reference.
         if muscle_opt:
             print(f"[Session] {self.label}: muscle optimisation (Modenese2015, N={n_eval}) — slow ...")
-            base = os.path.join(self.path, f"scaled_opt_N{n_eval}.osim")
+            base = os.path.join(
+                _mdir, f"{self.subject_name}_scaled_opt_N{n_eval}.osim")
             _os.muscle_optimimizer_Modenese2015(scaled, save_path=base,
                                                 ref_model_path=generic, N_eval=n_eval)
         else:
             base = scaled
-            print(f"[Session] {self.label}: muscle-opt skipped — scaled.osim is the force "
-                  f"model (generic's muscle-tendon params kept).")
+            print(f"[Session] {self.label}: muscle-opt skipped — "
+                  f"{os.path.basename(scaled)} is the force model "
+                  f"(generic's muscle-tendon params kept).")
 
         # 3) CEINMS model = base (copy to the configured name if different). Do this
         #    BEFORE the isometric boost so the CEINMS model is never boosted.
@@ -3216,7 +3295,7 @@ class Iteration:
             so_path = ceinms_path if os.path.exists(ceinms_path) else base
             so_name = os.path.basename(so_path)
 
-        print(f"[Session] {self.label}: scaled models saved:")
+        print(f"[Session] {self.label}: scaled models saved to {_mdir}:")
         print(f"   CEINMS      : {os.path.abspath(ceinms_path)}")
         print(f"   SO (mvic x{mvic_factor:.2f}): {os.path.abspath(so_path)}")
         return so_path

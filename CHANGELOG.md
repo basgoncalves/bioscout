@@ -85,6 +85,20 @@ Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 - **`bioscout -test`** (also `--test`/`--tests`) runs the packaged suite and
   exits with unittest's status — handled before the heavy imports, so it
   starts instantly and still reports in a half-built environment.
+- **Scaling wrote its models into the ITERATION folder**, while session.yaml
+  named `models/personalised/<subject>/…` — so scaling "succeeded" and the
+  very next stage could not find the model it had just built (the loud
+  no-model-found warning, once per trial). `scale_model` now writes every
+  model it produces — the ScaleTool output, the muscle-opt model, the CEINMS
+  and SO models — to `models/personalised/<subject>/`, resolving a configured
+  name exactly the way the reader resolves it (`Iteration.models_dir` /
+  `model_output_path`): absolute as-is, project-relative from the project
+  root, bare filename into the subject's models folder. Models are a property
+  of the SUBJECT — 022's pre, post and sprints sessions all name one
+  `022_Rajagopal2015_FAI.osim` — so intermediates are subject-prefixed
+  (`023_scaled.osim`) rather than a bare `scaled.osim` that `post` would
+  silently overwrite. Geometry is linked beside the model, and the ScaleTool
+  setup XML now travels with the model it produced.
 - **Scaling ignored `session.yaml`'s `static_trial:`** — `scale_model`
   defaulted to a hardcoded `"Static_01"`, so a session whose static trial is
   named anything else (`static1`, the FAIS convention) scaled against a trial
