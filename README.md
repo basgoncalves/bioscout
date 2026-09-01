@@ -138,7 +138,7 @@ bioscout run             the pipeline: IK -> ID -> MA -> SO -> CEINMS -> JRA
 bioscout session         new / export / classify / ingest / reset
 bioscout model           check / edit / compare / ma / validate / joint-centres
 bioscout tps             build an MRI-personalised model
-bioscout plot            figures, summaries, Collings ranking
+bioscout plot            figures, summaries, Collings ranking, JCF direction
 bioscout utils           env / install / md2pdf / pylance
 bioscout lab             EXPERIMENTAL 3.0: video and wearable tracking
 ```
@@ -187,6 +187,28 @@ The point was not shorter names. The flat parser had grown to 66 options, and
 *"With `--X`:"*. `--top` and `--side` mean nothing without `--collings`; `--toc`
 and `--bib` mean nothing without `--md2pdf`. Under a verb they are simply that
 verb's options, and the root help is ten lines.
+
+### `bioscout plot jcf` — the contact force vector, on the model's bones
+
+For anyone who has run an OpenSim JointReaction analysis. One polar panel per
+joint: the bearing is the force's direction in the receiving bone's own frame
+(SUP up, ANT right), the radius is |JCF| in body weights, and the loop is the
+contact-force vector traced over the trial, drawn over the bone's silhouette
+read straight out of the `.osim`. No OpenSim install needed — the model and
+its `.vtp` meshes are read as plain XML.
+
+```bash
+bioscout plot jcf --model scaled.osim \
+    --jra Analyse_JRA_ReactionLoads_SO.sto Analyse_JRA_ReactionLoads_CEINMS.sto \
+    --labels SO CEINMS --mass 95 --ik joint_angles.mot -o jcf_direction.png
+```
+
+`--ik` (the trial's IK `.mot`) buys two things: the hip is converted exactly
+from the femur frame OpenSim wrote to the pelvis frame (Newton's third law +
+the hip's own SpatialTransform rotation), and each panel gains the
+neighbouring segment dotted at its two extremes with a range-of-motion arc.
+`--bw` (newtons) replaces `--mass`; `--plane frontal` gives the MED/LAT view;
+`--geometry DIR ...` adds mesh search folders. Details: `docs/JCF_DIRECTION.md`.
 
 ### `bioscout model check` — the one to run after moving anything
 
