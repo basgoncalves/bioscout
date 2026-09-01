@@ -50,6 +50,7 @@ __all__ = [
     "expected_env_name", "current_env", "conda_available", "list_envs",
     "env_exists", "create_env", "install_into", "status", "report",
     "ensure", "activation_command",
+    "missing_packages", "autoinstall_missing",
 ]
 
 #: Python pinned for new environments. OpenSim's pip wheels stop at 3.11 and the
@@ -62,6 +63,129 @@ _ENV_PREFIX = "bioscoutv"
 #: Set to 1 to silence the startup check entirely (CI, HPC batch jobs, any
 #: context where a warning on stderr is noise rather than help).
 _OPT_OUT = "BIOSCOUT_NO_ENV_CHECK"
+
+#: Set to 1 to keep the startup check but never let it install anything.
+_NO_AUTOINSTALL = "BIOSCOUT_NO_AUTO_INSTALL"
+
+# ---------------------------------------------------------------------------
+# Runtime dependency check
+#
+# The env check above compares environment NAMES. That is all it ever did, and
+# it is why a launch could say "you are in 'bioscout_env', expected
+# 'bioscoutv2.0.0c1'" and then die on `import psutil` several seconds later
+# without ever connecting the two. Names are a proxy; what actually matters is
+# whether the modules import.
+#
+# {pip name: import name} for the declared runtime deps. Kept in step with
+# setup.py's install_requires by tests/test_envcheck.py.
+# ---------------------------------------------------------------------------
+RUNTIME_PACKAGES: Dict[str, str] = {
+    "pandas": "pandas",
+    "matplotlib": "matplotlib",
+    "plotly": "plotly",
+    "scikit-learn": "sklearn",
+    "customtkinter": "customtkinter",
+    "Pillow": "PIL",
+    "pyyaml": "yaml",
+    "c3d": "c3d",
+    "packaging": "packaging",
+    "pyperclip": "pyperclip",
+    "psutil": "psutil",
+    "pyautogui": "pyautogui",
+    "pygetwindow": "pygetwindow",
+    "screeninfo": "screeninfo",
+    "fitparse": "fitparse",
+    "requests": "requests",
+}
+
+#: NEVER auto-installed, whatever is missing.
+#:
+#: `opensim` is not reliably on PyPI at all and belongs to conda. numpy and
+#: scipy are the ones that make this rule matter: they are conda-managed in a
+#: working bioscout env, OpenSim's bindings are compiled against those exact
+#: builds, and letting pip swap them for its own wheels is a well-known way to
+#: turn a working solver into an import error or, worse, a silently different
+#: numerical result. If one of these is genuinely missing, the environment is
+#: wrong in a way that installing a package will not fix — say so instead.
+NEVER_AUTOINSTALL = frozenset({"opensim", "numpy", "scipy"})
+
+
+def missing_packages(packages: Optional[Dict[str, str]] = None) -> List[str]:
+    """Pip names of declared runtime deps whose import is not importable.
+
+    Uses ``find_spec`` rather than importing: it is milliseconds for the whole
+    set, has no import side effects, and cannot itself blow up the launch.
+    """
+    import importlib.util
+    out: List[str] = []
+    for pip_name, import_name in (packages or RUNTIME_PACKAGES).items():
+        try:
+            if importlib.util.find_spec(import_name) is None:
+                out.append(pip_name)
+        except (ImportError, ValueError, AttributeError):
+            # A namespace-package oddity or a half-removed dist. Treat as
+            # missing — worst case we reinstall something already present.
+            out.append(pip_name)
+    return out
+
+
+def autoinstall_missing(log=print, timeout: int = 900) -> List[str]:
+    """Install any missing runtime deps into the RUNNING interpreter's env.
+
+    Returns the list of packages still missing afterwards (empty on success).
+
+    Deliberate choices:
+
+    * ``sys.executable -m pip`` — installs into the interpreter that is
+      actually running, not whichever pip happens to be first on PATH. That
+      distinction is the whole point when several conda envs exist.
+    * only the MISSING names are passed, and there is no ``--upgrade``. This
+      never touches a package that already imports, so a working environment
+      cannot be changed by a launch.
+    * :data:`NEVER_AUTOINSTALL` members are reported, never installed.
+    """
+    missing = missing_packages()
+    blocked = [p for p in missing if p in NEVER_AUTOINSTALL]
+    installable = [p for p in missing if p not in NEVER_AUTOINSTALL]
+
+    for p in blocked:
+        log(f"[env] {p} is missing and is NOT auto-installed — it is conda-managed "
+            f"and pip would risk the OpenSim bindings. Fix the environment instead.")
+
+    if not installable:
+        return blocked
+
+    log(f"[env] missing: {', '.join(installable)} — installing into "
+        f"{current_env() or os.path.basename(sys.prefix)} ...")
+    cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+           *installable]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:                                 # noqa: BLE001
+        log(f"[env] auto-install could not run ({exc}). Install by hand:")
+        log(f"[env]     {sys.executable} -m pip install {' '.join(installable)}")
+        return missing
+
+    if p.returncode != 0:
+        tail = (p.stderr or p.stdout or "").strip().splitlines()[-6:]
+        log("[env] auto-install FAILED:")
+        for line in tail:
+            log(f"[env]   {line}")
+        log(f"[env] install by hand: {sys.executable} -m pip install "
+            f"{' '.join(installable)}")
+        return missing
+
+    # find_spec caches negative lookups on the path finder; clear it or the
+    # freshly installed packages still look absent to this process.
+    import importlib
+    importlib.invalidate_caches()
+    still = [x for x in missing_packages() if x in installable]
+    if still:
+        log(f"[env] installed, but still not importable: {', '.join(still)}. "
+            f"A restart of bioscout usually settles it.")
+    else:
+        log(f"[env] installed {len(installable)} package(s) — continuing.")
+    return blocked + still
 
 
 def _version() -> str:
@@ -266,8 +390,26 @@ def report(log=print) -> Dict[str, object]:
     log(f"[env] current environment  : {s['current_env'] or '(none — base or system python)'}")
     log(f"[env] interpreter          : {s['python']}")
     log(f"[env] conda on PATH        : {'yes' if s['conda'] else 'NO'}")
+
+    # The name can match while the env is still unusable, and can mismatch
+    # while everything imports fine. Report what is actually there.
+    try:
+        _missing = missing_packages()
+    except Exception:                                        # noqa: BLE001
+        _missing = []
+    if _missing:
+        log(f"[env] MISSING packages     : {', '.join(_missing)}")
+        log(f"[env]     {sys.executable} -m pip install "
+            f"{' '.join(p for p in _missing if p not in NEVER_AUTOINSTALL)}")
+        for _p in (p for p in _missing if p in NEVER_AUTOINSTALL):
+            log(f"[env]     {_p}: conda-managed — do NOT pip install it here.")
+    else:
+        log("[env] declared packages    : all importable")
+
     if s["match"]:
-        log("[env] OK — you are in the right environment.")
+        log("[env] OK — you are in the right environment."
+            if not _missing else
+            "[env] Right environment, but packages are missing (see above).")
         return s
     if not s["conda"]:
         log("[env] conda is not on PATH, so nothing can be created here.")
@@ -355,24 +497,49 @@ def explain_missing(exc: BaseException) -> str:
 
 
 def startup_warning(log=None) -> None:
-    """One quiet line when the running env is not the expected one.
+    """One quiet line when the running env is not the expected one, and a
+    dependency check that installs whatever is missing.
 
-    Deliberately a warning and never a block: plenty of legitimate setups (a
-    shared HPC module, a system python with everything already present) will
-    never match the name, and refusing to start would be worse than useless.
+    The env-name half is deliberately a warning and never a block: plenty of
+    legitimate setups (a shared HPC module, a system python with everything
+    present) will never match the name, and refusing to start would be worse
+    than useless.
+
+    The dependency half is the one that earns its keep. Comparing names told
+    the user they were in 'bioscout_env' instead of 'bioscoutv2.0.0c1' and
+    stopped there; the actual failure was `import psutil` several seconds
+    later, inside a tab, reported as a crash. ``find_spec`` over the declared
+    set costs milliseconds on the normal path (nothing missing → nothing
+    printed, nothing run) and turns that crash into a one-line install.
+
+    Set ``BIOSCOUT_NO_AUTO_INSTALL=1`` to keep the check but only be told;
+    ``BIOSCOUT_NO_ENV_CHECK=1`` silences both.
     """
     if os.environ.get(_OPT_OUT):
         return
+    w = log or (lambda m: print(m, file=sys.stderr))
+
     try:
         s = status()
+        if not s["match"]:
+            where = s["current_env"] or "base/system python"
+            w(f"[env] running in '{where}', expected '{s['expected_env']}'. "
+              f"`bioscout --env` for details, {_OPT_OUT}=1 to silence.")
     except Exception:                                        # noqa: BLE001
-        return
-    if s["match"]:
-        return
-    w = log or (lambda m: print(m, file=sys.stderr))
-    where = s["current_env"] or "base/system python"
-    w(f"[env] running in '{where}', expected '{s['expected_env']}'. "
-      f"`bioscout --env` for details, {_OPT_OUT}=1 to silence.")
+        pass
+
+    # Never let the dependency check be the thing that stops a launch: a
+    # broken check is strictly worse than no check.
+    try:
+        if os.environ.get(_NO_AUTOINSTALL):
+            missing = missing_packages()
+            if missing:
+                w(f"[env] missing packages: {', '.join(missing)}")
+                w(f"[env]     {sys.executable} -m pip install {' '.join(missing)}")
+            return
+        autoinstall_missing(log=w)
+    except Exception as exc:                                 # noqa: BLE001
+        w(f"[env] dependency check skipped ({type(exc).__name__}: {exc})")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -139,6 +139,17 @@ class MocapConfig:
     # so a 0.10 BW (61 N) edge cuts the whole foot-strike frame off the front
     # of the task and the shaded band visibly starts after the force rise.
     contact_edge_bw: float = 0.01
+    # Shortest interval on ONE plate that can be a footfall. Used to split a
+    # plate that both feet stepped on inside one pass — see contact_feet — and
+    # to reject a frame or two of CoP noise. A walking stance is ~0.68 s here
+    # and a sprint contact ~0.10 s, so this sits below both.
+    min_plate_stance_s: float = 0.09
+    # A plate is only declared SHARED when both halves look like footfalls:
+    # each must peak at this fraction of the plate's own peak. Without it the
+    # unstable centre of pressure over the first 150 ms of a loading ramp
+    # (254 N against the contact's 847 N) was split off as a footfall of its
+    # own.
+    split_peak_frac: float = 0.50
     # Total vertical GRF below this fraction of BW = airborne.
     flight_bw: float = 0.10
     # A flight phase must last at least this long to be real. Measured on both
@@ -175,6 +186,11 @@ class MocapConfig:
     straight_angle_deg: float = 20.0
     # Trajectories shorter than this are too short for a meaningful heading.
     min_travel_for_angle: float = 1.0     # m
+    # How many times the path may reverse along the progression axis and still
+    # be describable as ONE change of direction. A sidestep reverses once; a
+    # capture of somebody walking a runway back and forth reverses once per
+    # pass, and its first-to-last heading is a fact about the room.
+    max_cut_reversals: int = 1
 
     # A cut does not begin when the cutting foot lands. It begins when the
     # CONTRALATERAL foot leaves the ground: the flight between the two is when
@@ -197,6 +213,27 @@ class MocapConfig:
     single_support_frac: float = 0.50
 
     # --- segmentation ---
+    # Coming back DOWN, the foot counts as grounded again at this fraction of
+    # foot_lift_m. Detection needs hysteresis: the height of a walking foot
+    # crosses 5 cm three times per step around heel-off, and a bare threshold
+    # reported every toe-off twice, 0.34 s apart, which halved every measured
+    # stride (0.72 s where the walk's real cycle is 1.11 s).
+    foot_down_frac: float = 0.60
+    # How far either side of a threshold crossing to look for the turning
+    # point of the foot-height trace. A walking swing is ~0.4 s, so a quarter
+    # of a second cannot walk into the neighbouring event.
+    event_settle_max_s: float = 0.25
+    # Marker events are CALIBRATED against the force plates inside the same
+    # trial: a marker event this close to a plate edge of the same foot is the
+    # same event seen twice, and the median difference over all such pairs is
+    # the kinematic detector's bias on this capture. On FAIS 073 walking1 that
+    # bias is 170 ms at touch-down and 210 ms at toe-off — a fifth of a
+    # walking stance, applied to every cycle window the pipeline then
+    # simulates. The plates are the reference where they exist; the markers
+    # carry that reference into the strides no plate ever saw.
+    event_match_max_s: float = 0.35
+    # Below this many matched pairs the offset is noise, not a bias.
+    event_calib_min_n: int = 3
     # A foot is OFF the ground once its markers rise this far above their own
     # floor level. Measured on FAIS SLSback_post1: the lifted foot sits 18-34 cm
     # up, the stance foot within 0.4 cm of its floor — no ambiguity at 5 cm.
@@ -204,6 +241,15 @@ class MocapConfig:
     # Shortest task worth reporting. Anything briefer is absorbed into its
     # neighbours as a transition rather than becoming its own row.
     min_task_s: float = 0.40
+    # A pelvis gap shorter than this is interpolated across — the pelvis is
+    # smooth at gait frequencies and a tenth of a second of occlusion carries
+    # no information. Anything LONGER is reported as ``no_data`` rather than
+    # guessed at. On FAIS 073 walking1 the participant walks out of the capture
+    # volume to turn around between passes, leaving five holes of 2.7-5.5 s;
+    # those were read as zero pelvis speed and labelled "static", so an 85 s
+    # capture in which the subject never stopped moving came back as five
+    # stretches of standing still.
+    pelvis_gap_fill_s: float = 0.30
 
     # --- squat phases ---
     # A squat STARTS when the descent starts, not when it passes squat_drop_m.
@@ -215,6 +261,66 @@ class MocapConfig:
     hold_vel_ms: float = 0.05
     # Hold only applies in the deepest part of the descent.
     hold_depth_frac: float = 0.80
+
+    #: Set when __post_init__ had to repair the axis triple. Anything that
+    #: cares which horizontal is progression can fall back to the data.
+    axes_repaired: bool = False
+
+    def __post_init__(self):
+        """Vertical, AP and lateral must name three DIFFERENT axes.
+
+        FAIS's settings.py set ``trc_lateral_axis = 'X'`` and left
+        ``trc_ap_axis`` at its default ``'X'``, so :meth:`horizontal` returned
+        the mediolateral column twice: seven metres of walkway were measured
+        as 0.4 m of sway, the trial "never went anywhere"
+        (``min_trial_travel_m``), not one frame could be labelled walking, and
+        an 85 s gait capture came back as single-leg stance and standing.
+        Nothing downstream can catch that — every number stays finite and
+        plausible — so it is caught here, repaired, and said out loud.
+
+        Which of a colliding pair to move is decided by which one is still at
+        ITS OWN DEFAULT: a project that changed one and forgot the other has
+        told you, by changing it, which one it meant.
+        """
+        _names = ("vertical_axis", "ap_axis", "lateral_axis")
+        _defaults = {"vertical_axis": "Y", "ap_axis": "X", "lateral_axis": "Z"}
+        _ax = {n: str(getattr(self, n)).upper() for n in _names}
+        if len(set(_ax.values())) == 3 and all(a in "XYZ" for a in _ax.values()):
+            return
+        _bad = "/".join(_ax[n] for n in _names)
+
+        def _free():
+            return [a for a in "XYZ" if a not in _ax.values()]
+
+        for _pair in (("ap_axis", "lateral_axis"),
+                      ("vertical_axis", "ap_axis"),
+                      ("vertical_axis", "lateral_axis")):
+            _a, _b = _pair
+            if _ax[_a] != _ax[_b] or not _free():
+                continue
+            # Never move VERTICAL: which way is up is the one convention a
+            # project always gets right, and every rule here is written
+            # against it. Otherwise move the one still sitting at its own
+            # default — a project that changed one and forgot the other has
+            # told you, by changing it, which one it meant.
+            if _a == "vertical_axis":
+                _move = _b
+            else:
+                _move = (_a if _ax[_a] == _defaults[_a]
+                         and _ax[_b] != _defaults[_b]
+                         else (_b if _ax[_b] == _defaults[_b] else _b))
+            _ax[_move] = _free()[0]
+        for _n in _names:
+            if _ax[_n] not in "XYZ" and _free():
+                _ax[_n] = _free()[0]
+        for _n in _names:
+            object.__setattr__(self, _n, _ax[_n])
+        object.__setattr__(self, "axes_repaired", True)
+        print(f"[mocap] TRC axes vertical/ap/lateral were {_bad} — they must "
+              f"name three different axes; using "
+              f"{'/'.join(_ax[n] for n in _names)}. Set trc_vertical_axis / "
+              f"trc_ap_axis / trc_lateral_axis in the project's settings so "
+              f"this is not guessed at.")
 
     def axes(self) -> Tuple[int, int, int]:
         """(vertical, anterior-posterior, lateral) column indices into a TRC."""
@@ -285,8 +391,22 @@ class MocapConfig:
     # contact (which gives the contralateral swing leading into the cut) to the
     # end of the LAST contact. Set False to keep the full travelling block.
     trim_travel_to_grf: bool = True
-    # How many contacts to include, counting back from the last.
+    # How many contacts to include, counting back from the last. This is a
+    # SINGLE-PASS policy — one run-up, one plant — which is what the cut and
+    # sprint captures it was written for actually contain.
     travel_contacts: int = 2
+    # A capture can hold many passes. walking1 is 85 s, twelve walkways and 36
+    # footfalls; "the last two contacts" threw 34 of them away and then
+    # re-emitted the surviving two once per travelling block, so the trial came
+    # out as twelve identical 0.7 s tasks at the very end of the capture. A
+    # travelling block holding at least this many contacts keeps ALL of them,
+    # one gait cycle each. A cut keeps its last-N regardless: a sidestep has
+    # one plant that matters however many steps led into it.
+    multi_contact_min: int = 3
+    # How far outside a travelling block a contact may start or end and still
+    # belong to it. The block is bounded by pelvis speed and the plate by
+    # force; they do not agree to the frame.
+    block_contact_pad_s: float = 0.25
     # Emit ONE TASK PER CONTACT instead of a single block spanning them. A
     # sidestep capture is an approach step on one foot then the cut on the
     # other; they are different tasks on different legs and merging them hides
@@ -495,6 +615,20 @@ def _cut_geometry(horiz: np.ndarray, time: np.ndarray,
     dist = np.concatenate([[0.0], np.cumsum(step)])
     total = dist[-1]
     if total < cfg.min_travel_for_angle:
+        return float("nan"), "", float("nan"), float("nan")
+
+    # A CUT IS ONE CHANGE OF DIRECTION. An out-and-back capture reverses once
+    # per pass — walking1 walks the runway twelve times — and comparing its
+    # first heading with its last then reported a "177 degree cut to the
+    # left", which is a description of the room, not of anything the
+    # participant did. Count the reversals along the progression axis; more
+    # than one and this trajectory is not a cut at all.
+    _prog = P[:, int(np.argmax(np.ptp(P, axis=0)))]
+    _w = max(3, len(_prog) // 50)
+    _sm = np.convolve(_prog, np.ones(_w) / _w, mode="valid")
+    _dv = np.diff(_sm)
+    _sig = np.sign(_dv[np.abs(_dv) > (0.02 * np.max(np.abs(_dv)) or 1e-9)])
+    if _sig.size and int(np.count_nonzero(np.diff(_sig))) > cfg.max_cut_reversals:
         return float("nan"), "", float("nan"), float("nan")
 
     f = cfg.cut_heading_frac
@@ -720,6 +854,12 @@ class TaskSegment:
     phase: str = ""
     side: str = ""
     index: int = 0
+    # Stable name for one gait cycle: "<trial>_r1", "<trial>_l1", ... Numbered
+    # per LEG in time order, so which limb a result belongs to is readable off
+    # the name in a folder listing, a plot legend or a CSV without a lookup,
+    # and dropping a bad left cycle does not renumber the right ones. Empty on
+    # every task that is not one cycle of gait.
+    name: str = ""
     phases: list = field(default_factory=list)
     # Turn angle for a cut, in degrees (0 = carried straight on). Kept as a
     # field rather than left inside ``reason`` so the figure, the CSV and the
@@ -926,7 +1066,7 @@ def _gait_event_times(exp_dir: str, contacts: Optional[List[dict]] = None,
             out.append((sd, "off", float(c["t_off"])))
     tol = max(cfg.min_stride_s * 0.5, 0.05)
     try:
-        mev = foot_events_from_markers(exp_dir, cfg) or {}
+        mev = foot_events_from_markers(exp_dir, cfg, contacts) or {}
     except Exception:
         mev = {}
     _t0 = _t1 = None
@@ -939,7 +1079,7 @@ def _gait_event_times(exp_dir: str, contacts: Optional[List[dict]] = None,
         pass
     for sd, ev in mev.items():
         for kind, key in (("strike", "contact"), ("off", "off")):
-            for tt in ev.get(key, []):
+            for tt in (ev.get(key) or []):
                 # An "event" on the first or last frame is the trial window
                 # opening or closing, not the foot doing anything.
                 if _t0 is not None and (float(tt) - _t0 < _edge
@@ -969,7 +1109,8 @@ def _gait_event_times(exp_dir: str, contacts: Optional[List[dict]] = None,
     return merged
 
 
-def foot_events_from_markers(exp_dir: str, cfg: Optional["MocapConfig"] = None
+def foot_events_from_markers(exp_dir: str, cfg: Optional["MocapConfig"] = None,
+                             contacts: Optional[List[dict]] = None
                              ) -> Dict[str, Dict[str, List[float]]]:
     """Foot contacts and toe-offs per leg, from MARKER kinematics alone.
 
@@ -997,11 +1138,27 @@ def foot_events_from_markers(exp_dir: str, cfg: Optional["MocapConfig"] = None
         return {}
 
     fs = 1.0 / max(float(np.median(np.diff(t))), 1e-6)
+    # The per-foot loop below rebinds ``contacts`` to the marker-derived list;
+    # hold the plate contacts under a name of their own.
+    _plate = list(contacts or [])
     out: Dict[str, Dict[str, List[float]]] = {}
     for side, key in (("l", "L"), ("r", "R")):
-        h = _foot_height(markers, key, cfg)
-        if h is None:
+        # The LOWEST marker on the foot, not the mean of them. "Is the foot on
+        # the ground" is a question about the part of it that is lowest: in
+        # walking the heel lifts ~10 cm while the forefoot is still loaded, so
+        # the MEAN crosses 5 cm at heel-off, again at push-off and again in
+        # swing, and every toe-off was reported twice, 0.34 s apart. The
+        # measured stride came out at 0.72 s where the walk's real cycle is
+        # 1.11 s \u2014 half a cycle, on every stride of every walking trial.
+        _fn = _foot_markers(markers, key, cfg)
+        if not _fn:
             continue
+        _iv0 = cfg.axes()[0]
+        _st = np.stack([markers[n][:, _iv0] for n in _fn], axis=0)
+        if not np.isfinite(_st).any():
+            continue
+        with np.errstate(invalid="ignore"):
+            h = np.nanmin(_st, axis=0)
         good = np.isfinite(h)
         if good.sum() < 5:
             continue
@@ -1010,15 +1167,43 @@ def foot_events_from_markers(exp_dir: str, cfg: Optional["MocapConfig"] = None
         hh = np.convolve(hh, np.ones(w) / w, mode="same")
         floor = float(np.nanpercentile(hh, 5))
         lift = hh - floor
-        vel = np.gradient(hh) * fs
 
-        near = lift < cfg.foot_lift_m
+        # A Schmitt trigger, not a threshold: off above foot_lift_m, down again
+        # only below foot_down_frac of it, and the two alternate by
+        # construction. One toe-off, one contact, per cycle.
+        #
+        # The trigger says an event HAPPENED; it is 100-200 ms off saying WHEN.
+        # A foot crosses 3 cm in late swing and keeps falling to the floor, and
+        # it has already left the floor by the time it passes 5 cm on the way
+        # up. Both crossings are therefore walked to the turning point of the
+        # height trace: forward to where the descent stops (touch-down) and
+        # back to where the rise began (toe-off). These times bound every
+        # simulated cycle, so a fifth of a second matters.
+        _hi = cfg.foot_lift_m
+        _lo = cfg.foot_lift_m * cfg.foot_down_frac
+        _adj = max(1, int(cfg.event_settle_max_s * fs))
+
+        def _touch_down(i):
+            j = i
+            while j + 1 < len(hh) and hh[j + 1] <= hh[j] and (j - i) < _adj:
+                j += 1
+            return j
+
+        def _toe_off(i):
+            j = i
+            while j - 1 >= 0 and hh[j - 1] <= hh[j] and (i - j) < _adj:
+                j -= 1
+            return j
+
         contacts, offs = [], []
-        for i in range(1, len(near)):
-            if near[i] and not near[i - 1] and vel[i] <= 0:
-                contacts.append(float(t[i]))          # coming down onto the floor
-            elif near[i - 1] and not near[i] and vel[i] >= 0:
-                offs.append(float(t[i]))              # leaving it
+        _up = bool(lift[0] > _hi)
+        for i in range(1, len(lift)):
+            if not _up and lift[i] > _hi:
+                offs.append(float(t[_toe_off(i)]))    # leaving the floor
+                _up = True
+            elif _up and lift[i] < _lo:
+                contacts.append(float(t[_touch_down(i)]))   # back down onto it
+                _up = False
         def _thin(xs):
             keep = []
             for x in xs:
@@ -1026,6 +1211,30 @@ def foot_events_from_markers(exp_dir: str, cfg: Optional["MocapConfig"] = None
                     keep.append(round(x, 3))
             return keep
         out[side] = {"contact": _thin(contacts), "off": _thin(offs)}
+
+    # Calibrate against the plates. Foot height says an event happened and
+    # roughly when; a plate edge says exactly when. Wherever both saw the same
+    # footfall, the median difference is this detector's bias on THIS capture —
+    # markerset, shoe thickness and floor reference all fold into it — and
+    # removing it carries the plates' timing into the strides that never
+    # touched one.
+    if _plate:
+        for _sd, _ev in out.items():
+            for _key, _edge in (("contact", "t_on"), ("off", "t_off")):
+                _xs = _ev.get(_key) or []
+                if not _xs:
+                    continue
+                _diffs = []
+                for _c in _plate:
+                    if _c.get("side") != _sd:
+                        continue
+                    _x = min(_xs, key=lambda v: abs(v - _c[_edge]))
+                    if abs(_x - _c[_edge]) <= cfg.event_match_max_s:
+                        _diffs.append(float(_c[_edge]) - _x)
+                if len(_diffs) >= cfg.event_calib_min_n:
+                    _off = float(np.median(_diffs))
+                    _ev[_key] = [round(v + _off, 3) for v in _xs]
+                    _ev[_key + "_bias_s"] = round(_off, 3)
     return out
 
 
@@ -1094,30 +1303,125 @@ def contact_feet(exp_dir: str, body_mass=None,
             start = None
             if float(gt[b] - gt[a]) < 0.02:
                 continue
-            k = a + int(np.nanargmax(vy[a:b + 1]))
             # CoP columns are named px/py/pz in the OpenSim frame; pick the
             # two that are horizontal under this project's convention.
             _pn = {0: "_px", 1: "_py", 2: "_pz"}
             px, pz = gcols.get(pre + _pn[_ia]), gcols.get(pre + _pn[_il])
-            side, margin = "", float("nan")
-            if px is not None and pz is not None and np.isfinite(px[k]) and np.isfinite(pz[k]):
-                cop = np.array([px[k], pz[k]])
-                j = int(np.argmin(np.abs(t - gt[k])))
-                d = {}
-                for sd, arr in feet.items():
-                    if j < len(arr) and np.isfinite(arr[j][_ia]) \
-                            and np.isfinite(arr[j][_il]):
-                        d[sd] = float(np.linalg.norm(
-                            np.array([arr[j][_ia], arr[j][_il]]) - cop))
-                if d:
-                    side = min(d, key=d.get)
-                    margin = round(abs(d.get("l", np.nan) - d.get("r", np.nan)), 3) \
-                        if len(d) == 2 else float("nan")
-            out.append({"t_on": round(float(gt[a]), 3), "t_off": round(float(gt[b]), 3),
-                        "side": side, "peak_n": round(float(np.nanmax(vy[a:b + 1])), 1),
-                        "plate": pre, "margin_m": margin})
+
+            # WHICH FOOT, FRAME BY FRAME. In a walkway one plate is regularly
+            # stepped on by BOTH feet inside a single pass \u2014 7 of 36 footfalls
+            # on FAIS 073 walking1 \u2014 and deciding the foot once, at the instant
+            # of peak force, reports that pair as a single 1.1 s contact
+            # belonging to whichever foot was nearer the CoP at the peak. The
+            # CoP gives the split away by itself: it tracks along the stance
+            # foot and then JUMPS to the other one, cleanly, in every case.
+            _n_win = b - a + 1
+            _lab = np.full(_n_win, "", dtype=object)
+            _dm = np.full(_n_win, np.nan)
+            if px is not None and pz is not None:
+                for _n, _k in enumerate(range(a, b + 1)):
+                    if not (np.isfinite(px[_k]) and np.isfinite(pz[_k])):
+                        continue
+                    _cop = np.array([px[_k], pz[_k]])
+                    _j = int(np.argmin(np.abs(t - gt[_k])))
+                    _d = {}
+                    for sd, arr in feet.items():
+                        if _j < len(arr) and np.isfinite(arr[_j][_ia]) \
+                                and np.isfinite(arr[_j][_il]):
+                            _d[sd] = float(np.linalg.norm(
+                                np.array([arr[_j][_ia], arr[_j][_il]]) - _cop))
+                    if not _d:
+                        continue
+                    _lab[_n] = min(_d, key=_d.get)
+                    if len(_d) == 2:
+                        _dm[_n] = abs(_d["l"] - _d["r"])
+            _dtg = max(float(np.median(np.diff(gt))), 1e-6) if gt.size > 1 else 1e-6
+            _min_n = max(2, int(cfg.min_plate_stance_s / _dtg))
+            _runs, _s0 = [], 0
+            for _n in range(1, _n_win + 1):
+                if _n < _n_win and _lab[_n] == _lab[_s0]:
+                    continue
+                _runs.append([_s0, _n - 1, _lab[_s0]])
+                _s0 = _n
+            _runs = [r for r in _runs
+                     if r[2] in ("l", "r") and (r[1] - r[0] + 1) >= _min_n]
+
+            def _coalesce(rs):
+                """Adjacent runs of the SAME foot are one footfall.
+
+                Dropping the sub-threshold runs can leave two runs of the same
+                foot next to each other \u2014 the CoP wobbled onto the other foot
+                for 40 ms in the middle of a stance \u2014 and emitting both said
+                the same foot landed twice inside its own contact.
+                """
+                _o = []
+                for _r in rs:
+                    if _o and _o[-1][2] == _r[2]:
+                        _o[-1][1] = _r[1]
+                    else:
+                        _o.append(list(_r))
+                return _o
+
+            _runs = _coalesce(_runs)
+            if len(_runs) > 1:
+                # A shared plate has TWO footfalls on it, so both halves must
+                # look like one. Anything that does not is the loading ramp,
+                # not a foot; fold it back into its neighbour.
+                _pk = float(np.nanmax(vy[a:b + 1]))
+                _keep = [_r for _r in _runs
+                         if float(np.nanmax(vy[a + _r[0]:a + _r[1] + 1]))
+                         >= cfg.split_peak_frac * _pk]
+                _runs = _coalesce(_keep) or _runs[:1]
+            if not _runs:
+                _runs = [[0, _n_win - 1, ""]]
+            else:
+                # Tile the plate's whole loaded interval: the frames between
+                # two kept runs are split down the middle, so no force is
+                # dropped and the two contacts meet where the CoP changed foot.
+                _runs[0][0] = 0
+                _runs[-1][1] = _n_win - 1
+                for _q in range(1, len(_runs)):
+                    _mid = (_runs[_q - 1][1] + _runs[_q][0]) // 2
+                    _runs[_q - 1][1], _runs[_q][0] = _mid, _mid + 1
+            for _r0, _r1, _sd in _runs:
+                _ka, _kb = a + _r0, a + _r1
+                if float(gt[_kb] - gt[_ka]) < cfg.min_plate_stance_s:
+                    continue
+                _mg = _dm[_r0:_r1 + 1]
+                out.append({
+                    "t_on": round(float(gt[_ka]), 3),
+                    "t_off": round(float(gt[_kb]), 3),
+                    "side": _sd,
+                    "peak_n": round(float(np.nanmax(vy[_ka:_kb + 1])), 1),
+                    "plate": pre,
+                    "margin_m": (round(float(np.nanmedian(_mg)), 3)
+                                 if np.isfinite(_mg).any() else float("nan")),
+                    "shared_plate": len(_runs) > 1})
     out.sort(key=lambda c: c["t_on"])
-    return out
+
+    # One footfall can straddle TWO plates. Walking over a row of them the
+    # foot rolls off the end of one and onto the next, and both register it:
+    # on walking1 the left foot loads plate 2 from 23.66 s and plate 3 from
+    # 23.68 s, which is one step and not two. Same foot, overlapping in time =
+    # one contact spanning both plates, so the cycle built from it is a cycle
+    # rather than two half-cycles a hundredth of a second apart.
+    _merged: List[dict] = []
+    for _c in out:
+        _p = _merged[-1] if _merged else None
+        if (_p is not None and _p["side"] == _c["side"] and _c["side"]
+                and _c["t_on"] < _p["t_off"]):
+            _p["t_off"] = max(_p["t_off"], _c["t_off"])
+            _p["plates"] = sorted(set(_p.get("plates", [_p["plate"]])
+                                      + [_c["plate"]]))
+            if _c["peak_n"] > _p["peak_n"]:
+                _p["peak_n"], _p["plate"] = _c["peak_n"], _c["plate"]
+            _p["straddled"] = True
+            continue
+        _merged.append(_c)
+    for _c in _merged:
+        _c.setdefault("plates", [_c["plate"]])
+        _c.setdefault("straddled", False)
+    return _merged
 
 
 def _squat_phases(t, depth, a, b, cfg) -> Tuple[int, int, List[TaskSegment]]:
@@ -1668,10 +1972,52 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
     # each under min_task_s, and smoothing then absorbed the whole task. Net
     # displacement over +/-0.5 s is ~0 for sway and unchanged for real travel.
     half = max(1, int(0.5 * fs))
-    a = np.clip(np.arange(len(t)) - half, 0, len(t) - 1)
-    b = np.clip(np.arange(len(t)) + half, 0, len(t) - 1)
-    span = np.maximum(t[b] - t[a], 1e-6)
-    spd = np.linalg.norm(horiz[b] - horiz[a], axis=1) / span
+    # An occluded pelvis is UNKNOWN, not stationary. ``nan_to_num`` turned
+    # every gap into 0.00 m/s, and on an overground capture — where the
+    # participant walks out of the volume to turn around — that reported five
+    # stretches of "static" in a trial with no standing in it at all. Short
+    # holes are interpolated across; the rest become ``no_data``.
+    _seen = np.isfinite(horiz).all(axis=1)
+    _filled = horiz.astype(float).copy()
+    _have = _seen.copy()
+    if _seen.any() and not _seen.all():
+        _idx = np.arange(len(t))
+        for _k in range(_filled.shape[1]):
+            _filled[:, _k] = np.interp(_idx, _idx[_seen], horiz[_seen, _k])
+        _i = 0
+        while _i < len(_seen):
+            if _seen[_i]:
+                _i += 1
+                continue
+            _j = _i
+            while _j + 1 < len(_seen) and not _seen[_j + 1]:
+                _j += 1
+            _gap = float(t[min(_j + 1, len(t) - 1)] - t[max(_i - 1, 0)])
+            if _gap <= cfg.pelvis_gap_fill_s:
+                _have[_i:_j + 1] = True
+            _i = _j + 1
+    # Speed is measured inside ONE unbroken stretch of pelvis data. Measuring
+    # it across a hole would divide the distance the participant covered while
+    # invisible by the time they were gone, which is a number about the gap,
+    # not about the movement.
+    spd = np.zeros(len(t))
+    _measured = np.zeros(len(t), bool)
+    _i = 0
+    while _i < len(t):
+        if not _have[_i]:
+            _i += 1
+            continue
+        _j = _i
+        while _j + 1 < len(t) and _have[_j + 1]:
+            _j += 1
+        if float(t[_j] - t[_i]) >= cfg.min_task_s:
+            _r = np.arange(_i, _j + 1)
+            _lo = np.clip(_r - half, _i, _j)
+            _hi = np.clip(_r + half, _i, _j)
+            _sp = np.maximum(t[_hi] - t[_lo], 1e-6)
+            spd[_r] = np.linalg.norm(_filled[_hi] - _filled[_lo], axis=1) / _sp
+            _measured[_r] = True
+        _i = _j + 1
     spd = np.nan_to_num(spd)
 
     # feet: lifted relative to each foot's OWN floor level
@@ -1744,6 +2090,11 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
     # --- frame-level task -------------------------------------------------
     labels: List[str] = []
     for i in range(len(t)):
+        if not _measured[i]:
+            # Nothing to measure here. Saying so is the honest answer; the
+            # alternative is a task row asserting the participant stood still.
+            labels.append("no_data")
+            continue
         both_lifted = lifted["L"][i] and lifted["R"][i]
         one_lifted = lifted["L"][i] ^ lifted["R"][i]
         # Travel is tested FIRST. Running has a flight phase by definition —
@@ -1776,9 +2127,14 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
     # travel geometry, which is a property of the WHOLE path and cannot be read
     # off any single frame. Applied to the travelling blocks below so a cut is
     # reported as a cut rather than as running.
-    # Marker-derived gait events, computed once for the whole trial.
+    # Marker-derived gait events, computed once for the whole trial and
+    # calibrated against its force plates — see foot_events_from_markers.
     try:
-        _marker_events = foot_events_from_markers(exp_dir, cfg)
+        _all_contacts = _grf_contact_feet(exp_dir, body_mass, cfg)
+    except Exception:
+        _all_contacts = []
+    try:
+        _marker_events = foot_events_from_markers(exp_dir, cfg, _all_contacts)
     except Exception:
         _marker_events = {}
 
@@ -1839,6 +2195,9 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
                     _p.task = lab
             else:
                 _barvals = None
+        elif lab == "no_data":
+            why = ("pelvis markers missing \u2014 no speed, no depth, "
+                   "nothing measured over this interval")
         elif lab == "static":
             why = "both feet down, no descent"
         elif lab == "jump":
@@ -1870,8 +2229,23 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
             # the path turns); the ones before it are approach steps.
             _cs = _grf_contact_feet(exp_dir, body_mass, cfg) \
                 if (cfg.trim_travel_to_grf or cfg.split_travel_by_contact) else []
+            # ONLY the contacts made during THIS block. ``_cs`` covers the whole
+            # trial, and using it whole meant every travelling block in a
+            # multi-pass capture re-emitted the same last two footfalls:
+            # walking1 came back as twelve copies of two contacts, all inside
+            # the final 1.4 s of an 85 s recording, with the other 34 footfalls
+            # discarded.
+            _t0b, _t1b = float(t[a]), float(t[b])
+            _cs = [_c for _c in _cs
+                   if _c["t_off"] > _t0b - cfg.block_contact_pad_s
+                   and _c["t_on"] < _t1b + cfg.block_contact_pad_s]
             if _cs and cfg.split_travel_by_contact:
-                _take = _cs[-max(1, cfg.travel_contacts):]
+                # A cut keeps its last-N: one plant matters however many steps
+                # led into it. A gait block that crossed a whole walkway keeps
+                # every footfall, because each one is a cycle to simulate.
+                _take = (_cs[-max(1, cfg.travel_contacts):]
+                         if (_turning or len(_cs) < cfg.multi_contact_min)
+                         else list(_cs))
                 for _k, _c in enumerate(_take):
                     _last = (_k == len(_take) - 1)
                     _ia = int(np.argmin(np.abs(t - _c["t_on"])))
@@ -1911,9 +2285,18 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
                     else:
                         _lab = "running" if v >= cfg.walk_run_speed else "walking"
                         _dir = None
+                        # "approach step" is a SINGLE-PASS idea \u2014 the steps
+                        # taken to reach the one plant being measured. Every
+                        # footfall of a multi-pass gait capture is a cycle in
+                        # its own right, so saying it there is just wrong.
                         _why = (f"{_foot or '?'}-foot contact at {v:.2f} m/s, "
                                 f"peak {_c['peak_n']:.0f} N"
-                                + ("" if _last else " (approach step)"))
+                                + (f", plate {_c['plate'].rsplit('_', 1)[-1]}"
+                                   if _c.get("plate") else "")
+                                + ("; plate shared with the other foot"
+                                   if _c.get("shared_plate") else "")
+                                + ("" if (_last or len(_take) >= cfg.multi_contact_min)
+                                   else " (approach step)"))
                         _sd = _foot
                     # Only phases belonging to THIS leg. A left-foot task
                     # was carrying the right leg's stride as well, which made a
@@ -2111,6 +2494,124 @@ def segment_trial(exp_dir: str, body_mass: Optional[float] = None,
         else:
             prev.t_end = cur.t_start
     out = [g for g in out if g.duration > 0.02]
+    _name_cycles(out, os.path.basename(os.path.normpath(exp_dir)))
+    return out
+
+
+#: The tasks that ARE one cycle of gait. Each one is a thing the pipeline can
+#: simulate on its own, which is what separates them from "static" (nothing to
+#: simulate) and from "squat" (already one task per capture).
+_GAIT_TASKS = ("running", "walking", "cut")
+
+
+def _name_cycles(segs: List[TaskSegment], trial: str = "") -> List[TaskSegment]:
+    """Give every gait task a stable per-leg name — ``walking1_r1``, ``_l1``…
+
+    Numbered PER LEG in time order. Two consequences, both deliberate: which
+    limb a cycle belongs to is readable off the name in a folder listing, a
+    plot legend or a results CSV without joining back to the detection, and
+    throwing out one bad left cycle does not renumber the right ones.
+
+    A capture is one recording; a cycle is one thing to simulate. Everything
+    downstream of the experimental data needs a name for the second of those,
+    and this is where it is minted.
+    """
+    _n = {"left": 0, "right": 0}
+    for g in segs:
+        if g.task not in _GAIT_TASKS or g.side not in ("left", "right"):
+            continue
+        _n[g.side] += 1
+        g.index = _n[g.side]
+        _short = f"{g.side[0]}{g.index}"
+        g.name = f"{trial}_{_short}" if trial else _short
+    return segs
+
+
+def gait_cycles(exp_dir: str, body_mass: Optional[float] = None,
+                cfg: Optional[MocapConfig] = None,
+                segments: Optional[List[TaskSegment]] = None) -> List[dict]:
+    """One dict per gait cycle in a capture — the unit the pipeline runs on.
+
+    A long overground recording is not one thing to simulate. walking1 on FAIS
+    073 is 85 s, twelve walkways and thirty-six footfalls, and every one of
+    those footfalls is a separate stride with its own plate, its own leg and
+    its own window. This is the list that becomes
+    ``3_iterations/<model>/<name>/`` — one folder per cycle.
+
+    Each entry::
+
+        {"name": "walking1_r1", "side": "right", "index": 1, "task": "walking",
+         "time_range": [t0, t1],        # the cycle, foot-off to foot-off
+         "cycle_from": "foot_off",
+         "stance": [t_on, t_off],       # the plate contact inside it
+         "plates": ["ground_force_2"],  # more than one if the step straddled
+         "peak_n": 837.3,
+         "side_margin_m": 0.52,         # CoP margin behind the leg assignment
+         "shared_plate": False,         # the plate also took the other foot
+         "straddled": False,            # the step spanned two plates
+         "events": [["r", "strike", 82.94], ...],
+         "confidence": 0.75, "reason": "..."}
+
+    ``events`` holds the foot strikes and foot offs of BOTH legs inside the
+    window, which is what an external-loads file for that cycle needs: the
+    contralateral foot is on the ground for part of every walking cycle.
+    """
+    cfg = cfg or MocapConfig()
+    segs = segments if segments is not None \
+        else segment_trial(exp_dir, body_mass, cfg)
+    if not segs:
+        return []
+    try:
+        _cs = contact_feet(exp_dir, body_mass, cfg)
+    except Exception:
+        _cs = []
+    try:
+        _ev = _gait_event_times(exp_dir, _cs, cfg)
+    except Exception:
+        _ev = []
+
+    out: List[dict] = []
+    for g in segs:
+        if not g.name or g.task not in _GAIT_TASKS:
+            continue
+        _sd = g.side[0] if g.side in ("left", "right") else ""
+        # The contact this cycle was built around: same leg, largest overlap.
+        _best, _ov = None, 0.0
+        for _c in _cs:
+            if _c.get("side") != _sd:
+                continue
+            _o = min(_c["t_off"], g.t_end) - max(_c["t_on"], g.t_start)
+            if _o > _ov:
+                _best, _ov = _c, _o
+        def _num(v):
+            """YAML has no NaN worth writing; an unmeasured number is None."""
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return None
+            return round(v, 3) if np.isfinite(v) else None
+
+        out.append({
+            "name": g.name,
+            "side": g.side,
+            "index": g.index,
+            "task": g.task,
+            "time_range": [round(g.t_start, 3), round(g.t_end, 3)],
+            "duration_s": g.duration,
+            "cycle_from": cfg.stride_from,
+            "stance": ([_best["t_on"], _best["t_off"]] if _best else None),
+            "plate": (_best or {}).get("plate"),
+            "plates": list((_best or {}).get("plates") or
+                           ([_best["plate"]] if _best else [])),
+            "peak_n": _num((_best or {}).get("peak_n")),
+            "side_margin_m": _num((_best or {}).get("margin_m")),
+            "shared_plate": bool((_best or {}).get("shared_plate", False)),
+            "straddled": bool((_best or {}).get("straddled", False)),
+            "events": [[_s, _k, round(float(_t), 3)] for _s, _k, _t in _ev
+                       if g.t_start - 1e-9 <= _t <= g.t_end + 1e-9],
+            "confidence": g.confidence,
+            "reason": g.reason,
+        })
     return out
 
 
@@ -2239,8 +2740,17 @@ def classify_features(f: TrialFeatures,
 
     # --- travelling tasks -------------------------------------------------
     if travelling:
+        # A sideways COMPONENT is not a change of direction. With the lab
+        # axes finally distinct, Run_baselineB3 measures 18 deg of turn — a
+        # straight run that drifts — and the lateral-ratio test alone still
+        # called it a cut, producing "change of direction 18 deg to the
+        # straight". The measured ANGLE decides, where there is one.
+        _turned = (not np.isfinite(f.cut_angle_deg)
+                   or (f.cut_angle_deg >= cfg.straight_angle_deg
+                       and f.cut_direction not in ("", "straight")))
         if (np.isfinite(f.lateral_ratio)
                 and f.lateral_ratio >= cfg.cut_lateral_ratio
+                and _turned
                 and spd >= cfg.walk_run_speed):
             ang = (f"{f.cut_angle_deg:.0f}\u00b0 to the {f.cut_direction}"
                    if np.isfinite(f.cut_angle_deg) and f.cut_direction
@@ -2311,7 +2821,7 @@ def classify_trial(exp_dir: str, body_mass: Optional[float] = None,
         rank = {"cut": 7, "squat_jump": 6, "single_leg_squat": 5,
                 "deadlift": 5, "jump": 4,
                 "squat": 3, "running": 2, "walking": 2,
-                "single_leg_stance": 1, "static": 0}
+                "single_leg_stance": 1, "static": 0, "no_data": -1}
         best = max(segs, key=lambda g: (rank.get(g.task, 0), g.duration))
         if rank.get(best.task, 0) > rank.get(label, 0):
             label = best.task
@@ -2336,6 +2846,9 @@ TASK_COLOURS = {
     "jump": "#FFA726", "squat_jump": "#FB8C00", "running": "#EF5350",
     "walking": "#AB47BC", "cut": "#EC407A",
     "emg_only": "#CFD8DC", "unknown": "#ECEFF1",
+    # Not a task: an interval with no pelvis to measure. Deliberately the
+    # palest thing on the figure, because it is the absence of a measurement.
+    "no_data": "#F5F5F5",
 }
 
 
@@ -2358,6 +2871,13 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
     import matplotlib.pyplot as plt
 
     trial = os.path.basename(os.path.normpath(exp_dir))
+    # A multi-pass capture carries dozens of tasks over a minute and a half.
+    # Everything that is legible on a 7 s squat — a label per task, a line per
+    # gait event, the phase name written inside its bar — becomes a solid
+    # smear at that length, so past this many tasks the figure switches to
+    # showing the SHAPE of the trial and leaves the detail to the per-cycle
+    # figure and the YAML.
+    _dense = len(segs) > 12
     fig = plt.figure(figsize=(16, 9))
     gs = fig.add_gridspec(4, 2, height_ratios=[0.42, 0.42, 2, 1.2],
                           width_ratios=[3, 1.5], hspace=.55, wspace=.22)
@@ -2417,9 +2937,16 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
         # often enough to matter (Run_baselineB2 calls both plates "right"
         # while the first contact's CoP is 2.5 cm from the LEFT foot).
         _cf = contact_feet(exp_dir, body_mass, cfg)
-        detected = {}
+        # COUNT the footfalls per plate, do not just take the first. Over a
+        # walkway every plate takes both feet — "plate 1 is the left foot" is
+        # a single-pass idea, and stating it on a twelve-pass capture is how a
+        # trial ends up with one GRF.xml that is wrong for half its cycles.
+        _counts: Dict[str, Dict[str, int]] = {}
         for _c in _cf:
-            detected.setdefault(_c["plate"], _c["side"])
+            if _c.get("side") in ("l", "r"):
+                _pc = _counts.setdefault(_c["plate"], {})
+                _pc[_c["side"]] = _pc.get(_c["side"], 0) + 1
+        detected = {_p: max(_c, key=_c.get) for _p, _c in _counts.items()}
         xml_sides = _plate_sides(os.path.join(exp_dir, "GRF.xml"))
         vy = {c: v for c, v in gcols.items() if c.endswith("_vy")}
         if gt.size and vy:
@@ -2427,7 +2954,11 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
                 pre = c[:-3]
                 sd = detected.get(pre)
                 was = xml_sides.get(pre[:-0] + "_v") or xml_sides.get(pre + "_v")
-                if sd:
+                _cn = _counts.get(pre) or {}
+                if sd and len(_cn) > 1:
+                    tag = ("  (L\u00d7%d R\u00d7%d \u2014 BOTH feet)"
+                           % (_cn.get("l", 0), _cn.get("r", 0)))
+                elif sd:
                     tag = f"  ({sd.upper()} foot"
                     tag += ", GRF.xml said %s)" % was.upper() if was and was != sd else ")"
                 else:
@@ -2463,8 +2994,12 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
     _events: List[Tuple[str, str, float]] = (
         _gait_event_times(exp_dir, _cf, cfg)
         if any(g.task in ("running", "walking", "cut") for g in segs) else [])
+    # 42 cycles is ~170 event lines over 85 s: one line every half
+    # centimetre, which is a grey wash and not a QC figure. The leg-coloured
+    # stance bands already say where the footfalls are, so on a dense capture
+    # the individual lines are dropped and the events live in the YAML.
     _seen_lbl = set()
-    for _sd, _kind, _tt in _events:
+    for _sd, _kind, _tt in ([] if _dense else _events):
         _lbl = f"{_sd.upper()} foot {_kind}"
         axf.axvline(_tt, color=FOOT_COLOURS.get(_sd, "grey"),
                     ls="--" if _kind == "strike" else ":", lw=0.9, alpha=.85,
@@ -2565,7 +3100,7 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
             _yy = _y0 if ph.side else 0.05
             axq.add_patch(plt.Rectangle((ph.t_start, _yy), ph.duration, _h,
                                         color=_c, alpha=.85, lw=0))
-            if ph.duration > 0.25:
+            if ph.duration > 0.25 and not _dense:
                 axq.text(ph.t_start + ph.duration / 2, _yy + _h / 2,
                          f"{ph.phase}{(' ' + ph.side[0].upper()) if ph.side else ''}",
                          ha="center", va="center", fontsize=6.5)
@@ -2578,9 +3113,21 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
                  fontsize=7, color="grey", transform=axq.transAxes)
 
     # --- task ribbon + shading ---
+    # A multi-pass capture carries dozens of tasks. The full label on each one
+    # is a solid bar of overlapping text (walking1 drew fourteen of them on top
+    # of each other), so past this many the ribbon shows the CYCLE NAME only —
+    # "r7" states leg and ordinal in two characters, and the colour already
+    # carries the task.
     for g in segs:
-        axr.axvspan(g.t_start, g.t_end, color=TASK_COLOURS.get(g.task, "#ECEFF1"),
-                    alpha=.85, lw=0)
+        # Consecutive gait cycles OVERLAP by design, so one full-height band
+        # per cycle paints them over each other and the names collide into an
+        # unreadable row. One lane per leg separates them: within a leg the
+        # cycles are strictly sequential.
+        _lane = (0.52 if g.side == "left" else 0.04) if (_dense and g.side) else 0.0
+        _lh = 0.44 if (_dense and g.side) else 1.0
+        axr.add_patch(plt.Rectangle(
+            (g.t_start, _lane), max(g.t_end - g.t_start, 1e-6), _lh,
+            color=TASK_COLOURS.get(g.task, "#ECEFF1"), alpha=.85, lw=0))
         axr.axvline(g.t_start, color="w", lw=1)
         # Name the leg / direction on the ribbon: "cut right" is the finding,
         # "cut" alone makes you open the CSV to learn which way.
@@ -2605,7 +3152,12 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
         if getattr(g, "angle_deg", None) is not None:
             _name += f" {g.angle_deg:.0f}\u00b0"
         span = g.t_end - g.t_start
-        if span > 0.8:
+        if _dense:
+            _lbl = (g.name.rsplit("_", 1)[-1] if getattr(g, "name", "")
+                    else g.task.replace("_", " "))
+            axr.text((g.t_start + g.t_end) / 2, _lane + _lh / 2, _lbl,
+                     ha="center", va="center", fontsize=5.5, rotation=90)
+        elif span > 0.8:
             axr.text((g.t_start + g.t_end) / 2, 0.5,
                      f"{_name}\n{g.duration:.2f}s"
                      + (f"\n{_extra}" if _extra else ""),
@@ -2617,20 +3169,36 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
                          textcoords="offset points", ha="center", va="bottom",
                          fontsize=6.5, rotation=30)
     axr.set_ylim(0, 1); axr.set_yticks([])
-    axr.set_ylabel("tasks", fontsize=8, rotation=0, ha="right", va="center")
+    axr.set_ylabel("tasks\nL / R" if _dense else "tasks",
+                   fontsize=8, rotation=0, ha="right", va="center")
     for sp in ("top", "right", "left"):
         axr.spines[sp].set_visible(False)
+    # Consecutive gait cycles OVERLAP — that is what walking is — so shading
+    # every cycle window paints one leg's colour over the other's for the whole
+    # capture. On a dense trial the band shows the STANCE instead: those do not
+    # overlap on one leg, they line up with the force trace underneath, and the
+    # cycle windows are still readable on the ribbon above.
+    _bands = []
+    for g in segs:
+        _sf = _seg_foot(g)
+        if _dense and g.task in _GAIT_TASKS:
+            _own = [c for c in _cf if c.get("side") == _sf
+                    and c["t_on"] >= g.t_start - .01 and c["t_off"] <= g.t_end + .01]
+            for _c in _own:
+                _bands.append((_c["t_on"], _c["t_off"], _sf, g.task))
+            if _own:
+                continue
+        _bands.append((g.t_start, g.t_end, _sf, g.task))
     for ax in (axf, axp):
-        for g in segs:
+        for _b0, _b1, _sf, _tk in _bands:
             # Leg colour where the task has one; the task ribbon above still
             # carries the task colour, so nothing is lost by using this band
             # to answer "whose leg is this?" instead.
-            _sf = _seg_foot(g)
-            ax.axvspan(g.t_start, g.t_end, lw=0,
+            ax.axvspan(_b0, _b1, lw=0,
                        color=FOOT_COLOURS[_sf] if _sf
-                       else TASK_COLOURS.get(g.task, "#ECEFF1"),
+                       else TASK_COLOURS.get(_tk, "#ECEFF1"),
                        alpha=.16 if _sf else .22)
-            ax.axvline(g.t_start, color="k", lw=.5, alpha=.35)
+            ax.axvline(_b0, color="k", lw=.5, alpha=.35)
         ax.grid(alpha=.25)
 
     # --- marker trajectories: three orthogonal views ------------------------
@@ -2653,9 +3221,15 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
                 _h = pel2[:, [_ip, _il]]
                 _f = np.isfinite(_h).all(axis=1)
                 if _f.sum() > 2:
-                    _d = np.abs(_h[_f][-1] - _h[_f][0])
+                    # RANGE, not first-to-last displacement. An out-and-back
+                    # capture ENDS WHERE IT STARTED, so net displacement is
+                    # ~0.4 m on the very axis the participant walked seven
+                    # metres along twelve times, and walking1's panels came out
+                    # labelled "progression X" over a 1 m box while the walkway
+                    # sat in the one called frontal.
+                    _d = np.ptp(_h[_f], axis=0)
                     if _d[1] > _d[0] + 0.20:      # clearly along Z, not a tie
-                        _ip, _il = 2, 0
+                        _ip, _il = _il, _ip
             _NM = {0: "X", 1: "Y", 2: "Z"}
             _VERT = _NM[_ivv]
             _PROG = f"progression {_NM[_ip]} (m)"
@@ -2769,7 +3343,12 @@ def plot_trial_tasks(exp_dir: str, out_png: str, body_mass: Optional[float] = No
             _ax.text(.5, .5, f"trajectories unavailable\n{type(_e).__name__}",
                      ha="center", va="center", fontsize=8, transform=_ax.transAxes)
 
-    fig.suptitle(f"{trial} — {len(segs)} task(s) detected", fontsize=11)
+    _ncy = sum(1 for g in segs if getattr(g, "name", ""))
+    _nd = sum(1 for g in segs if g.task == "no_data")
+    fig.suptitle(f"{trial} — {len(segs)} task(s) detected"
+                 + (f", {_ncy} gait cycle(s)" if _ncy else "")
+                 + (f", {_nd} gap(s) with no marker data" if _nd else ""),
+                 fontsize=11)
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
     fig.savefig(out_png, dpi=150)
     plt.close(fig)

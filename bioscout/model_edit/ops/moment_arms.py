@@ -16,6 +16,14 @@ Two routes, deliberately separate ops rather than one with a mode flag:
                      Needs OpenSim. This is what you want when the requirement
                      is "+25 % moment arm", not "x1.25 radius" -- the two are
                      not the same number.
+
+All three of those change the moment arm's MAGNITUDE. None of them can repair a
+DISCONTINUITY, and asking one to is a category error -- `ma_target --scale 1.0`
+requests the arm the muscle already has and correctly writes an unchanged file.
+For a path that jumps from one side of a surface to the other there is:
+
+``wrap_quadrant``    restrict which side of a wrap surface the path may run on.
+                     Pure XML, no solver, no geometry change.
 """
 from __future__ import annotations
 
@@ -210,3 +218,273 @@ def _tag_factor(params: dict) -> dict:
 #: Consumed by :func:`bioscout.model_edit.run.apply` before formatting a suffix.
 SUFFIX_HOOKS = {"ma_scale_wraps": _tag_factor,
                 "ma_target": _tag_factor}
+
+
+@op("wrap_quadrant",
+    verb="moment_arms",
+    summary="Restrict which side of a wrap surface a path may run on (pure XML)",
+    delegates_to="bioscout.change_moment_arms.wraps.set_wrap_quadrant",
+    needs_opensim=False,
+    suffix="_q{quadrant_tag}",
+    notes=("The CONTINUITY lever, and the only one here. A two-point path over "
+           "a surface whose quadrant is 'all' may wrap either way round it; as "
+           "the joint moves the shortest-path solution jumps sides and the "
+           "moment arm steps from +r to -r. No radius change can fix that -- "
+           "the step is in WHICH SIDE is chosen, not in how big the surface "
+           "is. The quadrant belongs to the wrap OBJECT, not to one muscle's "
+           "PathWrap, so it constrains every muscle wrapping that surface: "
+           "check `info --wraps` for the user list before applying it to a "
+           "shared surface."),
+    params=[
+        Param("wraps", "list[str]", required=True, choices_from="wraps",
+              help="Wrap surfaces to constrain."),
+        Param("quadrant", "str", required=True,
+              help="One of all, +x, -x, +y, -y, +z, -z (the surface's own frame)."),
+        Param("mirror", "bool", default=True,
+              help="Apply to each wrap's _l/_r twin. The mirrored side gets the "
+                   "MIRRORED quadrant when the axis is z (left/right), because "
+                   "the twin surface sits in a mirrored frame."),
+    ])
+def wrap_quadrant(model, out, *, wraps, quadrant, mirror=True, **_):
+    from bioscout.change_moment_arms.wraps import (QUADRANTS, read_wraps,
+                                                   set_wrap_quadrant)
+
+    q = str(quadrant).lower()
+    if q not in QUADRANTS:
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason=f"quadrant must be one of {', '.join(QUADRANTS)}")
+
+    have = read_wraps(model)
+    names = list(wraps)
+    if len(names) == 1 and str(names[0]).upper() == "ALL":
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason="ALL is not accepted here: constraining every "
+                               "surface at once is never the intended edit")
+    unknown = [n for n in names if n not in have]
+    if unknown:
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason=f"wrap surface(s) not in the model: "
+                               f"{', '.join(unknown)}")
+
+    def _twin(n):
+        if n.endswith("_r"):
+            return n[:-2] + "_l"
+        if n.endswith("_l"):
+            return n[:-2] + "_r"
+        return None
+
+    want = {n: q for n in names}
+    if mirror:
+        # z is the left/right axis in OpenSim's body frames, so the twin
+        # surface's equivalent side is the opposite z. x and y are shared.
+        qm = ("-z" if q == "+z" else "+z" if q == "-z" else q)
+        for n in names:
+            t = _twin(n)
+            if t and t in have and t not in want:
+                want[t] = qm
+
+    shared = {n: have[n].muscles for n in want
+              if n in have and len(have[n].muscles) > 1}
+
+    changed = set_wrap_quadrant(model, out, want)
+    msgs = [f"[model-edit] quadrant {old} -> {new} on {n}"
+            for n, (old, new) in sorted(changed.items())]
+    for n, mus in sorted(shared.items()):
+        msgs.append(f"[model-edit] NOTE {n} is shared by {len(mus)} muscles "
+                    f"({', '.join(mus[:6])}{' ...' if len(mus) > 6 else ''}) — "
+                    f"this constrains all of them")
+    if not changed:
+        msgs.append("[model-edit] every named surface was already on that "
+                    "quadrant — nothing written differs")
+    return OpResult(bool(changed), "wrap_quadrant", str(model), str(out),
+                    changed={n: {"old": o, "new": nw}
+                             for n, (o, nw) in changed.items()},
+                    messages=msgs,
+                    reason="" if changed else "no quadrant changed")
+
+
+@op("wrap_repoint",
+    verb="moment_arms",
+    summary="Point a muscle's PathWrap at a different wrap surface already in the model",
+    delegates_to="bioscout.change_moment_arms.wraps.repoint_path_wrap",
+    needs_opensim=False,
+    suffix="_repoint",
+    notes=("Invents no geometry: the target surface must ALREADY be defined in "
+           "the model, so the edit is reproducible from published parts rather "
+           "than tuned to an objective. It exists because a model can carry a "
+           "published wrap surface and never connect it -- GPK_v3 defines 32 "
+           "wrap objects no muscle uses, against two in each published model "
+           "it is compared with, and 14 of those orphans are surfaces Catelli "
+           "DOES wire up. Unlike wrap_quadrant this is PER MUSCLE: a PathWrap "
+           "belongs to the muscle, so re-pointing one leaves every other user "
+           "of either surface untouched. Fails loudly on a missing muscle, "
+           "PathWrap or target -- a silent no-op would read as a repair that "
+           "did nothing."),
+    params=[
+        Param("muscle", "str", required=True, choices_from="muscles",
+              help="The muscle whose PathWrap moves."),
+        Param("old", "str", required=True, choices_from="wraps",
+              help="The surface it wraps on now."),
+        Param("new", "str", required=True, choices_from="wraps",
+              help="The surface it should wrap on. Must already exist."),
+        Param("mirror", "bool", default=True,
+              help="Apply the _l/_r twin of the same move when both twins exist."),
+    ])
+def wrap_repoint(model, out, *, muscle, old, new, mirror=True, **_):
+    from bioscout.change_moment_arms.wraps import read_wraps, repoint_path_wrap
+
+    have = read_wraps(model)
+    moves = {muscle: {old: new}}
+
+    def _twin(n):
+        if n.endswith("_r"):
+            return n[:-2] + "_l"
+        if n.endswith("_l"):
+            return n[:-2] + "_r"
+        return None
+
+    if mirror:
+        mt, ot, nt = _twin(muscle), _twin(old), _twin(new)
+        if mt and ot and nt and ot in have and nt in have:
+            moves[mt] = {ot: nt}
+
+    try:
+        changed = repoint_path_wrap(model, out, moves)
+    except ValueError as e:
+        return OpResult(False, "wrap_repoint", str(model), reason=str(e))
+
+    msgs = [f"[model-edit] {k.split(':')[0]}: wraps on {o} -> {n}"
+            for k, (o, n) in sorted(changed.items())]
+    for w in (old, new):
+        info = have.get(w)
+        if info and len(info.muscles) > 1:
+            msgs.append(f"[model-edit] NOTE {w} is shared by "
+                        f"{len(info.muscles)} muscles ({', '.join(info.muscles[:6])}"
+                        f"{' ...' if len(info.muscles) > 6 else ''}) — this edit "
+                        f"moves ONLY the named muscle off/onto it")
+    if not changed:
+        msgs.append("[model-edit] nothing changed — the muscle already wraps "
+                    "on the target")
+    return OpResult(bool(changed), "wrap_repoint", str(model), str(out),
+                    changed={k: {"old": o, "new": n}
+                             for k, (o, n) in changed.items()},
+                    messages=msgs,
+                    reason="" if changed else "no PathWrap changed")
+
+
+@op("wrap_add",
+    verb="moment_arms",
+    summary="Create a wrap surface on a body, and optionally connect muscles to it",
+    delegates_to="bioscout.change_moment_arms.wraps.add_wrap_object",
+    needs_opensim=False,
+    suffix="_addwrap",
+    notes=("The last resort, and the only op here that INVENTS geometry. Every "
+           "other moment-arm op presupposes the surface exists: ma_scale_wraps "
+           "resizes one, wrap_quadrant picks a side, wrap_repoint moves a muscle "
+           "between two. Use this only when the geometry a model needs is in "
+           "NEITHER the model nor a published sibling — and score the result as "
+           "an invention, because that is what it is. A surface with no "
+           "PathWrap changes no moment arm, so pass `muscles` unless you "
+           "deliberately want an orphan."),
+    params=[
+        Param("body", "str", required=True, choices_from="bodies",
+              help="Body the surface is rigidly fixed to. For a muscle crossing "
+                   "one joint this decides which segment it moves with, which "
+                   "is usually the whole question."),
+        Param("wrap_name", "str", "Unique name for the new wrap object. NOT "
+              "`name`: op params are passed to model_edit.apply() as **kwargs, "
+              "and `name` is apply()'s own first argument, so a param called "
+              "`name` raises \"got multiple values for argument 'name'\".",
+              required=True),
+        Param("kind", "str", "cylinder | sphere | ellipsoid", default="cylinder"),
+        Param("radius", "float", "Radius of the cylinder or sphere.",
+              default=None, unit="m"),
+        Param("length", "float",
+              "Cylinder only — the cylinder's axis is its local z.",
+              default=None, unit="m"),
+        Param("translation", "list[float]", default=[0.0, 0.0, 0.0], unit="m",
+              help="Position in the BODY's frame."),
+        Param("rotation", "list[float]", default=[0.0, 0.0, 0.0], unit="rad",
+              help="xyz body-fixed Euler angles."),
+        Param("quadrant", "str", default="all",
+              help="Restrict which side may be wrapped: all, +x, -x, +y, ..."),
+        Param("muscles", "list[str]", default=None, choices_from="muscles",
+              help="Attach these muscles to the new surface (recommended)."),
+    ])
+def wrap_add(model, out, *, body, wrap_name, kind="cylinder", radius=None,
+             length=None, translation=None, rotation=None, quadrant="all",
+             muscles=None, **_):
+    from bioscout.change_moment_arms.wraps import add_wrap_object, attach_path_wrap
+
+    dims = {}
+    if radius is not None:
+        dims["radius"] = float(radius)
+    if length is not None:
+        dims["length"] = float(length)
+    try:
+        info = add_wrap_object(
+            model, out, body=body, name=wrap_name, kind=kind,
+            translation=tuple(translation or (0, 0, 0)),
+            rotation=tuple(rotation or (0, 0, 0)),
+            quadrant=quadrant, **dims)
+    except ValueError as e:
+        return OpResult(False, "wrap_add", str(model), reason=str(e))
+
+    msgs = [f"[model-edit] created {info[wrap_name]['kind']} {wrap_name} on "
+            f"{body} ({', '.join(f'{k}={v}' for k, v in dims.items())})"]
+    if muscles:
+        try:
+            added = attach_path_wrap(out, out, {m: [wrap_name] for m in muscles})
+        except ValueError as e:
+            return OpResult(False, "wrap_add", str(model), reason=str(e))
+        msgs += [f"[model-edit] {k.split(':')[0]} now wraps on {wrap_name}"
+                 for k in sorted(added)]
+    else:
+        msgs.append("[model-edit] NOTE no muscles attached — this surface is an "
+                    "orphan and changes no moment arm")
+    return OpResult(True, "wrap_add", str(model), str(out),
+                    changed=info, messages=msgs)
+
+
+@op("wrap_detach",
+    verb="moment_arms",
+    summary="Remove a muscle's PathWrap on a surface (the surface itself stays)",
+    delegates_to="bioscout.change_moment_arms.wraps.detach_path_wrap",
+    needs_opensim=False,
+    suffix="_detach",
+    notes=("Per muscle, like wrap_repoint. The honest way to ask what a wrap is "
+           "doing: detach it, sweep, read the difference. Deleting the wrap "
+           "OBJECT would answer that for every muscle on it at once. Raises if "
+           "nothing matched, so a typo cannot look like a clean no-op."),
+    params=[
+        Param("muscle", "str", "The muscle whose PathWrap is removed.",
+              required=True, choices_from="muscles"),
+        Param("wrap", "str", "The surface it should stop wrapping on. The "
+              "surface itself is left in the model.",
+              required=True, choices_from="wraps"),
+        Param("mirror", "bool", "Apply the same detach to the _l/_r twin.",
+              default=True),
+    ])
+def wrap_detach(model, out, *, muscle, wrap, mirror=True, **_):
+    from bioscout.change_moment_arms.wraps import detach_path_wrap
+
+    def _twin(n):
+        return n[:-2] + ("_l" if n.endswith("_r") else "_r") if n[-2:] in ("_r", "_l") else None
+
+    moves = {muscle: [wrap]}
+    if mirror:
+        mt, wt = _twin(muscle), _twin(wrap)
+        if mt and wt:
+            moves[mt] = [wt]
+    try:
+        removed = detach_path_wrap(model, out, moves)
+    except ValueError as e:
+        return OpResult(False, "wrap_detach", str(model), reason=str(e))
+    return OpResult(True, "wrap_detach", str(model), str(out),
+                    changed={k: {"removed": v} for k, v in removed.items()},
+                    messages=[f"[model-edit] {k.split(':')[0]} no longer wraps "
+                              f"on {v}" for k, v in sorted(removed.items())])
+
+
+SUFFIX_HOOKS["wrap_quadrant"] = lambda p: dict(
+    p, quadrant_tag=str(p.get("quadrant", "")).replace("+", "p").replace("-", "m"))

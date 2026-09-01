@@ -31,6 +31,7 @@ from .mocap import (
     TaskSegment,
     contact_feet,
     foot_events_from_markers,
+    gait_cycles,
     plot_trial_tasks,
     TASK_COLOURS,
     FOOT_COLOURS,
@@ -63,12 +64,27 @@ __all__ = [
     "TaskSegment",
     "contact_feet",
     "foot_events_from_markers",
+    "gait_cycles",
+    "prepare_cycle_runs",
+    "write_cycle_files",
     "plot_trial_tasks",
     "TASK_COLOURS",
     "FOOT_COLOURS",
     "read_trc",
     "read_grf",
 ]
+
+
+def prepare_cycle_runs(*a, **k):
+    """Lazy re-export; see bioscout.movement_detector.cycle_runs."""
+    from .cycle_runs import prepare_cycle_runs as _f
+    return _f(*a, **k)
+
+
+def write_cycle_files(*a, **k):
+    """Lazy re-export; see bioscout.movement_detector.cycle_runs."""
+    from .cycle_runs import write_cycle_files as _f
+    return _f(*a, **k)
 
 
 def classify_session(*a, **k):

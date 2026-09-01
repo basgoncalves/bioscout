@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 620" width="1040" height="620" role="img" aria-labelledby="t d">
+<title id="t">Where a fact lives: retiring settings.py</title>
+<desc id="d">settings.py conflates five kinds of thing with different owners, lifetimes and change rates. Library code belongs in bioscout and is upgraded by pip; lab facts belong in a declarative project.yaml; session facts belong in session.yaml; run selection belongs at the call site and is never persisted; paths are convention, and only a deviation needs stating.</desc>
+<style>
+  .bg{fill:#fbfaf8}
+  .card{fill:#ffffff;stroke:#d9d5cd}
+  .panel{fill:#f4f2ee;stroke:#dedad2}
+  .ink{fill:#22201d}
+  .muted{fill:#6d6960}
+  .bad{fill:#b1503a}
+  .good{fill:#2c7a6b}
+  .goodS{stroke:#2c7a6b}
+  .line{stroke:#a9a49a;fill:none}
+  .sl1{fill:#e8eef6;stroke:#b9cbe0}
+  .sl2{fill:#e6f0ec;stroke:#b5d6cb}
+  .sl3{fill:#f2ece0;stroke:#dcccae}
+  .sl4{fill:#f5e8e4;stroke:#e0c0b6}
+  .sl5{fill:#eeeaf3;stroke:#cdc4de}
+  .k1{fill:#3a6ba5}.k2{fill:#2c7a6b}.k3{fill:#96702a}.k4{fill:#b1503a}.k5{fill:#6a559c}
+  .s1{stroke:#3a6ba5}.s2{stroke:#2c7a6b}.s3{stroke:#96702a}.s4{stroke:#b1503a}.s5{stroke:#6a559c}
+  text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+  .mono{font-family:ui-monospace,"SFMono-Regular","Consolas","Liberation Mono",monospace}
+  .h{font-size:19px;font-weight:700}
+  .sh{font-size:13px;font-weight:700;letter-spacing:.07em}
+  .b{font-size:13.5px}
+  .s{font-size:12px}
+  .xs{font-size:11px}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#15171a}
+    .card{fill:#1e2226;stroke:#3b4148}
+    .panel{fill:#191d21;stroke:#333940}
+    .ink{fill:#e7e4df}
+    .muted{fill:#9aa1a8}
+    .bad{fill:#e59175}
+    .good{fill:#63c2ad}
+    .goodS{stroke:#63c2ad}
+    .line{stroke:#5a626a}
+    .sl1{fill:#1b2733;stroke:#2f4a63}
+    .sl2{fill:#152a26;stroke:#2c5a4f}
+    .sl3{fill:#2a2418;stroke:#584a2d}
+    .sl4{fill:#2e2320;stroke:#5c4038}
+    .sl5{fill:#241f2e;stroke:#463c5c}
+    .k1{fill:#84b2e2}.k2{fill:#63c2ad}.k3{fill:#d9b063}.k4{fill:#e59175}.k5{fill:#b0a0d8}
+    .s1{stroke:#84b2e2}.s2{stroke:#63c2ad}.s3{stroke:#d9b063}.s4{stroke:#e59175}.s5{stroke:#b0a0d8}
+  }
+</style>
+<defs>
+  <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="k1"/></marker>
+  <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="k2"/></marker>
+  <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="k3"/></marker>
+  <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="k4"/></marker>
+  <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="k5"/></marker>
+</defs>
+
+<rect class="bg" width="1040" height="620"/>
+<text class="ink h" x="28" y="38">§2.9 — one file, five owners: where each fact actually belongs</text>
+<text class="muted b" x="28" y="60">The problem is not that settings.py is long. It is that these five have different owners, lifetimes and change rates.</text>
+
+<!-- LEFT: the one file -->
+<text class="bad sh" x="28" y="100">COPIED PER PROJECT</text>
+<rect class="panel" x="24" y="112" width="316" height="452" rx="10"/>
+<text class="ink mono s" x="42" y="138" font-weight="700">settings.py</text>
+<text class="muted xs" x="42" y="154">~1500 lines · copied and mutated per project</text>
+
+<rect class="sl1" x="42" y="168" width="280" height="66" rx="6"/>
+<text class="k1 s" x="56" y="188" font-weight="700">Subject, Inputs, build_model_config,</text>
+<text class="k1 s" x="56" y="204" font-weight="700">the runner functions</text>
+<text class="muted xs" x="56" y="222">changes every release · owner: bioscout</text>
+
+<rect class="sl2" x="42" y="244" width="280" height="66" rx="6"/>
+<text class="k2 s" x="56" y="264" font-weight="700">marker conventions, EMG channels,</text>
+<text class="k2 s" x="56" y="280" font-weight="700">plate mapping, filter defaults</text>
+<text class="muted xs" x="56" y="298">changes ~never · owner: the lab</text>
+
+<rect class="sl3" x="42" y="320" width="280" height="66" rx="6"/>
+<text class="k3 s" x="56" y="340" font-weight="700">trials, time windows, body mass,</text>
+<text class="k3 s" x="56" y="356" font-weight="700">models, emg_map, calibrations</text>
+<text class="muted xs" x="56" y="374">changes per session · owner: the session</text>
+
+<rect class="sl4" x="42" y="396" width="280" height="66" rx="6"/>
+<text class="k4 s" x="56" y="416" font-weight="700">SUBJECTS, TRIALS, DO_SO, --replace</text>
+<text class="muted xs" x="56" y="434">true for one afternoon · owner: whoever</text>
+<text class="muted xs" x="56" y="450">is at the keyboard right now</text>
+
+<rect class="sl5" x="42" y="472" width="280" height="58" rx="6"/>
+<text class="k5 s" x="56" y="492" font-weight="700">MODELS_DIR, SIMULATIONS_DIR, …</text>
+<text class="muted xs" x="56" y="510">already implied by the folder layout</text>
+
+<text class="bad xs" x="42" y="550">Copying code into projects IS the drift problem.</text>
+
+<!-- arrows -->
+<path class="line s1" d="M330 200 C 400 200, 400 176, 470 176" marker-end="url(#a1)"/>
+<path class="line s2" d="M330 276 C 400 276, 400 264, 470 264" marker-end="url(#a2)"/>
+<path class="line s3" d="M330 352 C 400 352, 400 352, 470 352" marker-end="url(#a3)"/>
+<path class="line s4" d="M330 428 C 400 428, 400 440, 470 440" marker-end="url(#a4)"/>
+<path class="line s5" d="M330 500 C 400 500, 400 528, 470 528" marker-end="url(#a5)"/>
+
+<!-- RIGHT: destinations -->
+<text class="good sh" x="474" y="100">WHERE IT BELONGS</text>
+
+<rect class="card" x="474" y="144" width="542" height="66" rx="7"/>
+<text class="k1 s" x="490" y="166" font-weight="700">library code</text>
+<text class="ink mono s" x="640" y="166">bioscout</text>
+<text class="muted xs" x="490" y="186">Versioned ONCE, upgraded by pip install -U. The Powerlifting copy is 112 lines</text>
+<text class="muted xs" x="490" y="200">ahead of the template while both claim schema 2.0.0b1 — you cannot diff code shape.</text>
+
+<rect class="card" x="474" y="232" width="542" height="66" rx="7"/>
+<text class="k2 s" x="490" y="254" font-weight="700">lab facts</text>
+<text class="ink mono s" x="640" y="254">project.yaml</text>
+<text class="muted xs" x="490" y="274">~20 declarative lines at the project root. Data, not code. Sections mirror the</text>
+<text class="muted xs" x="490" y="288">stages (capture / curation / model / solve / results) in schema 2.</text>
+
+<rect class="card" x="474" y="320" width="542" height="66" rx="7"/>
+<text class="k3 s" x="490" y="342" font-weight="700">session facts</text>
+<text class="ink mono s" x="640" y="342">session.yaml</text>
+<text class="muted xs" x="490" y="362">Already done — the models / markerset / emg_filter moves of 2026-08-18/19</text>
+<text class="muted xs" x="490" y="376">completed it.</text>
+
+<rect class="card" x="474" y="408" width="542" height="66" rx="7"/>
+<text class="k4 s" x="490" y="430" font-weight="700">run selection</text>
+<text class="ink mono s" x="640" y="430">the call site — CLI / notebook / GUI</text>
+<text class="muted xs" x="490" y="450">NEVER persisted. A selection written into a settings file is why "run the pipeline"</text>
+<text class="muted xs" x="490" y="464">silently re-ran one subject from March.</text>
+
+<rect class="card" x="474" y="496" width="542" height="66" rx="7"/>
+<text class="k5 s" x="490" y="518" font-weight="700">paths</text>
+<text class="ink mono s" x="640" y="518">convention</text>
+<text class="muted xs" x="490" y="538">The folder layout IS the configuration: models/{generic,personalised,utils},</text>
+<text class="muted xs" x="490" y="552">simulations/&lt;subject&gt;/&lt;session&gt;, results/. Only a deviation needs stating.</text>
+
+<text class="muted xs" x="474" y="582">settings.py survives only as an optional hook for code-level overrides.</text>
+<text class="muted xs" x="474" y="598">`bioscout project init` extracts a project.yaml from an existing one.</text>
+</svg>

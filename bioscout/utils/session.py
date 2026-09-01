@@ -937,11 +937,61 @@ def _cal_value(v):
     return str(v)
 
 
-def _raw_calibration(cfg):
+def _ceinms_block(cfg) -> dict:
+    """The ``ceinms:`` mapping, or ``{}``."""
     if not isinstance(cfg, dict):
         return {}
+    ce = cfg.get("ceinms")
+    return ce if isinstance(ce, dict) else {}
+
+
+def _raw_calibration(cfg):
+    """The calibration block, from ``ceinms.calibration`` or the legacy top level.
+
+    CANONICAL LOCATION IS ``ceinms.calibration`` (2026-08-24). These are
+    CEINMS's parameter bounds and nothing else reads them, so a top-level key
+    sat them beside ``subject`` and ``body_mass`` as though they were session
+    facts. ``ceinms.alpha/beta/gamma`` were already nested; the calibration
+    configs had simply not followed.
+
+    The top-level spelling still LOADS, because a reader that refused it could
+    not be used to migrate the files that need migrating. It is deprecated,
+    reported once per file by :func:`_check_calibration`, and rewritten by
+    :func:`migrate_calibration_block`.
+    """
+    if not isinstance(cfg, dict):
+        return {}
+    ce = _ceinms_block(cfg)
+    raw = ce.get("calibration", ce.get("calibration_params"))
+    if isinstance(raw, dict):
+        return raw
     raw = cfg.get("calibration", cfg.get("calibration_params"))
     return raw if isinstance(raw, dict) else {}
+
+
+def _default_calibration_name(cfg):
+    """``default_calibration``, nested first — same precedence as the block."""
+    ce = _ceinms_block(cfg)
+    if DEFAULT_CALIBRATION_KEY in ce:
+        return ce.get(DEFAULT_CALIBRATION_KEY)
+    return cfg.get(DEFAULT_CALIBRATION_KEY) if isinstance(cfg, dict) else None
+
+
+def uses_legacy_calibration(cfg) -> bool:
+    """True when the calibration block is still at the top level.
+
+    Having both is NOT an error and NOT a merge: the nested one wins outright,
+    exactly as :func:`_raw_calibration` reads it. Silently merging two blocks
+    that disagree is how you end up with bounds nobody wrote.
+    """
+    if not isinstance(cfg, dict):
+        return False
+    ce = _ceinms_block(cfg)
+    if isinstance(ce.get("calibration", ce.get("calibration_params")), dict):
+        return False
+    return isinstance(cfg.get("calibration",
+                              cfg.get("calibration_params")), dict) or \
+        DEFAULT_CALIBRATION_KEY in cfg
 
 
 def is_named_calibration(cfg) -> bool:
@@ -972,7 +1022,16 @@ def calibration_configs(cfg) -> Dict[str, Dict[str, str]]:
 
 def calibration_name_for(cfg, iteration=None) -> Optional[str]:
     """Which named calibration config `iteration` runs with."""
-    return _select_name(cfg, iteration, blocks=calibration_configs(cfg),
+    # _select_name reads `default_calibration` off the top level. Overlay the
+    # nested one when it is there so the selector follows the block it selects
+    # from — a nested `calibration:` with a top-level `default_calibration:`
+    # would otherwise name a config out of the block it is not in.
+    view = cfg
+    ce = _ceinms_block(cfg)
+    if DEFAULT_CALIBRATION_KEY in ce and isinstance(cfg, dict):
+        view = dict(cfg)
+        view[DEFAULT_CALIBRATION_KEY] = ce[DEFAULT_CALIBRATION_KEY]
+    return _select_name(view, iteration, blocks=calibration_configs(cfg),
                         named=is_named_calibration(cfg), key="calibration",
                         default_key=DEFAULT_CALIBRATION_KEY, what="config")
 
@@ -1028,8 +1087,21 @@ def iteration_is_calibrated(cfg, iteration=None) -> bool:
     return yaml_bool(it.get("calibrated", ce.get("calibrated", True)))
 
 
+#: Files whose legacy top-level `calibration:` has already been reported. One
+#: line per FILE — this check runs on every load, and a session is loaded many
+#: times in a batch.
+_LEGACY_CALIBRATION_WARNED = set()
+
+
 def _check_calibration(data, path):
     """Load-time validation of `calibration` and every iteration's selector."""
+    if uses_legacy_calibration(data) and str(path) not in _LEGACY_CALIBRATION_WARNED:
+        _LEGACY_CALIBRATION_WARNED.add(str(path))
+        print(f"[session.yaml] DEPRECATED: `calibration:` / "
+              f"`{DEFAULT_CALIBRATION_KEY}:` at the top level of {path}. "
+              f"They are CEINMS parameter bounds and belong under `ceinms:`. "
+              f"Still read for now; migrate with "
+              f"`bioscout session migrate-calibration`.")
     try:
         blocks = calibration_configs(data)
     except ValueError as e:
@@ -1557,6 +1629,154 @@ def convert_session_xml_to_yaml(xml_path, yaml_path=None, keep_xml=True) -> str:
     return out
 
 
+def migrate_calibration_block(yaml_path, *, apply=True, backup=True):
+    """Move a top-level ``calibration:`` / ``default_calibration:`` under ``ceinms:``.
+
+    -> ``(changed: bool, note: str)``. Idempotent: a file already nested (or
+    with no calibration at all) reports ``(False, ...)`` and is not touched.
+
+    Done with the SURGICAL patcher, not a safe_load/dump round trip: these
+    files are hand-written and full of comments explaining why a bound is what
+    it is, and re-dumping would silently delete every one of them. The block's
+    source text is lifted verbatim, re-indented one level, and re-inserted —
+    so a migrated file diffs as a move, which is what it is.
+    """
+    from bioscout.utils.file_edit import load_document
+
+    _require_yaml()
+    doc = load_document(yaml_path)
+    with open(yaml_path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not uses_legacy_calibration(data):
+        return False, f"{yaml_path}: already nested (or no calibration block)"
+
+    def _value_src(key):
+        """The VALUE's own source span for a top-level key, or None.
+
+        NOT ``Document.entry_source``: that returns the whole entry — the
+        ``key:`` line and any comment attached above it — so feeding it back in
+        as a value nests the block under a second copy of its own name.
+        Slicing the value node is what ``set_iteration_field`` does, and it is
+        the only thing that gives the value alone.
+        """
+        for knode, vnode in (doc.ynode.value or []):
+            if str(knode.value) != str(key):
+                continue
+            src = doc.text[vnode.start_mark.index:vnode.end_mark.index]
+            # The slice begins at the value's COLUMN, so its first line carries
+            # no leading spaces while every later line keeps its original
+            # indent. Measuring the block's indentation from that would read 0
+            # and shift the rest by too much — `prod:` landing at 4 while its
+            # sibling `lit:` lands at 6, which is not valid YAML. Pad line one
+            # back to where it really starts so all lines are comparable.
+            return " " * vnode.start_mark.column + src
+        return None
+
+    def _comment_lines_above(key):
+        """1-based line numbers of the comment block directly above `key:`.
+
+        Contiguous `#` lines only, stopping at the first blank or code line —
+        a comment separated by a blank line is about the file, not about this
+        key, and claiming otherwise would be a guess.
+        """
+        import re as _re
+        m = _re.search(rf"^{_re.escape(str(key))}[ \t]*:", doc.text, _re.M)
+        if not m:
+            return []
+        upto = doc.text[:m.start()].splitlines()
+        out = []
+        for i in range(len(upto) - 1, -1, -1):
+            if upto[i].lstrip().startswith("#"):
+                out.append(i + 1)
+            else:
+                break
+        return sorted(out)
+
+    moved = []
+    key = ("calibration" if "calibration" in data
+           else "calibration_params" if "calibration_params" in data else None)
+    orphans = sorted(set(
+        (_comment_lines_above(key) if key else [])
+        + (_comment_lines_above(DEFAULT_CALIBRATION_KEY)
+           if DEFAULT_CALIBRATION_KEY in data else [])))
+
+    # Read BOTH sources before writing anything: every mutation reparses the
+    # document, which invalidates node objects and shifts every offset. Capture
+    # first, then mutate, re-fetching the root each time.
+    block_src = _value_src(key) if key else None
+    dflt_src = (_value_src(DEFAULT_CALIBRATION_KEY)
+                if DEFAULT_CALIBRATION_KEY in data else None)
+
+    if key is not None:
+        if block_src is None:
+            return False, f"{yaml_path}: could not read the `{key}:` block"
+        doc.set_entry_source(doc.ensure_mapping("ceinms"), "calibration",
+                             _reindent_value(block_src, 4))
+        doc.delete_entry(doc.ynode, key)
+        moved.append(key)
+
+    if DEFAULT_CALIBRATION_KEY in data:
+        src = dflt_src if dflt_src is not None else str(
+            data[DEFAULT_CALIBRATION_KEY])
+        # add_entry writes "key: {src}" — it supplies the space itself, so a
+        # leading one here produces "default_calibration:  prod".
+        doc.set_entry_source(doc.ensure_mapping("ceinms"),
+                             DEFAULT_CALIBRATION_KEY,
+                             src if "\n" in src else src.strip())
+        doc.delete_entry(doc.ynode, DEFAULT_CALIBRATION_KEY)
+        moved.append(DEFAULT_CALIBRATION_KEY)
+
+    if not moved:
+        return False, f"{yaml_path}: nothing to move"
+    if not apply:
+        return True, doc.diff()
+    doc.save(backup=backup)
+    _LEGACY_CALIBRATION_WARNED.discard(str(yaml_path))
+
+    note = f"{yaml_path}: moved {', '.join(moved)} under `ceinms:`"
+    if orphans:
+        # The keys move; a comment written ABOVE them does not — Document's
+        # entry bounds stop at the key line. Nothing is lost, but a paragraph
+        # explaining why a bound is what it is now sits above whatever follows
+        # it, which is worse than useless if nobody is told. Name the lines.
+        note += (f"\n  NOTE: {len(orphans)} comment line(s) that sat above the "
+                 f"moved key(s) stayed put — line(s) "
+                 f"{', '.join(str(n) for n in orphans)} of the ORIGINAL file. "
+                 f"Move them next to `ceinms.calibration` by hand.")
+    return True, note
+
+
+def _reindent_value(src: str, indent: int) -> str:
+    """Re-indent a mapping value's source so it sits `indent` spaces deep.
+
+    A block value's source arrives with the indentation it had at its old
+    depth. Shifting by the DIFFERENCE (rather than prepending a fixed pad)
+    keeps the block's internal structure — a nested `prod:` two levels down
+    stays two levels below its parent.
+    """
+    lines = src.splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines:
+        return src
+    body = [ln for ln in lines if ln.strip()]
+    if not body:
+        return src
+    cur = min(len(ln) - len(ln.lstrip(" ")) for ln in body)
+    shift = indent - cur
+    if shift == 0:
+        return "\n" + "\n".join(lines)
+    out = []
+    for ln in lines:
+        if not ln.strip():
+            out.append(ln)
+        elif shift > 0:
+            out.append(" " * shift + ln)
+        else:
+            out.append(ln[min(-shift, len(ln) - len(ln.lstrip(" "))):])
+    return "\n" + "\n".join(out)
+
+
 def read_session(path) -> SessionSpec:
     """Load a session config, preferring YAML then falling back to XML. ``path``
     may be a session folder or a specific file."""
@@ -1576,6 +1796,7 @@ __all__ = ["read_session_yaml", "write_session_yaml",
            "calibration_configs", "resolve_calibration",
            "calibration_name_for", "is_named_calibration",
            "DEFAULT_CALIBRATION_KEY", "CALIBRATION_PARAM_NAMES",
+           "migrate_calibration_block", "uses_legacy_calibration",
            "CALIBRATION_OPTIMISER_NAMES", "yaml_bool"]
 
 # canonical reader alias (fixes a broken import in the old session_layout)
@@ -2521,7 +2742,12 @@ class Iteration:
             #     subject), then generic/ and one level of family subfolders
             #     (generic/Rajagopal_FAIS/, generic/Catelli/, ...), then the
             #     flat legacy models/ root last so old projects keep working.
+            # personalised/<subject>/<session>/ first (the scaled model belongs
+            # to the session that built it), then the flat personalised/<subject>/
+            # for anything scaled before 2026-08-31.
+            _sess = os.path.basename(os.path.abspath(self.session_dir))
             candidates = [
+                os.path.join(root, "models", "personalised", subject, _sess, name),
                 os.path.join(root, "models", "personalised", subject, name),
                 os.path.join(root, "models", "generic", name),
             ]
@@ -3003,28 +3229,50 @@ class Iteration:
         """This session's subject id — the folder above the session."""
         return os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
 
+    @property
+    def session_name(self):
+        """This session's id — the session folder itself."""
+        return os.path.basename(os.path.abspath(self.session_dir))
+
     def models_dir(self, create=False):
         """Where THIS session's personalised models are written and read:
-        ``<project>/models/personalised/<subject>/``.
+        ``<project>/models/personalised/<subject>/<session>/``.
 
-        Models are a property of the SUBJECT, not of a session or an
-        iteration: 022's pre, post and sprints sessions all name the same
-        ``models/personalised/022/022_Rajagopal2015_FAI.osim``, because the
-        anatomy did not change between the morning and the afternoon.
-        Writing them into the iteration folder instead — which is what
-        scaling did until 2026-08-19 — scattered one model per
-        subject × session × iteration, none of them where session.yaml said
-        the model was, and left the models tree holding only what had been
-        put there by hand.
+        The anatomy does not change between a morning and an afternoon
+        session, but the SCALED MODEL does: it is built from that session's
+        static trial and its marker set, so two sessions of one subject
+        produce two different ``<generic>_scaled.osim``. Sharing one
+        ``personalised/<subject>/`` folder between them meant the second
+        session silently overwrote the first, and neither session could be
+        re-analysed afterwards without rescaling.
+
+        Kept from the 2026-08-19 change: models still live in the models tree
+        rather than scattered through ``3_iterations/``, which is what made
+        them impossible to find. Only the subject folder gained a session
+        level underneath it.
+
+        Backwards compatible on READ: if the session folder does not exist yet
+        but the flat ``personalised/<subject>/`` does and holds models, that
+        one is returned, so sessions scaled before this change keep working
+        until they are next rescaled. ``create=True`` always makes and returns
+        the session folder.
         """
         from bioscout import utils as _u
         md = str(getattr(_u, "MODELS_DIR", "") or "")
         if not md:
             pd = str(getattr(_u, "PROJECT_DIR", None) or os.getcwd())
             md = os.path.join(pd, "models")
-        out = os.path.join(md, "personalised", self.subject_name)
+        flat = os.path.join(md, "personalised", self.subject_name)
+        out = os.path.join(flat, self.session_name)
         if create:
             os.makedirs(out, exist_ok=True)
+            return out
+        if not os.path.isdir(out) and os.path.isdir(flat):
+            try:
+                if any(f.lower().endswith(".osim") for f in os.listdir(flat)):
+                    return flat
+            except OSError:
+                pass
         return out
 
     def model_output_path(self, name, default_stem=None):

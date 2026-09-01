@@ -36,10 +36,14 @@ from .paths import (
 from . import literature_jcf
 from . import moment_arm_motion
 from .moment_arm_motion import inspect_moment_arms_over_motion
+from . import model_ma_check
+from .model_ma_check import check_ma_discontinuities
 
 __all__ = [
     "moment_arm_motion",
     "inspect_moment_arms_over_motion",
+    "model_ma_check",
+    "check_ma_discontinuities",
     "euler_xyz_to_rotation_matrix",
     "project_point_outside_cylinder",
     "radial_distance",

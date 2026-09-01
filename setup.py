@@ -82,6 +82,11 @@ setup(
         # without it a wheel install fails at the first personalise call.
         'bioscout.tps_personalise': ['data/*.xml', 'data/*.yaml', '*.md'],
         'bioscout.change_moment_arms': ['*.md'],
+        # paths.py resolves the literature corpus at PKG_DIR/validation/,
+        # so without this a wheel install has no literature to validate
+        # against and every muscle_inspect validate/fibre/strength call
+        # falls back or fails. Source checkouts hid it.
+        'bioscout.muscle_inspect': ['validation/*.csv', 'validation/*.json'],
         'bioscout.utils': ['*.jpg', '*.png'],
         # *.zip is torch_cpu.zip; torch_cpu.dll is excluded below.
         'bioscout.utils.ceinms.bin': ['*.exe', '*.dll', '*.txt', '*.zip'],

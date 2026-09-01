@@ -14,9 +14,30 @@ building, organising and trusting the `.osim` files themselves — added after t
 FAIS MRI-personalisation work, which is currently four hand-run scripts with no
 bioscout verb behind them.
 
+Four figures carry the arguments that are hard to make in prose; each sits in
+the section it belongs to, and the sources live in
+[`docs/_figures/`](_figures/).
+
+| figure | section | the claim it makes |
+|---|---|---|
+| [the pipeline and its three gates](_figures/pipeline-and-gates.svg) | §1, §2.2, §2.8 | a run that produced nothing must not be able to end by saying "done" |
+| [where a fact lives](_figures/where-a-fact-lives.svg) | §2.9 | `settings.py` conflates five things with five different owners |
+| [the stage registry](_figures/stage-registry.svg) | §2.10 | six stages are currently declared four times, once per surface |
+| [the model axis](_figures/model-axis.svg) | §3 | the model is an artefact to be verified, not an input to be assumed |
+
 ---
 
 ## 1. Bugs found in the field
+
+![The pipeline and the three gates that keep it honest: a preflight gate before
+any solving, an input contract on every stage, and a trial × stage ok/MISS
+table at the end.](_figures/pipeline-and-gates.svg)
+
+*The pipeline, and where the three gates sit. Every bug below is a place where
+one of them was missing: §1 is the list of silent failures, §2.2 is the ask for
+the gate on the left, §2.8 the ask for the one at the bottom. The gate in the
+middle is the general form — a stage that cannot honour its contract must
+refuse, because the alternative is output that looks plausible and is wrong.*
 
 ### Correctness
 
@@ -219,6 +240,16 @@ redundant in practice. This section is the concrete design behind §2.1's
 one-paragraph sketch; §2.1's verbs are the interface, this is the data model
 under them.)*
 
+![settings.py split into its five constituents — library code to bioscout, lab
+facts to project.yaml, session facts to session.yaml, run selection to the call
+site, paths to convention.](_figures/where-a-fact-lives.svg)
+
+*The same five rows as the table below, drawn with their owners and lifetimes.
+The left column is what makes a copied settings.py drift: the top slice changes
+every release and is owned by bioscout, the bottom slice is true for one
+afternoon and is owned by whoever is at the keyboard — and they are in the same
+file, copied into every project.*
+
 **Diagnosis first.** The reason a copied `settings.py` keeps hurting is not
 that it is long — it is that one file conflates FIVE kinds of thing that have
 different owners, different lifetimes and different change rates, and only by
@@ -317,6 +348,19 @@ is "code", it goes in bioscout, not in the project.
 *(2026-08-19. §2.9 fixed WHERE a fact lives. This fixes what things are
 CALLED — the complaint that "the terminal, the yaml and the GUI all have
 different names and the pipeline diverges a bit".)*
+
+![Left: four surfaces each declaring their own name for the IK/ID/MA stage.
+Right: one STAGES list in the package, from which the CLI flags, the GUI
+navigation, the verify table's expected outputs and the docs tables are all
+generated.](_figures/stage-registry.svg)
+
+*The direction of the arrows is the whole point. On the left every surface
+declares the stage for itself, so six stages need four lists kept in step by
+hand; on the right the registry is declared once and each surface is generated
+from it. Note what is already on the right-hand side in spirit:
+`run_check.STAGE_OUTPUTS` is a stage id → output-file map written independently
+for the verify table, which is the strongest evidence the registry is the right
+shape.*
 
 **Diagnosis: the same stage has four names.** bioscout has four surfaces —
 the GUI nav, the CLI verbs, the config files, the Python API — and each grew
@@ -458,6 +502,18 @@ scripts now live in `FAIS_machine_learning/{code,mri}/` and are run by hand:
 
 None of the four had an equivalent verb in bioscout, and all four are generic.
 The `--verify` half of the first one now does: see 3.2.
+
+![The model axis: a generic template plus subject measurements through one of
+four morph back-ends, then a three-step verify chain — model-diff, geometry
+resolution, muscle_inspect — before the model enters the trial
+pipeline.](_figures/model-axis.svg)
+
+*Shaded green is what bioscout ships today; shaded red is still a hand-run
+script. The shape to notice is that the morph and the verification are the same
+size of problem: `RigidPassthrough` exists so the M0 baseline arm is produced
+through the identical code path, and `model-diff` exists so an edit is not
+"done" until an output proves what did and did not move. The findings at the
+bottom are what the verifier returned on trees everyone believed were fine.*
 
 ### 3.1 Model personalisation back-ends beyond TPS
 
@@ -648,3 +704,106 @@ registered model rather than an ad-hoc file, the plots are free.
    back-end and plausibility gate (3.1, 3.4).
 7. Validation gate incl. cohort measurement QC, packaging, CI, docs (2.6–2.8,
    3.5).
+
+---
+
+## 5. Session of 2026-08-24 — done, and what it opened
+
+### Done this session
+
+- **`muscle_inspect compare-models`** (`muscle_inspect/multi_model.py`). Every
+  other entry point took one `--model` and wrote one folder beside it, which is
+  the wrong shape for "is this model better than the published one?". Now N
+  models on one set of axes: `discontinuity.csv`, `moment_arm_curves.csv`,
+  `validation_rmse.csv` (RMSE + fraction inside mean±SD per model × muscle ×
+  study), `fig01_<focus>_vs_literature.png`,
+  `fig02_moment_arms_all_coordinates.png`, `fig03_validate_<mdof>.png`. Reuses
+  `validation.load_literature` / `_sweep_moment_arm` / `MUSCLE_MAP` and
+  `moment_arms.compute_sweeps` — no duplicated drawing or scoring. Runs the
+  discontinuity screen AND the literature comparison by default, because they
+  disagree usefully. Curves are plotted SIGNED with a zero line: a moment arm
+  crossing zero is a muscle reversing its action, and `|MA|` hides exactly that.
+  **Not yet run against real models.**
+
+- **`utils/emg_channels.py`** — `python -m bioscout.utils.emg_channels TRIAL.c3d
+  [--yaml]`. Lists every analog channel with sample count, min, max and RMS,
+  split into TAGGED / UNTAGGED / OTHER, and emits an `emg_map` stub keyed on the
+  verbatim tagged names. Closes the §1 gap from the *other* side: §1 validates a
+  map that already exists, this is how the map gets written correctly in the
+  first place. It flags quiet channels **relative to the median of the tagged
+  ones**, not an absolute threshold — amplifier gain differs between labs, the
+  two populations' separation does not. It will not guess a muscle for an
+  untagged channel. Needs only `c3d` + `numpy`, so it runs where the full stack
+  cannot be built.
+
+- **`model_edit promote`** — publishes a candidate into `models/generic/` behind
+  a literal `PROMOTE: PASS` line in the campaign summary, writing a provenance
+  sidecar (source, sha256, bytes, date, gate, evidence line, build record). The
+  gate is a marker, never inferred from prose: a campaign summary argues with
+  itself, and GPKv4's says both "PASSES both pre-registered conditions" and the
+  disqualification. Verified refusing that exact file.
+
+- **`openSim.py` `setResultsDir('./')` → the trial's own folder.** With
+  `set_report_errors(True)` this wrote `_ik_marker_errors.sto` and
+  `_ik_model_marker_locations.sto` into the PROCESS CWD — a project root when
+  `settings.py` runs there — rewritten by every trial, and
+  `calculate_mean_marker_error` then read `'.\\_ik_marker_errors.sto'`, i.e.
+  whichever trial ran last.
+
+- **`project_config.init_project_yaml` finds `settings.py` in `code/` or
+  `src/`** and still writes `project.yaml` at the project root.
+
+- **PACKAGING: `bioscout.muscle_inspect` was absent from `package_data`**, so
+  `validation/*.csv` never shipped in a wheel while `paths.py` resolves
+  `PKG_DIR/validation/…`. Every validate/fibre/strength call would fall back or
+  fail on an installed copy; source checkouts hid it. Fixed.
+
+- **`muscle_inspect/literature/` removed** — byte-identical duplicates of two
+  `validation/` files, referenced by nothing. `validation/` is the one corpus
+  folder.
+
+### Opened, not done
+
+- **§2.9 is half a migration and it shows.** `project init` on a project that
+  still needs its runner leaves `MUSCLE_GROUPS` and `markerset` defined TWICE —
+  in `settings.py` and in `project.yaml`, with `project.yaml` winning. That is
+  worse than either alone. The extractor should either refuse when the source
+  still holds a `__main__` runner, or strip what it extracted. **The open design
+  question is whether a project needs `project.yaml` at all**: `setupFiles/`
+  already holds the markerset, the excitation generator and the CEINMS setup,
+  and everything else is per-session. `MUSCLE_GROUPS` is the one fact with no
+  other home — it drives the CEINMS calibration target set
+  (`ceinms/configs.py`, mirrored L→R) and the report panels, and neither is
+  derivable from an excitation generator, which only knows the channels that
+  have electrodes.
+
+- **The extraction is only as strong as its baseline.** Powerlifting extracted
+  **2 facts of 96** because the bundled template *is* the powerlifting study.
+  The other 94 are now unpinned in a file whose purpose is to be copied and
+  edited by other labs. A neutral baseline, or an explicit "pin everything"
+  mode, is needed before `settings.py` can be deleted anywhere.
+
+- **`project.yaml` wrote an absolute `C:\Users\…` markerset path** where
+  `settings.py` had a portable `os.path.join(SETUP_DIR, …)`. The extractor must
+  relativise paths against the project root, or the file cannot leave the
+  machine that made it.
+
+- **CWD is still unowned** — ~20 unrestored `os.chdir(self.path)` in
+  `utils/analysis.py`, one carrying a comment that admits it. The
+  `setResultsDir` fix above treats one symptom. See
+  `docs/PROPOSAL_models_and_cwd.md` for the `in_dir()` context manager, the
+  absolutise-at-the-boundary rule and the regression test.
+
+- **Models layout (`docs/PROPOSAL_models_and_cwd.md`).** The 2026-08-19
+  `models/personalised/<subject>/` change dropped session from a model's
+  identity, correctly, but kept a flat folder with fixed filenames — which
+  assumes one model per subject. A project with N generics per subject cannot
+  use it. Proposed: identity is **(subject, generic)**,
+  `models/personalised/<subject>/<generic-stem>/`, so the folder count grows
+  with generics only. Includes where TEST-built models live (`tests/<campaign>/
+  _models/`, never `models/generic/`) and why `muscle_opt` should default off
+  and silent.
+
+- **`compare-models` and `emg_channels` have no CLI verb.** Both are reachable
+  as `python -m …`; neither is in `bioscout/cli.py`. Worth one `emg` verb and
+  folding `compare-models` into the `model` verb.

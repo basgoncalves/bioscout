@@ -2007,6 +2007,9 @@ class Analyse:
             subject, session = subject_session_for_trial(self.path)
             if not subject or not session:
                 return
+            # models/personalised/<subject>/<session>/ is where scaling writes
+            # (see Iteration.models_dir); the flat personalised/<subject>/ is
+            # where it wrote before 2026-08-31 and stays as a fallback.
             # models/personalised/<subject>/ is where scaling writes (see
             # Iteration.models_dir); models/<subject>/<session>/ is the
             # pre-2026-08-19 layout, kept as a fallback for projects that
@@ -2014,7 +2017,8 @@ class Analyse:
             # whose models were built correctly still reported
             # "Scaled model not found: ..\..\models\<subject>\<session>\
             # scaled.osim" — a path nothing had written to in weeks.
-            _cands = [os.path.join(_u.MODELS_DIR, "personalised", subject),
+            _cands = [os.path.join(_u.MODELS_DIR, "personalised", subject, session),
+                      os.path.join(_u.MODELS_DIR, "personalised", subject),
                       os.path.join(_u.MODELS_DIR, subject, session)]
             models_dir = next((d for d in _cands if os.path.isdir(d)), _cands[0])
             avail = ([f for f in os.listdir(models_dir) if f.lower().endswith('.osim')]
@@ -3620,6 +3624,125 @@ class Analyse:
         except Exception as e:
             self._log(f'[Warning] JRA comparison figure failed: {e}')
 
+    def _invivo_jcf(self):
+        """In-vivo joint contact force for this trial, when the subject carries an
+        instrumented implant: ``<experimental>/invivo_jcf.mot`` (written by
+        orthoload_to_bioscout). Returns {"<joint>_<side>": (time, |F| N)} or None.
+
+        The file does not record WHICH side is instrumented, so the side comes
+        from `self.invivo_side` if set, else the OrthoLoad trial id of a sibling
+        `.akf` (`h9l_...` = left), else `self.side`."""
+        import glob as _g, re as _re
+        from . import jcf_contributions as _jc
+        exp = getattr(self, "experimental_dir", None)
+        path = os.path.join(exp, "invivo_jcf.mot") if exp else None
+        if not path or not os.path.exists(path):
+            return None
+        side = getattr(self, "invivo_side", None)
+        if not side:
+            ids = [os.path.basename(x) for x in _g.glob(os.path.join(exp, "*.akf"))]
+            m = next((_re.match(r"[a-z]+\d+([lr])", i, _re.I) for i in ids
+                      if _re.match(r"[a-z]+\d+([lr])", i, _re.I)), None)
+            side = m.group(1).lower() if m else getattr(self, "side", "r")
+        try:
+            meas = _jc.load_measured_jcf(path, side=side)
+        except Exception as e:
+            self._log(f'[Warning] in-vivo JCF not loaded ({e})')
+            return None
+        self._log(f'[contrib] in-vivo reference: {os.path.basename(path)} '
+                  f'-> {", ".join(meas)} (side {side})', terminal=True)
+        return meas
+
+    def run_jra_contributions(self, forces_type="both", per_muscle=False,
+                              replace=None, keep_sto=False, plot=True, n_jobs=None):
+        """Muscle contributions to this trial's joint contact forces.
+
+        The JointReaction is linear in the applied forces, so the JCF splits
+        exactly into a non-muscle baseline (gravity + inertia + GRF + residuals
+        + reserves) plus one term per muscle group. See
+        ``bioscout.utils.jcf_contributions`` and docs/JCF_CONTRIBUTIONS.md.
+
+        forces_type: 'so' | 'ceinms' | 'both'.
+        Writes joint_contact_forces/contributions_<type>/contributions.csv,
+        closure.txt and contributions.png. Returns {type: DataFrame}.
+        """
+        from . import jcf_contributions as _jc
+        self._set_replace(replace)
+        os.chdir(self.path)
+        self.load_settings(self.settingsXML)
+
+        types = ["so", "ceinms"] if str(forces_type).lower() == "both" else [str(forces_type).lower()]
+        _subject = os.path.normpath(self.path).split(os.sep)[-2]   # iteration folder names the knee
+        # BOTH sides: the JRA output already carries every joint, so the second
+        # side is free (no extra runs) — and the instrumented/injured limb is
+        # not always the right one. Keys are "<joint>_<side>".
+        try:
+            jcols = {}
+            for _sd in ("r", "l"):
+                for _j, _cc in _u.settings.BatchSettings.JRA_COLUMNS(_subject, _sd).items():
+                    jcols[f"{_j}_{_sd}"] = _cc
+        except Exception as e:
+            self._log(f'[Error] contributions: JRA_COLUMNS unavailable ({e})', terminal=True)
+            return {}
+
+        out = {}
+        for t in types:
+            if t == "ceinms":
+                # The CEINMS forces MUST carry the SO residual/reserve/GRF columns
+                # or every run is unbalanced (~100x) and identical -- the same trap
+                # run_jra_ceinms refuses on.
+                try:
+                    balanced = self.add_so_columns_to_ceinms_results()
+                except Exception as e:
+                    self._log(f'[Warning] contributions: could not add SO columns: {e}', terminal=True)
+                    balanced = False
+                if not balanced and not getattr(self, 'jra_allow_unbalanced', False):
+                    self._log('[Error] REFUSING CEINMS contributions: the forces file is '
+                              'not balanced (no residual/reserve/GRF columns).', terminal=True)
+                    continue
+                forces = self.jra_forces_ceinms
+            else:
+                forces = self.jra_forces
+            if not forces or not os.path.exists(forces):
+                self._log(f'[Warning] contributions: no {t.upper()} forces file ({forces})')
+                continue
+
+            out_dir = os.path.join(os.path.dirname(self.jra) or ".", f"contributions_{t}")
+            try:
+                df = _jc.decompose(
+                    model_path=self.model_dir, ik_file=self.ik, grf_xml=self.setup_grf,
+                    forces_file=forces, out_dir=out_dir, jra_columns=jcols,
+                    per_muscle=per_muscle, keep_sto=keep_sto, replace=self.replace,
+                    n_jobs=n_jobs,
+                    setup_template=os.path.join(self.setup_dir, "setup_JRA.xml"),
+                    # terminal=True: the progress, the closure check and the
+                    # "already done, skipping" line are the whole point of
+                    # watching this run — self._log alone is file-only.
+                    log=lambda m: self._log(m, terminal=True))
+            except Exception as e:
+                self._log(f'[Error] during JCF contributions ({t}): {e}', terminal=True)
+                continue
+            out[t] = df
+            bw = (float(self.body_mass) * 9.81) if getattr(self, "body_mass", None) else None
+            df_sum = _jc.summarise(df, bw)
+            df_sum.to_csv(os.path.join(out_dir, "summary.csv"), index=False)
+            if plot:
+                _ttl = f"{self.trial} - {t.upper()} muscle contributions to JCF"
+                try:
+                    _jc.plot_contributions(df, save=os.path.join(out_dir, "contributions.png"),
+                                           body_weight=bw, title=_ttl)
+                except Exception as e:
+                    self._log(f'[Warning] contributions figure failed: {e}')
+                try:
+                    _jc.plot_contribution_curves(
+                        df, save=os.path.join(out_dir, "contributions_curves.png"),
+                        body_weight=bw, title=_ttl + " (over time)",
+                        measured=self._invivo_jcf())
+                except Exception as e:
+                    self._log(f'[Warning] contributions curve figure failed: {e}')
+            self._log(f'JCF contributions ({t}) written to {os.path.abspath(out_dir)}')
+        return out
+
     def plot_jra_comparison(self, so_only=False,
                             save_name="JRA_SO_vs_CEINMS.png",
                             title="Joint Reaction (Contact) Forces: SO vs CEINMS"):
@@ -4305,7 +4428,8 @@ class Analyse:
         Load the _ik_marker_errors.sto file and calculate the mean marker error across all markers and time frames, and save to a new file.
         '''
         os.chdir(self.path)
-        marker_errors = _u.load_any_data_file('.\\_ik_marker_errors.sto')
+        marker_errors = _u.load_any_data_file(
+            os.path.join(self.path, '_ik_marker_errors.sto'))
         mean_error = marker_errors.drop(columns='time').mean().mean()
         mean_error_df = pd.DataFrame({'mean_marker_error': [mean_error]})
 

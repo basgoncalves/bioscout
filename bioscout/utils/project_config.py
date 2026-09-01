@@ -293,13 +293,23 @@ def init_project_yaml(project_dir=".", force=False, baseline=None):
     project's settings.py. Returns a process exit code (0 written)."""
     import yaml                                   # lazy: see module docstring
     project_dir = os.path.abspath(project_dir)
-    spath = os.path.join(project_dir, "settings.py")
     ypath = os.path.join(project_dir, "project.yaml")
-    if not os.path.isfile(spath):
-        print(f"[project init] no settings.py in {project_dir} — nothing to "
-              f"extract. A project without one already runs on bioscout's "
-              f"defaults; write project.yaml by hand for any deviation.")
+    # project.yaml belongs at the project ROOT (find_project_yaml walks UP from
+    # cwd), but a project may keep its code in a subfolder -- Powerlifting moved
+    # settings.py into code/ on 2026-08-24. Look in the root first, then the
+    # usual code folders, and still write project.yaml at the root.
+    spath = next((c for c in (os.path.join(project_dir, "settings.py"),
+                              os.path.join(project_dir, "code", "settings.py"),
+                              os.path.join(project_dir, "src", "settings.py"))
+                  if os.path.isfile(c)), None)
+    if spath is None:
+        print(f"[project init] no settings.py in {project_dir} (or its code/ "
+              f"or src/) — nothing to extract. A project without one already "
+              f"runs on bioscout's defaults; write project.yaml by hand for "
+              f"any deviation.")
         return 1
+    if os.path.dirname(spath) != project_dir:
+        print(f"[project init] using {os.path.relpath(spath, project_dir)}")
     if os.path.isfile(ypath) and not force:
         print(f"[project init] {ypath} already exists — use --force to "
               f"overwrite (a backup is kept).")

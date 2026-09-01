@@ -1,5 +1,5 @@
 project:
-  simulations_dir: simulations
+  simulations_dir: simulations_tests
   models_dir: models
   results_dir: results
 analysis:

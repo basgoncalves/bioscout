@@ -79,7 +79,7 @@ def scaling_defaults(session_dir, iteration=None):
                          models/generic/ (then the legacy "generic models/")
         markerset        session.yaml markerset, falling back to models/utils/
         trc              2_experimental/<static_trial>/marker_experimental.trc
-        output           models/personalised/<subject>/<generic>_scaled.osim
+        output           models/personalised/<subject>/<session>/<generic>_scaled.osim
         static_trial     the session's static trial name
         iterations       every iteration the session declares
     """
@@ -163,7 +163,8 @@ def scaling_defaults(session_dir, iteration=None):
         # session's 3_iterations/. Name keeps the generic's stem so the file
         # says what it was scaled from.
         subject = _os.path.basename(_os.path.dirname(session_dir))
+        sess = _os.path.basename(_os.path.abspath(session_dir))
         stem = _os.path.splitext(_os.path.basename(gen))[0] if gen else "model"
         out["output"] = _os.path.normpath(_os.path.join(
-            proj, "models", "personalised", subject, f"{stem}_scaled.osim"))
+            proj, "models", "personalised", subject, sess, f"{stem}_scaled.osim"))
     return out

@@ -5,6 +5,8 @@ Commands:
   check     motion-driven (.mot) muscle-path check   (edit its CONFIG)
   validate  moment-arm literature validation only    (edit its CONFIG)
   compare   settings-sweep harness                    (edit its CONFIG)
+  compare-models  SEVERAL models on one set of axes: discontinuity screen +
+            literature comparison  --models A B C [--out DIR] [--focus DOF]
   fibre     model fascicle length & pennation vs literature   --model M --lit CSV --out DIR
   strength  isometric (and isokinetic) joint strength vs literature MVC bands
   all       FULL validation in one folder: moment arms + fibre length/pennation +
@@ -25,6 +27,7 @@ _COMMANDS = {
     "check": "run_muscle_checker",
     "validate": "validate_against_literature",
     "compare": "compare_settings",
+    "compare-models": "multi_model",
 }
 
 

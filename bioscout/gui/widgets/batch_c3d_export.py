@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from utils.logger import logger
 from utils.xml_utils import save_pretty_xml
 from .c3d_export import C3DExportTab
-from ..gui_settings import gui_settings, font_size
+from ..gui_settings import gui_settings, font_size, register_tk_font
 
 # Try to import Inputs class and settings from settings module
 try:
@@ -109,8 +109,29 @@ HAS_MPL = _Avail(_load_mpl)
 # DEFAULT FOOT MARKER PATTERNS - EDIT THESE TO CUSTOMIZE MARKER DETECTION
 # ============================================================================
 # These lists define which markers are considered "foot markers" and will be
-# auto-checked when "Update Markers" is clicked. Markers not in these lists
+# auto-checked when "Load Channels" is clicked. Markers not in these lists
 # will appear unchecked by default.
+
+def _same_path(a, b):
+    """Whether two path strings name the same folder, slashes and case aside."""
+    try:
+        if not a or not b:
+            return False
+        return Path(str(a)).resolve() == Path(str(b)).resolve()
+    except Exception:                                          # noqa: BLE001
+        return str(a).strip().rstrip("\\/") == str(b).strip().rstrip("\\/")
+
+
+class _NullBar:
+    """Stands in for the removed CTkProgressBar so ``progress_bar.set(x)``
+    stays a no-op instead of an AttributeError in the export thread."""
+
+    def set(self, _value):
+        return None
+
+    def configure(self, **_kw):
+        return None
+
 
 def interpolate_marker_position(marker_data, frame_idx, max_gap=10):
     """
@@ -221,6 +242,9 @@ class BatchC3DExport(ctk.CTkFrame):
         self._all_analog_channels: list = []  # All analog channels found (unfiltered)
         self.max_emg_per_trial: dict = {}    # channel -> {trial: peak}
         self._emg_scale_entries: dict = {}   # channel -> StringVar (per-muscle)
+        #: The last destination this tab filled in by itself. Anything else in
+        #: the box was put there by the user and is never overwritten.
+        self._auto_dest = ""
 
         self._create_widgets()
         self._restore_ui_state()
@@ -314,6 +338,10 @@ class BatchC3DExport(ctk.CTkFrame):
             data["c3d_export.emg_scale_mode"] = (
                 self.emg_scale_mode_var.get()
                 if getattr(self, "emg_scale_mode_var", None) else "uniform")
+            # Remembering WHICH dest was auto-filled is what lets the next
+            # launch keep following the source folder, while still leaving a
+            # deliberately chosen destination alone.
+            data["c3d_export.auto_dest"] = getattr(self, "_auto_dest", "")
             data["c3d_export.emg_scale_per_channel"] = {
                 ch: v.get() for ch, v in self._emg_scale_entries.items()
                 if str(v.get()).strip() not in ("", "1", "1.0")}
@@ -346,14 +374,18 @@ class BatchC3DExport(ctk.CTkFrame):
             if getattr(self, "emg_scale_mode_var", None) is not None:
                 self.emg_scale_mode_var.set(
                     self.gui_settings.get("c3d_export.emg_scale_mode", "uniform"))
-            src = self.gui_settings.get("paths.last_c3d_source", "")
+            # DEST FIRST, then source. Validating the source auto-fills the
+            # destination, and it must be able to see a remembered path in the
+            # box to know it is not allowed to replace it.
+            self._auto_dest = str(self.gui_settings.get("c3d_export.auto_dest", "") or "")
             dst = self.gui_settings.get("paths.last_c3d_dest", "")
-            if src and Path(src).is_dir() and not self.source_folder_var.get():
-                self.source_folder_var.set(src)
-                self._validate_source_folder()
             if dst and Path(dst).is_dir() and not self.dest_entry.get():
                 self.dest_entry.insert(0, dst)
                 self._validate_dest_folder()
+            src = self.gui_settings.get("paths.last_c3d_source", "")
+            if src and Path(src).is_dir() and not self.source_folder_var.get():
+                self.source_folder_var.set(src)
+                self._validate_source_folder()
         except Exception as exc:                               # noqa: BLE001
             logger.debug(f"Batch C3D: could not restore UI state: {exc}")
 
@@ -368,14 +400,21 @@ class BatchC3DExport(ctk.CTkFrame):
         """Set the session directory - called by main window."""
         self.session_dir = Path(session_dir) if session_dir else None
         if self.session_dir and self.session_dir.exists():
-            # Auto-populate source folder with session directory
-            self.source_folder_var.set(str(self.session_dir))
-            self.source_folder = self.session_dir
+            # A session keeps its raw C3Ds in 1_c3dfiles, not loose in the
+            # session folder — point at that when it is there.
+            src = self.session_dir
+            for _name in ("1_c3dfiles", "c3dfiles"):
+                if (self.session_dir / _name).is_dir():
+                    src = self.session_dir / _name
+                    break
+            self.source_folder_var.set(str(src))
+            self.source_folder = src
 
-            # Also auto-populate destination folder with same directory
+            dest = self._default_dest_for(src) or src
+            self._auto_dest = str(dest)
             self.dest_entry.delete(0, "end")
-            self.dest_entry.insert(0, str(self.session_dir))
-            self.dest_folder = self.session_dir
+            self.dest_entry.insert(0, str(dest))
+            self.dest_folder = dest
 
             self._scan_for_c3d_files()
 
@@ -389,8 +428,10 @@ class BatchC3DExport(ctk.CTkFrame):
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
         self.grid_rowconfigure(2, weight=0)
-        self.grid_columnconfigure(0, weight=3)   # Files column (narrower)
-        self.grid_columnconfigure(1, weight=7)   # Settings column (wider)
+        # 1:8, not 3:7 — the file list is a fixed-width list of short names,
+        # the settings column holds the plot that actually needs room.
+        self.grid_columnconfigure(0, weight=1, minsize=190)
+        self.grid_columnconfigure(1, weight=8)
 
         # ===== FOLDER SELECTION SECTION (spans both columns) =====
         folder_frame = ctk.CTkFrame(self)
@@ -479,7 +520,7 @@ class BatchC3DExport(ctk.CTkFrame):
         ).pack(side="left", padx=1)
 
         # File list with checkboxes
-        self.files_scroll_frame = ctk.CTkScrollableFrame(files_frame)
+        self.files_scroll_frame = ctk.CTkScrollableFrame(files_frame, width=175)
         self.files_scroll_frame.grid(row=1, column=0, sticky="nsew")
         self.files_scroll_frame.grid_columnconfigure(0, weight=1)
 
@@ -490,8 +531,10 @@ class BatchC3DExport(ctk.CTkFrame):
         settings_frame = ctk.CTkFrame(self)
         settings_frame.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=(2, 2))
         settings_frame.grid_rowconfigure(0, weight=1)
-        settings_frame.grid_columnconfigure(0, weight=3)  # EMG settings (wider)
-        settings_frame.grid_columnconfigure(1, weight=2)  # Markers
+        # 5:1 — the marker lists are two narrow name columns; everything that
+        # needs width (filters, channel list, preview plot) is on the left.
+        settings_frame.grid_columnconfigure(0, weight=5)
+        settings_frame.grid_columnconfigure(1, weight=1, minsize=230)
 
         # Each side gets a single container frame that manages its own internal
         # grid. This keeps the EMG column (filters + live preview + channels +
@@ -503,8 +546,9 @@ class BatchC3DExport(ctk.CTkFrame):
         # Row 3 holds channels-beside-preview; row 5 the max-EMG table. The
         # old layout stacked preview, channel list and results vertically and
         # the channel list was the row that lost — it collapsed to nothing.
-        emg_col.grid_rowconfigure(3, weight=3)   # channels | preview plot
-        emg_col.grid_rowconfigure(5, weight=2)   # max-EMG results
+        emg_col.grid_rowconfigure(2, minsize=0)  # freed: filters moved into row 1
+        emg_col.grid_rowconfigure(3, weight=10)  # channels | preview plot
+        emg_col.grid_rowconfigure(5, weight=1)   # max-EMG results
 
         markers_col = ctk.CTkFrame(settings_frame)
         markers_col.grid(row=0, column=1, sticky="nsew")
@@ -518,62 +562,67 @@ class BatchC3DExport(ctk.CTkFrame):
 
         ctk.CTkLabel(header_frame2, text="EMG Settings:", font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w", padx=5)
 
+        # "Update Markers" named the side effect nobody was looking at: the
+        # button's job is to READ the ticked C3D file and fill in the EMG
+        # channel list (the markers come along with it).
         ctk.CTkButton(
             header_frame2,
-            text="Update Markers",
-            width=100,
-            font=("Segoe UI", 8),
+            text="⟳ Load Channels",
+            width=140, height=28,
+            font=("Segoe UI", 12, "bold"),
             command=self._update_markers_from_c3d,
-        ).pack(side="right", padx=0)
+        ).pack(side="right", padx=4, pady=2)
 
-        # ----- EMG column: label pattern + Search -----
-        emg_pattern_frame = ctk.CTkFrame(emg_col)
-        emg_pattern_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 3))
-        emg_pattern_frame.grid_columnconfigure(1, weight=1)
+        # ----- EMG column: ONE settings bar -----
+        # Label+Search and Low/High/Notch used to be two stacked frames, each
+        # with its own heading row — ~110 px of chrome above a plot that had
+        # none to spare. Everything here is a short numeric field, so it all
+        # fits on one line and the plot gets the height back.
+        bar = ctk.CTkFrame(emg_col)
+        bar.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 3))
+        bar.grid_columnconfigure(1, weight=1)     # only the label box stretches
 
-        ctk.CTkLabel(emg_pattern_frame, text="Label:", font=("Segoe UI", 8)).grid(row=0, column=0, sticky="w", padx=0)
+        ctk.CTkLabel(bar, text="Label:", font=("Segoe UI", 11)).grid(
+            row=0, column=0, sticky="w", padx=(6, 2), pady=4)
         self.emg_label_var = ctk.StringVar(value=BATCH_C3D_EMG_LABEL_DEFAULT)
-        self.emg_label_entry = ctk.CTkEntry(emg_pattern_frame, textvariable=self.emg_label_var, placeholder_text=BATCH_C3D_EMG_LABEL_DEFAULT, height=24)
-        self.emg_label_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        self.emg_label_entry = ctk.CTkEntry(
+            bar, textvariable=self.emg_label_var,
+            placeholder_text=BATCH_C3D_EMG_LABEL_DEFAULT, height=26)
+        self.emg_label_entry.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
         self.emg_label_entry.bind("<Return>", lambda e: self._filter_emg_channels())
         ctk.CTkButton(
-            emg_pattern_frame, text="Search", width=60, height=24,
-            font=("Segoe UI", 8),
+            bar, text="Search", width=64, height=26,
             command=self._filter_emg_channels,
-        ).grid(row=0, column=2, padx=(0, 0))
+        ).grid(row=0, column=2, padx=(0, 10), pady=4)
 
-        # ----- EMG column: filter settings -----
-        filter_frame = ctk.CTkFrame(emg_col)
-        filter_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(3, 3))
-        filter_frame.grid_columnconfigure(0, weight=1)
-        filter_frame.grid_columnconfigure(1, weight=1)
-        filter_frame.grid_columnconfigure(2, weight=1)
-        filter_frame.grid_columnconfigure(3, weight=0)
-
-        ctk.CTkLabel(filter_frame, text="Filters:", font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w", padx=0, pady=(0, 5))
-
-        # FPS display (analog frame rate from C3D)
-        self.analog_fps = None
-        self.fps_label = ctk.CTkLabel(filter_frame, text="FPS: --", font=("Segoe UI", 7), text_color="#888888")
-        self.fps_label.grid(row=0, column=3, sticky="e", padx=5, pady=(0, 5))
-
-        # Low Pass (bandpass high cutoff). Press Enter to refresh the preview.
-        ctk.CTkLabel(filter_frame, text="Low (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=0, sticky="w", padx=0, pady=(0, 2))
-        self.emg_lowpass_var = ctk.StringVar(value=BATCH_C3D_EMG_LOWPASS_DEFAULT)
-        lp_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_lowpass_var, height=24, width=50)
-        lp_entry.grid(row=2, column=0, sticky="ew", padx=0, pady=(0, 5))
-
-        # High Pass (bandpass low cutoff)
-        ctk.CTkLabel(filter_frame, text="High (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=1, sticky="w", padx=5, pady=(0, 2))
+        # Low / High / Notch — label above value would cost a second line, so
+        # the unit lives in the label beside the box.
+        ctk.CTkLabel(bar, text="Band (Hz):", font=("Segoe UI", 11)).grid(
+            row=0, column=3, sticky="e", padx=(0, 3), pady=4)
         self.emg_highpass_var = ctk.StringVar(value=BATCH_C3D_EMG_HIGHPASS_DEFAULT)
-        hp_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_highpass_var, height=24, width=50)
-        hp_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(0, 5))
+        hp_entry = ctk.CTkEntry(bar, textvariable=self.emg_highpass_var,
+                                height=26, width=56)
+        hp_entry.grid(row=0, column=4, padx=(0, 2), pady=4)
+        ctk.CTkLabel(bar, text="–", font=("Segoe UI", 11)).grid(
+            row=0, column=5, padx=1, pady=4)
+        self.emg_lowpass_var = ctk.StringVar(value=BATCH_C3D_EMG_LOWPASS_DEFAULT)
+        lp_entry = ctk.CTkEntry(bar, textvariable=self.emg_lowpass_var,
+                                height=26, width=56)
+        lp_entry.grid(row=0, column=6, padx=(2, 10), pady=4)
 
-        # Notch Filter
-        ctk.CTkLabel(filter_frame, text="Notch (Hz)", font=("Segoe UI", 7, "bold")).grid(row=1, column=2, sticky="w", padx=5, pady=(0, 2))
+        ctk.CTkLabel(bar, text="Notch:", font=("Segoe UI", 11)).grid(
+            row=0, column=7, sticky="e", padx=(0, 3), pady=4)
         self.emg_notch_var = ctk.StringVar(value=BATCH_C3D_EMG_NOTCH_DEFAULT)
-        notch_entry = ctk.CTkEntry(filter_frame, textvariable=self.emg_notch_var, height=24, width=50)
-        notch_entry.grid(row=2, column=2, sticky="ew", padx=5, pady=(0, 5))
+        notch_entry = ctk.CTkEntry(bar, textvariable=self.emg_notch_var,
+                                   height=26, width=56)
+        notch_entry.grid(row=0, column=8, padx=(0, 10), pady=4)
+
+        # Analog frame rate, read from the C3D — the number every cut-off above
+        # has to stay under half of.
+        self.analog_fps = None
+        self.fps_label = ctk.CTkLabel(bar, text="FPS: --", font=("Segoe UI", 10),
+                                      text_color="#888888")
+        self.fps_label.grid(row=0, column=9, sticky="e", padx=(0, 8), pady=4)
 
         # Pressing Enter in any filter field refreshes the live preview
         for _e in (lp_entry, hp_entry, notch_entry):
@@ -586,9 +635,10 @@ class BatchC3DExport(ctk.CTkFrame):
         # fought for height and the channel list always lost.
         mid = ctk.CTkFrame(emg_col, fg_color="transparent")
         mid.grid(row=3, column=0, sticky="nsew", padx=5, pady=(0, 3))
-        mid.grid_rowconfigure(1, weight=1)
-        mid.grid_columnconfigure(0, minsize=210)   # channels — never collapses
-        mid.grid_columnconfigure(1, weight=1)      # preview takes the rest
+        mid.grid_rowconfigure(1, weight=1, minsize=300)
+        mid.grid_columnconfigure(0, minsize=175)   # channels — never collapses
+        # minsize: a plot narrower than this is a smear, not a preview.
+        mid.grid_columnconfigure(1, weight=1, minsize=430)
 
         # -- left: EMG channel tick list --
         ch_head = ctk.CTkFrame(mid, fg_color="transparent")
@@ -637,7 +687,7 @@ class BatchC3DExport(ctk.CTkFrame):
         self.preview_fig = None
         self._preview_placeholder = ctk.CTkLabel(
             self.preview_plot_frame,
-            text=("Tick a C3D file, click 'Update Markers', then 'Preview' to\n"
+            text=("Tick a C3D file, click 'Load Channels', then 'Preview' to\n"
                   "visualise the filter effect on the EMG signal."
                   if (HAS_MPL and HAS_SCIPY) else
                   "Live preview needs matplotlib + scipy installed."),
@@ -678,12 +728,12 @@ class BatchC3DExport(ctk.CTkFrame):
         # font_size(): plain tkinter.Text does not follow CTk widget scaling,
         # so the table takes the UI scale explicitly or stays small forever.
         self.maxemg_text = tkinter.Text(
-            maxemg_table, wrap="none", height=8,
-            font=("Consolas", font_size(11)),
+            maxemg_table, wrap="none", height=5,
             background="#1e1e1e", foreground="#dcdcdc",
             insertbackground="#dcdcdc", relief="flat", borderwidth=0,
             highlightthickness=0,
         )
+        register_tk_font(self.maxemg_text, "Consolas", 11)
         self.maxemg_text.grid(row=0, column=0, sticky="nsew")
         _mv = tkinter.Scrollbar(maxemg_table, orient="vertical",
                                 command=self.maxemg_text.yview)
@@ -735,7 +785,7 @@ class BatchC3DExport(ctk.CTkFrame):
                       font=("Segoe UI", 10), command=self._fill_scales_from_max_emg
                       ).grid(row=0, column=4, sticky="e", padx=4, pady=4)
 
-        self.emg_scale_per_frame = ctk.CTkScrollableFrame(scale_frame, height=110)
+        self.emg_scale_per_frame = ctk.CTkScrollableFrame(scale_frame, height=84)
         self.emg_scale_per_frame.grid(row=1, column=0, columnspan=5, sticky="ew",
                                       padx=4, pady=(0, 4))
         self.emg_scale_per_frame.grid_columnconfigure(1, weight=1)
@@ -787,7 +837,7 @@ class BatchC3DExport(ctk.CTkFrame):
         ctk.CTkButton(left_btn_frame, text="All", width=35, font=("Segoe UI", 7), command=self._select_all_left_markers).pack(side="left", padx=1)
         ctk.CTkButton(left_btn_frame, text="None", width=35, font=("Segoe UI", 7), command=self._deselect_all_left_markers).pack(side="left", padx=1)
 
-        self.left_markers_scroll = ctk.CTkScrollableFrame(left_foot_frame)
+        self.left_markers_scroll = ctk.CTkScrollableFrame(left_foot_frame, width=105)
         self.left_markers_scroll.grid(row=2, column=0, sticky="nsew")
         self.left_markers_scroll.grid_columnconfigure(0, weight=1)
 
@@ -808,7 +858,7 @@ class BatchC3DExport(ctk.CTkFrame):
         ctk.CTkButton(right_btn_frame, text="All", width=35, font=("Segoe UI", 7), command=self._select_all_right_markers).pack(side="left", padx=1)
         ctk.CTkButton(right_btn_frame, text="None", width=35, font=("Segoe UI", 7), command=self._deselect_all_right_markers).pack(side="left", padx=1)
 
-        self.right_markers_scroll = ctk.CTkScrollableFrame(right_foot_frame)
+        self.right_markers_scroll = ctk.CTkScrollableFrame(right_foot_frame, width=105)
         self.right_markers_scroll.grid(row=2, column=0, sticky="nsew")
         self.right_markers_scroll.grid_columnconfigure(0, weight=1)
 
@@ -829,21 +879,20 @@ class BatchC3DExport(ctk.CTkFrame):
         self.grid_rowconfigure(2, weight=0)  # Progress row should not expand
         progress_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(progress_frame, text="Progress:", font=("Segoe UI", 9, "bold")).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=5, pady=(2, 1)
-        )
-
-        self.progress_bar = ctk.CTkProgressBar(progress_frame)
-        self.progress_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
-        self.progress_bar.set(0)
+        # No progress BAR. It was a full-width strip of chrome duplicating what
+        # the console below already prints line by line — and the console says
+        # WHICH file, which is the part you actually need when one fails. What
+        # is left is a single status line; _NullBar keeps the old .set() calls
+        # working so the export code did not have to be rewritten around it.
+        self.progress_bar = _NullBar()
 
         self.progress_label = ctk.CTkLabel(
             progress_frame,
             text="Ready",
             text_color="gray",
-            font=("Segoe UI", 8)
+            font=("Segoe UI", 11)
         )
-        self.progress_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+        self.progress_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=(2, 2))
 
         # What happens AFTER the trials are exported. Ticked by default: an
         # export whose session.yaml does not know about it, and whose trials
@@ -886,6 +935,58 @@ class BatchC3DExport(ctk.CTkFrame):
         )
         self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=5)
 
+    def _progress(self, text):
+        """One status line, and the same line into the console.
+
+        The progress BAR is gone; the console is now where progress is read,
+        so every message that used to only tint a label must reach it."""
+        try:
+            self.progress_label.configure(text=text)
+        except Exception:                                      # noqa: BLE001
+            pass
+        logger.info(str(text))
+        if self.status_callback:
+            try:
+                self.status_callback(str(text))
+            except Exception:                                  # noqa: BLE001
+                pass
+
+    #: Where the exported trials belong, relative to the session folder. A
+    #: session is laid out <session>/1_c3dfiles, 2_experimental, 3_iterations —
+    #: exporting the C3Ds back INTO 1_c3dfiles (the old default: "same folder
+    #: as the source") mixes inputs with outputs in the one folder the next
+    #: stage globs for raw C3Ds.
+    _DEST_SIBLINGS = ("2_experimental", "experimental")
+
+    def _default_dest_for(self, source):
+        """The folder an export from ``source`` should land in.
+
+        Only ever returns a folder that EXISTS — guessing a name and creating
+        it would quietly scatter half-sessions across the project. Falls back
+        to the source folder, which is what it always did."""
+        try:
+            src = Path(source)
+            if not src.is_dir():
+                return None
+            # source is <session>/1_c3dfiles → look at its siblings
+            for name in self._DEST_SIBLINGS:
+                cand = src.parent / name
+                if cand.is_dir():
+                    return cand
+            # source IS the session folder → look inside it
+            for name in self._DEST_SIBLINGS:
+                cand = src / name
+                if cand.is_dir():
+                    return cand
+            # anything else ending in _experimental, in either place
+            for base in (src.parent, src):
+                for cand in sorted(base.glob("*experimental*")):
+                    if cand.is_dir():
+                        return cand
+        except Exception:                                      # noqa: BLE001
+            pass
+        return None
+
     def _validate_source_folder(self):
         """Validate source folder path."""
         path_str = self.source_folder_var.get().strip()
@@ -900,11 +1001,20 @@ class BatchC3DExport(ctk.CTkFrame):
                 self.source_folder = path
                 self.source_error.configure(text="")
 
-                # Auto-populate destination folder with same path if empty
+                # Auto-fill the destination, but only while it is still
+                # untouched or still pointing at the source — never overwrite a
+                # path that was typed or browsed to on purpose.
+                # Compared as PATHS, not strings: the two boxes disagree on
+                # slash direction (one is typed, one comes from a picker), so
+                # string equality reported "the user chose this" for a dest the
+                # tab had filled in itself.
                 dest_str = self.dest_entry.get().strip()
-                if not dest_str:
+                if (not dest_str) or _same_path(dest_str, path) or \
+                        _same_path(dest_str, self._auto_dest):
+                    auto = self._default_dest_for(path) or path
+                    self._auto_dest = str(auto)
                     self.dest_entry.delete(0, "end")
-                    self.dest_entry.insert(0, str(path))
+                    self.dest_entry.insert(0, str(auto))
                     self._validate_dest_folder()
 
                 self._scan_for_c3d_files()
@@ -1924,22 +2034,22 @@ class BatchC3DExport(ctk.CTkFrame):
         try:
             # Validate selections
             if not self.source_folder or not self.source_folder.exists():
-                self.progress_label.configure(text="Error: Source folder not selected")
+                self._progress("Error: Source folder not selected")
                 return
 
             if not self.dest_folder or not self.dest_folder.exists():
-                self.progress_label.configure(text="Error: Destination folder not selected")
+                self._progress("Error: Destination folder not selected")
                 return
 
             selected_count = sum(self.selected_files)
             if selected_count == 0:
-                self.progress_label.configure(text="Error: No files selected")
+                self._progress("Error: No files selected")
                 return
 
             # Check that at least one marker is selected
             selected_left, selected_right = self._get_selected_markers()
             if not selected_left or not selected_right:
-                self.progress_label.configure(text="Error: Select at least one left and right foot marker")
+                self._progress("Error: Select at least one left and right foot marker")
                 return
 
             # Start export in background thread
@@ -1956,7 +2066,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
         except Exception as e:
             logger.error(f"Error starting batch export: {str(e)}")
-            self.progress_label.configure(text=f"Error: {str(e)[:40]}")
+            self._progress(f"Error: {str(e)[:40]}")
 
     def _export_batch_worker(self, total_selected: int):
         """Worker thread for batch export."""
@@ -1988,8 +2098,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
                 # Update progress display
                 self.progress_bar.set(progress_pct / 100.0)
-                self.progress_label.configure(
-                    text=f"Processing {c3d_file.name} ({self.current_progress}/{self.total_files})"
+                self._progress(f"Processing {c3d_file.name} ({self.current_progress}/{self.total_files})"
                 )
 
                 # Create trial subfolder with just the C3D filename (no trial prefix)
@@ -2008,8 +2117,7 @@ class BatchC3DExport(ctk.CTkFrame):
                 self.progress_bar.set(progress_pct / 100.0)
 
             if self.is_processing:
-                self.progress_label.configure(
-                    text=f"[OK] Completed: {self.current_progress} files exported"
+                self._progress(f"[OK] Completed: {self.current_progress} files exported"
                 )
                 logger.info(f"Batch export completed: {self.current_progress} files")
                 # Same worker thread, on purpose: session.yaml and detection
@@ -2018,11 +2126,11 @@ class BatchC3DExport(ctk.CTkFrame):
                 # immediately acts on should already be described.
                 self._post_export_session_update()
             else:
-                self.progress_label.configure(text="Cancelled by user")
+                self._progress("Cancelled by user")
 
         except Exception as e:
             logger.error(f"Error in batch export worker: {str(e)}")
-            self.progress_label.configure(text=f"Error: {str(e)[:40]}")
+            self._progress(f"Error: {str(e)[:40]}")
 
         finally:
             self.is_processing = False
@@ -2080,7 +2188,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
         if want_yaml:
             try:
-                self.progress_label.configure(text="Updating session.yaml…")
+                self._progress("Updating session.yaml…")
             except Exception:                                  # noqa: BLE001
                 pass
             try:
@@ -2120,8 +2228,7 @@ class BatchC3DExport(ctk.CTkFrame):
 
         if want_detect:
             try:
-                self.progress_label.configure(
-                    text="Detecting movements… (this reads every trial)")
+                self._progress("Detecting movements… (this reads every trial)")
             except Exception:                                  # noqa: BLE001
                 pass
             try:
@@ -2727,5 +2834,5 @@ class BatchC3DExport(ctk.CTkFrame):
     def _on_cancel(self):  # noqa: D401
         """Cancel batch export."""
         self.is_processing = False
-        self.progress_label.configure(text="Cancelling...")
+        self._progress("Cancelling...")
         self.cancel_button.configure(state="disabled")

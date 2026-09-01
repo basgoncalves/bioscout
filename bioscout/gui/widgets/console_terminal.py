@@ -1,6 +1,8 @@
 """Console and Python terminal widget for the application."""
 
 import customtkinter as ctk
+
+from ..gui_settings import register_tk_font
 import tkinter as tk
 from tkinter import scrolledtext
 import sys
@@ -46,28 +48,67 @@ class ConsoleHandler(logging.Handler):
 
 
 class StdoutRedirector:
-    """Redirect stdout to console widget."""
+    """Tee stdout/stderr into the console widget AND the real stream.
 
-    def __init__(self, console_widget):
-        """Initialize redirector with console widget reference."""
+    It used to only write to the widget. That is fine once the window is up,
+    but it is installed DURING ``MainWindow._setup_ui`` — so any exception
+    raised by a later tab printed its traceback into a widget belonging to a
+    window that never appeared, and the app exited with nothing on the
+    terminal but "[main_window] Creating MainWindow...". A startup failure
+    must always be readable where the user launched the app, so every write
+    goes to both places and the widget half is best-effort.
+    """
+
+    def __init__(self, console_widget, stream=None):
+        """Initialize redirector with console widget reference.
+
+        ``stream`` is the real stream to keep echoing to; it defaults to the
+        interpreter's original stdout so a tee is never chained onto a tee.
+        """
         self.console_widget = console_widget
+        self.stream = stream if stream is not None else sys.__stdout__
         self.buffer = ""
 
+    def _echo(self, message: str) -> None:
+        """Write through to the real stream, never raising."""
+        if not message:
+            return
+        try:
+            if self.stream is not None:
+                self.stream.write(message)
+                self.stream.flush()
+        except Exception:                                          # noqa: BLE001
+            pass
+
     def write(self, message: str) -> None:
-        """Write message to console widget."""
+        """Write message to console widget and to the real stream."""
         if message:
+            self._echo(message)
             # Buffer until newline
             self.buffer += message
             if '\n' in self.buffer:
                 lines = self.buffer.split('\n')
                 for line in lines[:-1]:
-                    self.console_widget.write(line, "info")
+                    try:
+                        self.console_widget.write(line, "info")
+                    except Exception:                              # noqa: BLE001
+                        # Widget not built yet, already destroyed, or called
+                        # off the Tk thread — the terminal copy still went out.
+                        pass
                 self.buffer = lines[-1]
 
     def flush(self) -> None:
         """Flush buffered content."""
+        try:
+            if self.stream is not None:
+                self.stream.flush()
+        except Exception:                                          # noqa: BLE001
+            pass
         if self.buffer:
-            self.console_widget.write(self.buffer, "info")
+            try:
+                self.console_widget.write(self.buffer, "info")
+            except Exception:                                      # noqa: BLE001
+                pass
             self.buffer = ""
 
     def isatty(self) -> bool:
@@ -87,13 +128,24 @@ class ConsoleTerminal(ctk.CTkFrame):
 
         self._create_widgets()
 
-        # Store original stdout/stderr
-        self.original_stdout = sys.stdout
-        self.original_stderr = sys.stderr
+        # Store original stdout/stderr. If a console was built before (a
+        # second ConsoleTerminal, or a reload) sys.stdout is already one of
+        # our tees — unwrap it so we never chain a tee onto a dead widget.
+        self.original_stdout = getattr(sys.stdout, "stream", None) \
+            if isinstance(sys.stdout, StdoutRedirector) else sys.stdout
+        self.original_stderr = getattr(sys.stderr, "stream", None) \
+            if isinstance(sys.stderr, StdoutRedirector) else sys.stderr
+        if self.original_stdout is None:
+            self.original_stdout = sys.__stdout__
+        if self.original_stderr is None:
+            self.original_stderr = sys.__stderr__
 
-        # Redirect stdout and stderr to this console
-        sys.stdout = StdoutRedirector(self)
-        sys.stderr = StdoutRedirector(self)
+        # Tee stdout and stderr into this console. The second argument is the
+        # stream to keep echoing to, so the launching terminal still sees
+        # everything — without it, a crash during the rest of _setup_ui is
+        # completely silent (see StdoutRedirector's docstring).
+        sys.stdout = StdoutRedirector(self, self.original_stdout)
+        sys.stderr = StdoutRedirector(self, self.original_stderr)
 
         # Add custom logging handler
         self._setup_logging_handler()
@@ -125,13 +177,16 @@ class ConsoleTerminal(ctk.CTkFrame):
         self.output_text = scrolledtext.ScrolledText(
             self,
             height=8,
-            font=("Courier New", 9),
             bg="#2b2b2b",
             fg="#e0e0e0",
             insertbackground="#e0e0e0",
             wrap=tk.WORD,
             state="disabled"
         )
+        # register_tk_font, not font=(): plain tk ignores CTk widget scaling,
+        # so the console was the one panel that stayed small when everything
+        # else grew, and only caught up after a full app restart.
+        register_tk_font(self.output_text, "Courier New", 10)
         self.output_text.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         self.grid_rowconfigure(1, weight=1)
 

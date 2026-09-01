@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 660" width="1040" height="660" role="img" aria-labelledby="t d">
+<title id="t">One vocabulary: the stage registry</title>
+<desc id="d">Left: each of the four bioscout surfaces declares its own name for the same stage, so six stages need four hand-maintained lists. Right: a single STAGES list in the package, from which the CLI flags, the GUI navigation, the verify table's expected outputs and the docs tables are all generated.</desc>
+<style>
+  .bg{fill:#fbfaf8}
+  .card{fill:#ffffff;stroke:#d9d5cd}
+  .panel{fill:#f4f2ee;stroke:#dedad2}
+  .ink{fill:#22201d}
+  .muted{fill:#6d6960}
+  .bad{fill:#b1503a}
+  .badS{stroke:#b1503a}
+  .good{fill:#2c7a6b}
+  .goodS{stroke:#2c7a6b}
+  .blue{fill:#3a6ba5}
+  .line{stroke:#a9a49a;fill:none}
+  .badge{fill:#f0e7e3;stroke:#dcc2b8}
+  .badgeG{fill:#e2f0ec;stroke:#b8dbd2}
+  text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+  .mono{font-family:ui-monospace,"SFMono-Regular","Consolas","Liberation Mono",monospace}
+  .h{font-size:19px;font-weight:700}
+  .sh{font-size:13px;font-weight:700;letter-spacing:.07em}
+  .b{font-size:13.5px}
+  .s{font-size:12px}
+  .xs{font-size:11px}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#15171a}
+    .card{fill:#1e2226;stroke:#3b4148}
+    .panel{fill:#191d21;stroke:#333940}
+    .ink{fill:#e7e4df}
+    .muted{fill:#9aa1a8}
+    .bad{fill:#e59175}
+    .badS{stroke:#e59175}
+    .good{fill:#63c2ad}
+    .goodS{stroke:#63c2ad}
+    .blue{fill:#84b2e2}
+    .line{stroke:#5a626a}
+    .badge{fill:#2e2320;stroke:#5c4038}
+    .badgeG{fill:#17302c;stroke:#2f5c53}
+  }
+</style>
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0L10 5L0 10z" fill="#a9a49a"/>
+  </marker>
+  <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0L10 5L0 10z" class="good"/>
+  </marker>
+</defs>
+
+<rect class="bg" width="1040" height="660"/>
+<text class="ink h" x="28" y="38">§2.10 — the same six stages, told four different ways</text>
+<text class="muted b" x="28" y="60">A stage is declared once, in the package; every surface generates its own presentation of that declaration.</text>
+
+<!-- ============ PANEL A ============ -->
+<rect class="panel" x="24" y="82" width="480" height="548" rx="10"/>
+<text class="bad sh" x="46" y="112">TODAY — FOUR PARALLEL LISTS</text>
+<text class="muted s" x="46" y="132">Each surface hard-codes its own word for the stage.</text>
+
+<!-- the four surfaces, pointing INTO the stage -->
+<g>
+  <rect class="card" x="46" y="152" width="196" height="58" rx="7"/>
+  <text class="ink s" x="58" y="172" font-weight="700">GUI nav</text>
+  <text class="bad mono s" x="58" y="192">"Trial Analysis"</text>
+
+  <rect class="card" x="286" y="152" width="196" height="58" rx="7"/>
+  <text class="ink s" x="298" y="172" font-weight="700">CLI</text>
+  <text class="bad mono s" x="298" y="192">run --exbiomec</text>
+
+  <rect class="card" x="46" y="452" width="196" height="58" rx="7"/>
+  <text class="ink s" x="58" y="472" font-weight="700">Python API</text>
+  <text class="bad mono s" x="58" y="492">do_exbiomec=True</text>
+
+  <rect class="card" x="286" y="452" width="196" height="58" rx="7"/>
+  <text class="ink s" x="298" y="472" font-weight="700">config keys</text>
+  <text class="bad mono s" x="298" y="492">trials.&lt;t&gt;.time_range</text>
+</g>
+
+<!-- centre: the actual stage -->
+<rect class="card badS" x="152" y="292" width="224" height="78" rx="9" stroke-width="2"/>
+<text class="muted xs" x="264" y="316" text-anchor="middle">the actual stage</text>
+<text class="ink b" x="264" y="338" text-anchor="middle" font-weight="700">IK → ID → MA</text>
+<text class="muted xs" x="264" y="357" text-anchor="middle">one piece of code, underneath all four</text>
+
+<path class="line badS" d="M144 210 L 200 288" marker-end="url(#ar)"/>
+<path class="line badS" d="M384 210 L 330 288" marker-end="url(#ar)"/>
+<path class="line badS" d="M144 452 L 200 374" marker-end="url(#ar)"/>
+<path class="line badS" d="M384 452 L 330 374" marker-end="url(#ar)"/>
+
+<rect class="badge" x="46" y="546" width="436" height="62" rx="7"/>
+<text class="bad s" x="62" y="568" font-weight="700">6 stages × 4 surfaces = 4 lists kept in step by hand.</text>
+<text class="muted xs" x="62" y="588">No user gets from the GUI to the CLI without a translation table,</text>
+<text class="muted xs" x="62" y="602">and that table only exists in someone's head.</text>
+
+<!-- ============ PANEL B ============ -->
+<rect class="panel" x="536" y="82" width="480" height="548" rx="10"/>
+<text class="good sh" x="558" y="112">PROPOSED — ONE SOURCE OF TRUTH</text>
+<text class="muted s" x="558" y="132">Declared once; every surface is derived from it.</text>
+
+<rect class="card goodS" x="558" y="152" width="436" height="150" rx="9" stroke-width="2"/>
+<text class="good mono s" x="574" y="176" font-weight="700">bioscout/stages.py</text>
+<text class="ink mono xs" x="574" y="198">STAGES = [</text>
+<text class="ink mono xs" x="574" y="216">  Stage(id="export",   title="C3D Export",   group="Prepare",</text>
+<text class="muted mono xs" x="574" y="232">        reads=…, writes=…, config=…, run=…),</text>
+<text class="ink mono xs" x="574" y="250">  Stage(id="kinetics", title="IK / ID / MA", group="Solve", …),</text>
+<text class="muted mono xs" x="574" y="266">  … scale, so, ceinms, results</text>
+<text class="ink mono xs" x="574" y="284">]</text>
+
+<!-- one trunk, four spurs: the dependency runs registry -> surface -->
+<path class="line goodS" d="M776 302 L 776 496"/>
+<path class="line goodS" d="M776 390 L 754 390" marker-end="url(#arG)"/>
+<path class="line goodS" d="M776 408 L 798 408" marker-end="url(#arG)"/>
+<path class="line goodS" d="M776 476 L 754 476" marker-end="url(#arG)"/>
+<path class="line goodS" d="M776 494 L 798 494" marker-end="url(#arG)"/>
+
+<g>
+  <rect class="card" x="558" y="360" width="190" height="72" rx="7"/>
+  <text class="ink s" x="572" y="382" font-weight="700">CLI</text>
+  <text class="muted xs" x="572" y="400">flags + --help generated</text>
+  <text class="muted xs" x="572" y="416">from id / reads / writes</text>
+
+  <rect class="card" x="804" y="360" width="190" height="72" rx="7"/>
+  <text class="ink s" x="818" y="382" font-weight="700">GUI</text>
+  <text class="muted xs" x="818" y="400">NAV_SECTIONS built from</text>
+  <text class="muted xs" x="818" y="416">group + title</text>
+
+  <rect class="card" x="558" y="446" width="190" height="72" rx="7"/>
+  <text class="ink s" x="572" y="468" font-weight="700">verify table</text>
+  <text class="muted xs" x="572" y="486">run_check.STAGE_OUTPUTS</text>
+  <text class="muted xs" x="572" y="502">becomes Stage.writes</text>
+
+  <rect class="card" x="804" y="446" width="190" height="72" rx="7"/>
+  <text class="ink s" x="818" y="468" font-weight="700">docs</text>
+  <text class="muted xs" x="818" y="486">README table + notebook</text>
+  <text class="muted xs" x="818" y="502">control panel generated</text>
+</g>
+
+<rect class="badgeG" x="558" y="546" width="436" height="62" rx="7"/>
+<text class="good s" x="574" y="568" font-weight="700">Steps 1–2 delete a declaration rather than add an abstraction.</text>
+<text class="muted xs" x="574" y="588">STAGE_OUTPUTS already IS a partial registry — two declarations</text>
+<text class="muted xs" x="574" y="602">of the same fact is one too many. exbiomec → kinetics.</text>
+</svg>

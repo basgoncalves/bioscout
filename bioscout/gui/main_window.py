@@ -90,6 +90,16 @@ try:
 except Exception as _cs_err:                                   # noqa: BLE001
     print(f"[main_window] CEINMS Setup tab unavailable: {_cs_err}", flush=True)
 
+# Session Analysis (Simulations): the level above Trial Analysis — what the
+# session declares, the trial × stage ok/MISS coverage grid, and running
+# whole iterations. Guarded like every optional tab.
+SessionAnalysisTab = None
+try:
+    from gui.widgets.session_analysis import SessionAnalysisTab as _SessAnTab
+    SessionAnalysisTab = _SessAnTab
+except Exception as _sa_err:                                   # noqa: BLE001
+    print(f"[main_window] Session Analysis tab unavailable: {_sa_err}", flush=True)
+
 # Settings tab. Guarded like the other optional tabs.
 SettingsTab = None
 try:
@@ -141,6 +151,24 @@ except ImportError:
     pass
 
 
+#: Where a project may keep its settings.py, in order. The GUI used to look
+#: only at the project root, so a project that keeps its code in code/ — which
+#: several do — showed a permanent red ⚠ with no way to find out why.
+_SETTINGS_LOCATIONS = ("settings.py", "code/settings.py", "scripts/settings.py",
+                       "src/settings.py")
+
+
+def _find_project_settings(project_root):
+    """First existing settings.py under :data:`_SETTINGS_LOCATIONS`, or None."""
+    from pathlib import Path as _P
+    root = _P(project_root)
+    for rel in _SETTINGS_LOCATIONS:
+        f = root / rel
+        if f.is_file():
+            return f
+    return None
+
+
 def _guess_project_dir() -> str:
     """The current directory, if it looks like a bioscout project.
 
@@ -151,8 +179,8 @@ def _guess_project_dir() -> str:
     import os as _os
     cwd = _os.path.abspath(_os.getcwd())
     for cand in (cwd, _os.path.dirname(cwd)):
-        st = _os.path.join(cand, "settings.py")
-        if _os.path.isfile(st):
+        st = _find_project_settings(cand)
+        if st is not None:
             try:
                 _t = io.open(st, encoding="utf-8", errors="replace").read(4000)
             except Exception:
@@ -192,42 +220,12 @@ class MainWindow(ctk.CTk):
         # The version belongs in the title bar: every screenshot of a bug
         # then carries the build it came from.
         self.title(f"BioScout  v{_bs_ver}")
-        # Set window / TASKBAR icon.
-        #
-        # iconbitmap() alone sets the title-bar icon but NOT the taskbar
-        # button: Windows groups taskbar buttons by AppUserModelID, and a
-        # Python process inherits python.exe's, so the taskbar showed the
-        # generic Python icon however good the .ico was. Claiming an explicit
-        # AppUserModelID first is what makes Windows treat this as its own
-        # application and use our icon.
+        # Set window / TASKBAR icon. The how-and-why lives in
+        # gui/window_icon.py, which every standalone dialog uses too -- this
+        # used to be the only window that got it right.
         try:
-            if sys.platform == "win32":
-                import ctypes
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                    "Anthropic.BioScout.GUI")     # any stable unique string
-        except Exception:                                          # noqa: BLE001
-            pass
-        try:
-            from PIL import Image as _PILImg
-            import tempfile
-            _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
-            if _logo_path.exists():
-                _img = _PILImg.open(_logo_path).convert("RGBA")
-                _ico_path = Path(tempfile.gettempdir()) / "bioscout_icon.ico"
-                if not _ico_path.exists():
-                    _img.save(str(_ico_path), format="ICO",
-                              sizes=[(16, 16), (24, 24), (32, 32),
-                                     (48, 48), (64, 64), (128, 128), (256, 256)])
-                # default=True so every dialog and child window inherits it.
-                self.iconbitmap(default=str(_ico_path))
-                # And a PhotoImage too: on Linux/macOS iconbitmap is ignored
-                # and wm_iconphoto is what the window manager reads.
-                try:
-                    from PIL import ImageTk as _PILTk
-                    self._icon_img = _PILTk.PhotoImage(_img.resize((64, 64)))
-                    self.wm_iconphoto(True, self._icon_img)
-                except Exception:                                  # noqa: BLE001
-                    pass
+            from .window_icon import apply as _apply_icon
+            _apply_icon(self)
         except Exception:                                          # noqa: BLE001
             pass
         self.fullscreen = fullscreen
@@ -299,9 +297,11 @@ class MainWindow(ctk.CTk):
             logger.error(f"Configuration load error: {e}")
             self.config_manager = ConfigManager()
 
-        # Theme only here — appearance mode and BOTH scalings were already
-        # applied at the top of __init__, before the geometry restore.
-        ctk.set_default_color_theme("blue")
+        # Theme only here — appearance mode, accent and BOTH scalings were
+        # already applied at the top of __init__, before the geometry restore.
+        # set_default_color_theme() would RELOAD the stock theme dict and throw
+        # away the accent patch, so it is not called: apply_appearance() has
+        # already put the chosen accent into ThemeManager.theme.
 
         self._setup_ui()
 
@@ -523,8 +523,14 @@ class MainWindow(ctk.CTk):
             # entry only reappears when the merged tab failed to import.
             ("Data curation", ["C3D Export", "EMG Analysis", "CEINMS Setup"]
              + ([] if EMGTab is not None else ["EMG Processing"])),
-            ("Simulations",   ["Model Scaling", "Trial Analysis",
-                               "Session Analysis", "CEINMS Calibration"]),
+            # "Trial Analysis" is no longer a top-level entry: the same widget
+            # is now the "Trial" sub-view inside Session Analysis, so a session
+            # and one of its trials are one click apart instead of two tabs.
+            # It reappears here only if Session Analysis failed to import, so
+            # a broken new tab never takes the trial tools down with it.
+            ("Simulations",   ["Model Scaling"]
+             + ([] if SessionAnalysisTab is not None else ["Trial Analysis"])
+             + ["Session Analysis", "CEINMS Calibration"]),
             ("Results",       ["Results", "Training Tracking"]),
             ("Project",       ["File Editor", "Settings"]),
         ]
@@ -544,8 +550,13 @@ class MainWindow(ctk.CTk):
                 return SettingsTab is not None
             if name == "CEINMS Setup":
                 return CEINMSSetupTab is not None
+            if name == "Session Analysis":
+                return SessionAnalysisTab is not None
+            if name == "Trial Analysis":
+                # Only when it is still its own tab — see NAV_SECTIONS.
+                return SessionAnalysisTab is None
             return name in getattr(self, "tab_definitions", {}) or \
-                name in ("C3D Export", "Trial Analysis", "EMG Analysis",
+                name in ("C3D Export", "EMG Analysis",
                          "Model Scaling", "CEINMS Calibration", "Results",
                          "Training Tracking")
 
@@ -634,7 +645,15 @@ class MainWindow(ctk.CTk):
         if VideoAnalysisTab is not None:
             self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
         self.tab_definitions.update({
-            "Trial Analysis": {"class": TrialAnalysisTab, "args": (self.config_manager, self.update_status)},
+            # NOT registered when Session Analysis is available: the same
+            # widget is its "Trial" sub-view, and every definition here is
+            # eagerly constructed by _schedule_background_tab_loading, so
+            # leaving it in would build a second, invisible copy of a panel
+            # that reads matplotlib and the whole session tree.
+            **({} if SessionAnalysisTab is not None else {
+                "Trial Analysis": {"class": TrialAnalysisTab,
+                                   "args": (self.config_manager,
+                                            self.update_status)}}),
             # merged tab when it imported; the plain analysis tab otherwise
             "EMG Analysis": {"class": EMGTab or EMGAnalysisTab,
                              "args": (self.config_manager, self.update_status)},
@@ -665,6 +684,10 @@ class MainWindow(ctk.CTk):
             self.tab_definitions["CEINMS Setup"] = {
                 "class": CEINMSSetupTab,
                 "args": (self.config_manager, self.update_status)}
+        if SessionAnalysisTab is not None:
+            self.tab_definitions["Session Analysis"] = {
+                "class": SessionAnalysisTab,
+                "args": (self.config_manager, self.update_status)}
 
         # Initialize tabs dict - will be populated on demand (lazy loading)
         self.tabs = {}
@@ -684,12 +707,31 @@ class MainWindow(ctk.CTk):
         logger.debug(f"Loading default tab: {default_tab}")
         self._ensure_tab_loaded(default_tab, grid_it=True)
 
+        if default_tab not in self.tabs:
+            # The default tab is the one most likely to be broken by a missing
+            # optional dependency (Recording needs psutil, opencv, mediapipe).
+            # Losing it must not mean opening a window with nothing in it — try
+            # the rest in nav order and show the first that works.
+            logger.error(f"{default_tab} tab failed to load — trying the others")
+            for _alt in self.tab_definitions:
+                if _alt == default_tab:
+                    continue
+                self._ensure_tab_loaded(_alt, grid_it=True)
+                if _alt in self.tabs:
+                    logger.warning(f"Opening on '{_alt}' instead of '{default_tab}'. "
+                                   f"Check the log above for why '{default_tab}' failed.")
+                    default_tab = _alt
+                    self.current_tab = _alt
+                    break
+            else:
+                logger.critical("No tab could be loaded — the window will be empty. "
+                                "This is almost always missing dependencies: run "
+                                "`bioscout --env` and then pip install what it names.")
+
         if default_tab in self.tabs:
             logger.debug(f"{default_tab} tab created, grid state: {self.tabs[default_tab].winfo_manager()}")
             self.tabs[default_tab].tkraise()
             logger.debug(f"{default_tab} tab raised to front")
-        else:
-            logger.error(f"{default_tab} tab failed to load")
 
         self.update()  # Force rendering
         self.update_nav_buttons()
@@ -807,11 +849,22 @@ class MainWindow(ctk.CTk):
         )
         proj_entry.pack(side="left", padx=4)
 
-        # Status icon: shown after the entry
+        # Status icon: shown after the entry. A bare red ⚠ with the reason
+        # only in the transient status bar is a dead end — hover or click it
+        # and it tells you exactly which check failed.
         self._proj_status = ctk.CTkLabel(
-            proj_frame, text="", font=("Segoe UI", 11), width=26
+            proj_frame, text="", font=("Segoe UI", 13), width=26, cursor="hand2"
         )
         self._proj_status.pack(side="left", padx=(2, 6))
+        self._proj_status_msg = ""
+        self._proj_tip = None
+        self._proj_status.bind(
+            "<Button-1>",
+            lambda _e: messagebox.showinfo("Project settings",
+                                           self._proj_status_msg or "No project loaded.",
+                                           parent=self))
+        self._proj_status.bind("<Enter>", self._show_proj_tip)
+        self._proj_status.bind("<Leave>", self._hide_proj_tip)
 
         def _browse_project():
             folder = filedialog.askdirectory(title="Select Project Folder")
@@ -855,6 +908,33 @@ class MainWindow(ctk.CTk):
             state="disabled",
         )
         self._update_settings_btn.pack(side="left", padx=(8, 3))
+
+    def _show_proj_tip(self, _event=None) -> None:
+        """A one-label toplevel: tkinter has no tooltip, and the reason a
+        project is rejected must be readable without clicking anything."""
+        self._hide_proj_tip()
+        if not self._proj_status_msg:
+            return
+        try:
+            tip = ctk.CTkToplevel(self)
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            ctk.CTkLabel(tip, text=self._proj_status_msg, justify="left",
+                         font=("Segoe UI", 11)).pack(padx=10, pady=6)
+            x = self._proj_status.winfo_rootx()
+            y = self._proj_status.winfo_rooty() + self._proj_status.winfo_height() + 4
+            tip.geometry(f"+{x}+{y}")
+            self._proj_tip = tip
+        except Exception:                                          # noqa: BLE001
+            self._proj_tip = None
+
+    def _hide_proj_tip(self, _event=None) -> None:
+        if getattr(self, "_proj_tip", None) is not None:
+            try:
+                self._proj_tip.destroy()
+            except Exception:                                      # noqa: BLE001
+                pass
+            self._proj_tip = None
 
     def _autoload_project(self) -> None:
         """Load the pre-filled project, if there is one, once the tabs exist."""
@@ -920,12 +1000,14 @@ class MainWindow(ctk.CTk):
         # ── Version check (AST-only — avoids executing the file, which can
         #    fail if the project's settings.py references names like SubjectConfig
         #    that are no longer in the template's global scope) ────────────────
-        settings_file = p / "settings.py"
+        settings_file = _find_project_settings(p)
         ok = False
         needs_update = False
         tooltip = ""
-        if not settings_file.exists():
-            tooltip = "⚠  No settings.py — run: python -m bioscout --init"
+        if settings_file is None:
+            tooltip = ("⚠  No settings.py in this folder (looked in "
+                       + ", ".join(_SETTINGS_LOCATIONS)
+                       + ") — run: python -m bioscout --init")
         else:
             try:
                 import ast as _ast
@@ -967,6 +1049,9 @@ class MainWindow(ctk.CTk):
                 self._update_settings_btn.configure(state="disabled",
                                                     fg_color="#5a3a00")
 
+        self._proj_status_msg = (
+            f"{tooltip}\n\nProject: {p}\n"
+            f"settings.py: {settings_file if settings_file else '(not found)'}")
         self.update_status(tooltip, "success" if ok else "warning")
 
         # Redirect log file into the project folder — only when the project
@@ -987,7 +1072,7 @@ class MainWindow(ctk.CTk):
         if not project_dir:
             messagebox.showwarning("No Project", "Load a project folder first.", parent=self)
             return
-        settings_file = Path(project_dir) / "settings.py"
+        settings_file = _find_project_settings(project_dir) or (Path(project_dir) / "settings.py")
         if not settings_file.exists():
             messagebox.showerror("Missing settings.py",
                                  "No settings.py found in this folder.\n"
@@ -1260,8 +1345,25 @@ def main(fullscreen=False, screen_x=None, screen_y=None):
         app = MainWindow(fullscreen=fullscreen)
     except BaseException as e:
         import traceback as _tb
-        print(f"[main_window] MainWindow() FAILED ({type(e).__name__}): {e}", flush=True)
-        _tb.print_exc()
+        # Report on the REAL streams, not on sys.stdout/sys.stderr. By the
+        # time a tab fails, _setup_ui has already pointed both at the console
+        # WIDGET of a window that is never going to appear — so this handler
+        # ran correctly and printed into the void, leaving the user with a
+        # silent exit right after "Creating MainWindow...".
+        _err = sys.__stderr__ or sys.__stdout__
+        try:
+            print(f"[main_window] MainWindow() FAILED ({type(e).__name__}): {e}",
+                  file=_err, flush=True)
+            _tb.print_exc(file=_err)
+            _err.flush()
+        except Exception:                                          # noqa: BLE001
+            _tb.print_exc()
+        # And into the log file, which outlives the console window.
+        try:
+            logger.error(f"MainWindow() failed: {type(e).__name__}: {e}\n"
+                         + _tb.format_exc())
+        except Exception:                                          # noqa: BLE001
+            pass
         return
     print(f"[main_window] MainWindow created OK, state={app.state()}", flush=True)
     # Load the pre-filled project AFTER the tabs are registered, so the

@@ -290,6 +290,8 @@ def rank_colours(vals, top=12):
 def rank_shift_axes(fig, axes, columns, top=12, xlabel="% of the top group",
                     label_fs=7.5, tick_fs=7.0, title_fs=9.0, colour=None,
                     measured=(), measured_colour="#c1272d"):
+    # measured: either an iterable of group names (applied to EVERY column) or
+    # a list of such iterables, ONE PER COLUMN -- see the note at its use.
     """Draw one Collings-style row.
 
     `columns` is an ordered list of (title, {item: value}). COLOUR IS ANCHORED
@@ -322,10 +324,27 @@ def rank_shift_axes(fig, axes, columns, top=12, xlabel="% of the top group",
     # calibration made. Marked on the BAR (a red rule at its left edge) and
     # after the label, not by recolouring the text: a red label is unreadable
     # inside a dark bar, and the label colour already carries in/out-of-bar.
-    measured = {str(m).strip().lower() for m in (measured or ())}
+    # `measured` may be ONE iterable (every column marked the same) or a LIST
+    # of iterables, one per column. The per-column form exists because the mark
+    # means "a recorded EMG channel drove this force", which is only true of
+    # the EMG-informed columns: a static-optimisation bar carries no EMG at
+    # all, and marking it claims evidence that column does not have. The flat
+    # form is kept so existing callers behave exactly as before.
+    def _as_set(x):
+        return {str(m).strip().lower() for m in (x or ())}
+
+    if (measured and not isinstance(measured, (str, bytes))
+            and all(isinstance(x, (list, tuple, set, frozenset))
+                    for x in measured)):
+        per_col = [_as_set(x) for x in measured]
+        if len(per_col) < len(columns):
+            per_col += [set()] * (len(columns) - len(per_col))
+    else:
+        per_col = [_as_set(measured)] * len(columns)
 
     for c, (title, vals) in enumerate(columns):
         A = axes[c]
+        measured = per_col[c]
         order = orders[c]
         if not order:
             A.axis("off")

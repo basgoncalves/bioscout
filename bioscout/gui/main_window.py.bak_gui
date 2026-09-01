@@ -1,0 +1,1362 @@
+"""Main application window for BioScout."""
+
+import customtkinter as ctk
+from tkinter import messagebox
+import io
+from pathlib import Path
+import sys
+import platform
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import tkinter
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from importlib.metadata import version as _pkg_version
+try:
+    APP_VERSION = _pkg_version("bioscout")
+except Exception:
+    APP_VERSION = "dev"
+
+# Patch Tkinter's exception handling to suppress non-fatal CustomTkinter scaling errors
+_original_report_callback_exception = tkinter.Tk.report_callback_exception
+def _patched_report_callback_exception(self, exc_type, exc_value, exc_traceback):
+    """Suppress harmless CustomTkinter scaling errors."""
+    error_str = str(exc_value).lower()
+
+    # Suppress non-fatal CustomTkinter widget scaling AttributeErrors
+    if exc_type == AttributeError and any(attr in error_str for attr in [
+        "_canvas", "_last_geometry_manager_call", "_text_label", "_fg_color",
+        "_bg_color", "_border_color", "_apply_widget_scaling", "winfo_manager",
+        "_entry", "_button", "_label", "_text", "_apply_font_scaling"
+    ]):
+        # These are harmless CustomTkinter scaling/initialization errors
+        return
+
+    # Suppress TclError from CustomTkinter canvas coordinate issues
+    if exc_type == tkinter.TclError and "coordinates" in error_str and "expected" in error_str:
+        # These are canvas rendering artifacts from DPI scaling
+        return
+
+    # Call original for other exceptions
+    _original_report_callback_exception(self, exc_type, exc_value, exc_traceback)
+
+tkinter.Tk.report_callback_exception = _patched_report_callback_exception
+
+from config.config_manager import ConfigManager
+from utils.logger import logger
+from gui.styles import theme
+from settings import UISettings
+# EMG Processing (was EMG Normalization). Guarded: it imports scipy at run
+# time and a failure there should cost the tab, not the whole app.
+EMGProcessingTab = None
+try:
+    from gui.widgets.emg_processing_tab import EMGProcessingTab as _EMGProcessingTab
+    EMGProcessingTab = _EMGProcessingTab
+except Exception as _emg_err:
+    print(f"[main_window] EMGProcessingTab unavailable: {_emg_err}", flush=True)
+from gui.widgets.model_scaling import ModelScalingTab
+from gui.widgets.batch_c3d_export import BatchC3DExport
+from gui.widgets.results_viewer import ResultsViewerTab
+from gui.widgets.trial_analysis import TrialAnalysisTab
+from gui.widgets.emg_analysis_tab import EMGAnalysisTab
+# TrainingTrackingTab is deferred too (matplotlib at module level) — see
+# _deferred below; the name is bound after _deferred is defined.
+from gui.widgets.ceinms_calibration_session import CEINMSCalibrationSessionTab
+# Settings tab removed in 2.0.0b12 — every key it wrote was read by nothing
+# except itself. The one live setting (simulations folder) now lives in the
+# top bar. The widget file is kept for reference; nothing imports it.
+from gui.widgets.console_terminal import ResizablePanelSplitter
+
+# Per-machine GUI settings (window size, UI scale). NOT project settings —
+# see gui/gui_settings.py for why the two are kept apart.
+from gui.gui_settings import apply_appearance, gui_settings
+
+# Merged EMG tab (Processing + Analysis behind one nav entry, sub-tabs on the
+# left). Guarded: when it cannot load, the two separate tabs come back.
+EMGTab = None
+try:
+    from gui.widgets.emg_tab import EMGTab as _EMGTab
+    EMGTab = _EMGTab
+except Exception as _emgtab_err:                               # noqa: BLE001
+    print(f"[main_window] merged EMG tab unavailable: {_emgtab_err}", flush=True)
+
+# CEINMS Setup tab (Data curation): emg_map / calibration trials / file
+# inventory, writing session.yaml surgically. Guarded like every optional tab.
+CEINMSSetupTab = None
+try:
+    from gui.widgets.ceinms_setup import CEINMSSetupTab as _CEINMSSetupTab
+    CEINMSSetupTab = _CEINMSSetupTab
+except Exception as _cs_err:                                   # noqa: BLE001
+    print(f"[main_window] CEINMS Setup tab unavailable: {_cs_err}", flush=True)
+
+# Session Analysis (Simulations): the level above Trial Analysis — what the
+# session declares, the trial × stage ok/MISS coverage grid, and running
+# whole iterations. Guarded like every optional tab.
+SessionAnalysisTab = None
+try:
+    from gui.widgets.session_analysis import SessionAnalysisTab as _SessAnTab
+    SessionAnalysisTab = _SessAnTab
+except Exception as _sa_err:                                   # noqa: BLE001
+    print(f"[main_window] Session Analysis tab unavailable: {_sa_err}", flush=True)
+
+# Settings tab. Guarded like the other optional tabs.
+SettingsTab = None
+try:
+    from gui.widgets.settings_tab import SettingsTab as _SettingsTab
+    SettingsTab = _SettingsTab
+except Exception as _st_err:                                   # noqa: BLE001
+    print(f"[main_window] SettingsTab unavailable: {_st_err}", flush=True)
+
+# File Editor is new in 2.0.0b9. Guarded like the other optional tabs so a
+# failure inside it degrades to "tab missing" rather than "app won't start".
+FileEditorTab = None
+try:
+    from gui.widgets.file_editor import FileEditorTab as _FileEditorTab
+    FileEditorTab = _FileEditorTab
+except Exception as _fe_err:
+    print(f"[main_window] FileEditorTab unavailable: {_fe_err}", flush=True)
+
+# Recording / Video Analysis import mediapipe + cv2 at module level, and
+# Training Tracking imports matplotlib — several SECONDS of launch cost for
+# tabs most sessions never open. The old code imported them here "guarded",
+# which still paid the full import at launch. They are now DEFERRED: the
+# import happens on the first click, inside _ensure_tab_loaded, and a failure
+# there costs that tab, not the app.
+def _deferred(module, attr):
+    def load(parent, *args):
+        import importlib
+        cls = getattr(importlib.import_module(module), attr)
+        return cls(parent, *args)
+    load.__name__ = attr
+    return load
+
+
+RecordingTab = _deferred("gui.widgets.recording", "RecordingTab")
+VideoAnalysisTab = _deferred("gui.widgets.video_analysis", "VideoAnalysisTab")
+TrainingTrackingTab = _deferred("gui.widgets.training_tracking",
+                                "TrainingTrackingTab")
+
+# Try to import libraries for better multi-monitor support
+MONITOR_DETECTION_AVAILABLE = False
+try:
+    import pygetwindow as gw
+    from screeninfo import get_monitors
+    MONITOR_DETECTION_AVAILABLE = True
+except ImportError:
+    # NO pip-install here. This used to shell out to pip SYNCHRONOUSLY at
+    # import time — a network call before the window could even appear, and
+    # on a slow or offline connection it was most of a "very slow launch".
+    # Multi-monitor placement just degrades to the Tk fallbacks.
+    pass
+
+
+def _guess_project_dir() -> str:
+    """The current directory, if it looks like a bioscout project.
+
+    "Looks like" = it has a settings.py naming bioscout, or the folder pair a
+    project always has. Deliberately conservative: a wrong path pre-filled is
+    worse than an empty box, because Load would then act on it.
+    """
+    import os as _os
+    cwd = _os.path.abspath(_os.getcwd())
+    for cand in (cwd, _os.path.dirname(cwd)):
+        st = _os.path.join(cand, "settings.py")
+        if _os.path.isfile(st):
+            try:
+                _t = io.open(st, encoding="utf-8", errors="replace").read(4000)
+            except Exception:
+                _t = ""
+            if "bioscout" in _t.lower() or "BatchSettings" in _t:
+                return cand
+        if any(_os.path.isdir(_os.path.join(cand, d))
+               for d in ("simulations", "simulations_test")) and \
+           _os.path.isdir(_os.path.join(cand, "setupFiles")):
+            return cand
+    return ""
+
+
+class MainWindow(ctk.CTk):
+    """Main application window."""
+
+    def __init__(self, fullscreen=False):
+        """Initialize main window."""
+        # Scaling/theme BEFORE the window exists. set_window_scaling on an
+        # ALREADY-CREATED window makes CTk re-apply its geometry via deferred
+        # callbacks, which ran AFTER state("zoomed") and popped the window out
+        # of maximised — but only at scale != 100 %, which is why it escaped
+        # testing. Applied first, the window is born at the right scaling and
+        # nothing is rewritten later.
+        self.gui_settings = apply_appearance()
+
+        # Detect terminal monitor in background thread to avoid blocking UI
+        self.detected_terminal_monitor = None
+        self._start_monitor_detection()
+
+        super().__init__()
+
+        try:
+            from bioscout import __version__ as _bs_ver
+        except Exception:
+            _bs_ver = "?"
+        # The version belongs in the title bar: every screenshot of a bug
+        # then carries the build it came from.
+        self.title(f"BioScout  v{_bs_ver}")
+        # Set window / TASKBAR icon.
+        #
+        # iconbitmap() alone sets the title-bar icon but NOT the taskbar
+        # button: Windows groups taskbar buttons by AppUserModelID, and a
+        # Python process inherits python.exe's, so the taskbar showed the
+        # generic Python icon however good the .ico was. Claiming an explicit
+        # AppUserModelID first is what makes Windows treat this as its own
+        # application and use our icon.
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "Anthropic.BioScout.GUI")     # any stable unique string
+        except Exception:                                          # noqa: BLE001
+            pass
+        try:
+            from PIL import Image as _PILImg
+            import tempfile
+            _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
+            if _logo_path.exists():
+                _img = _PILImg.open(_logo_path).convert("RGBA")
+                _ico_path = Path(tempfile.gettempdir()) / "bioscout_icon.ico"
+                if not _ico_path.exists():
+                    _img.save(str(_ico_path), format="ICO",
+                              sizes=[(16, 16), (24, 24), (32, 32),
+                                     (48, 48), (64, 64), (128, 128), (256, 256)])
+                # default=True so every dialog and child window inherits it.
+                self.iconbitmap(default=str(_ico_path))
+                # And a PhotoImage too: on Linux/macOS iconbitmap is ignored
+                # and wm_iconphoto is what the window manager reads.
+                try:
+                    from PIL import ImageTk as _PILTk
+                    self._icon_img = _PILTk.PhotoImage(_img.resize((64, 64)))
+                    self.wm_iconphoto(True, self._icon_img)
+                except Exception:                                  # noqa: BLE001
+                    pass
+        except Exception:                                          # noqa: BLE001
+            pass
+        self.fullscreen = fullscreen
+        self.target_x = 0
+        self.target_y = 0
+        self.positioning_complete = False
+        self._map_event_bound = False  # Prevent multiple Map event bindings
+
+        # (gui_settings/scaling were applied at the very top of __init__,
+        # before the window existed — see the comment there.)
+        # PRECEDENCE: "Start maximised" (default ON) beats the remembered
+        # geometry. The first version had it the other way round, so one close
+        # with the window un-maximised saved a geometry that then overrode
+        # maximising on every later launch — "why does the app not open full
+        # size any more". The saved geometry only applies when the user has
+        # turned Start maximised OFF in Settings.
+        self._restored_geometry = False
+        if self.gui_settings.get("window.start_maximised", True):
+            fullscreen = True
+            self.fullscreen = True
+        else:
+            _saved_geometry = str(self.gui_settings.get("window.geometry", "")
+                                  or "")
+            if (self.gui_settings.get("window.remember", True)
+                    and _saved_geometry and not fullscreen):
+                try:
+                    self.geometry(_saved_geometry)
+                    self.minsize(1200, 700)
+                    self._restored_geometry = True
+                except Exception:                              # noqa: BLE001
+                    self._restored_geometry = False
+
+        if self._restored_geometry:
+            pass                       # geometry already applied above
+        elif fullscreen:
+            # Start maximized to avoid graphics glitches and use the whole screen.
+            # 'zoomed' maximizes the window (keeps the title bar / taskbar) on
+            # Windows; '-zoomed' is the Linux equivalent. Try each safely so a
+            # platform that doesn't support one doesn't crash startup.
+            maximized = False
+            try:
+                self.state("zoomed")  # Windows / most platforms
+                maximized = True
+            except Exception:
+                pass
+            if not maximized:
+                try:
+                    self.attributes("-zoomed", True)  # Linux (X11)
+                    maximized = True
+                except Exception:
+                    pass
+            if not maximized:
+                # Last resort: size to the full screen geometry.
+                try:
+                    sw = self.winfo_screenwidth()
+                    sh = self.winfo_screenheight()
+                    self.geometry(f"{sw}x{sh}+0+0")
+                except Exception:
+                    self.geometry("1400x900+0+0")
+            self.minsize(1200, 700)
+        else:
+            self.geometry("1400x900+0+0")
+            self.minsize(1200, 700)
+
+        try:
+            self.config_manager = ConfigManager()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load configuration: {e}")
+            logger.error(f"Configuration load error: {e}")
+            self.config_manager = ConfigManager()
+
+        # Theme only here — appearance mode and BOTH scalings were already
+        # applied at the top of __init__, before the geometry restore.
+        ctk.set_default_color_theme("blue")
+
+        self._setup_ui()
+
+        # Force immediate rendering
+        self.update_idletasks()
+
+        # Reposition onto the correct monitor shortly after mainloop starts
+        if not fullscreen:
+            self.bind("<Map>", self._on_window_mapped, add=True)
+        else:
+            # Re-assert maximised once the event loop has drained whatever
+            # sizing callbacks the toolkit queued during construction. A
+            # no-op when the state stuck the first time.
+            def _rezoom():
+                try:
+                    if str(self.state()) != "zoomed":
+                        self.state("zoomed")
+                except Exception:                              # noqa: BLE001
+                    try:
+                        self.attributes("-zoomed", True)
+                    except Exception:                          # noqa: BLE001
+                        pass
+            self.after(150, _rezoom)
+            self.after(700, _rezoom)
+
+        logger.debug("Application initialized")
+
+    def _start_monitor_detection(self):
+        """Start monitor detection in background thread (non-blocking)."""
+        def detect_in_thread():
+            try:
+                self.detected_terminal_monitor = self._detect_terminal_monitor_early()
+            except Exception as e:
+                logger.debug(f"Background monitor detection failed: {e}")
+
+        # Run detection in daemon thread so it doesn't block UI
+        thread = threading.Thread(target=detect_in_thread, daemon=True)
+        thread.start()
+
+    def _detect_terminal_monitor_early(self):
+        """Detect which monitor the terminal window is on (called BEFORE window creation)."""
+        try:
+            if not MONITOR_DETECTION_AVAILABLE:
+                return None
+
+            # Get the active window (the terminal running this script)
+            # This MUST be called before super().__init__() creates the window
+            active_win = gw.getActiveWindow()
+            if not active_win:
+                logger.debug("Could not detect active window")
+                return None
+
+            # Find which monitor the terminal is on
+            monitors = get_monitors()
+            terminal_center_x = active_win.left + (active_win.width // 2)
+            terminal_center_y = active_win.top + (active_win.height // 2)
+
+            for i, monitor in enumerate(monitors):
+                # Check if terminal center falls within this monitor's bounds
+                if (monitor.x <= terminal_center_x < monitor.x + monitor.width and
+                    monitor.y <= terminal_center_y < monitor.y + monitor.height):
+                    logger.debug(f"Detected terminal on Monitor #{i + 1}: {monitor.width}x{monitor.height} at +{monitor.x}+{monitor.y}")
+                    return monitor
+
+            logger.debug("Could not map terminal to any monitor")
+            return None
+
+        except Exception as e:
+            logger.debug(f"Terminal monitor detection failed: {e}")
+            return None
+
+    def _on_window_mapped(self, event=None) -> None:
+        """Handle window map event to position it on active monitor (runs only once)."""
+        # Prevent this from running multiple times during initialization
+        if self.positioning_complete:
+            return
+
+        try:
+            window_width = 1400
+            window_height = 900
+            x, y = 0, 0
+            positioned = False
+
+            # Method 1: Use pre-detected terminal monitor (detected before window creation)
+            terminal_monitor = self.detected_terminal_monitor
+            if terminal_monitor:
+                # Center window on the detected monitor
+                monitor_center_x = terminal_monitor.x + (terminal_monitor.width // 2)
+                monitor_center_y = terminal_monitor.y + (terminal_monitor.height // 2)
+
+                x = monitor_center_x - (window_width // 2)
+                y = monitor_center_y - (window_height // 2)
+
+                # Clamp to monitor bounds with margin
+                margin = 10
+                if x < terminal_monitor.x + margin:
+                    x = terminal_monitor.x + margin
+                elif x + window_width > terminal_monitor.x + terminal_monitor.width - margin:
+                    x = terminal_monitor.x + terminal_monitor.width - window_width - margin
+
+                if y < terminal_monitor.y + margin:
+                    y = terminal_monitor.y + margin
+                elif y + window_height > terminal_monitor.y + terminal_monitor.height - margin:
+                    y = terminal_monitor.y + terminal_monitor.height - window_height - margin
+
+                logger.debug(f"Opening window on monitor center: +{x}+{y}")
+                positioned = True
+
+            # Method 2: Fall back to mouse position if monitor detection failed
+            if not positioned:
+                try:
+                    mouse_x = self.winfo_pointerx()
+                    mouse_y = self.winfo_pointery()
+                    logger.debug(f"Using mouse position fallback: ({mouse_x}, {mouse_y})")
+
+                    x = mouse_x - (window_width // 2)
+                    y = mouse_y - (window_height // 2)
+
+                    # Get virtual screen dimensions
+                    screen_width = self.winfo_screenwidth()
+                    screen_height = self.winfo_screenheight()
+
+                    try:
+                        import ctypes
+                        user32 = ctypes.windll.user32
+                        virtual_width = user32.GetSystemMetrics(78)
+                        virtual_height = user32.GetSystemMetrics(79)
+                        if virtual_width > screen_width:
+                            screen_width = virtual_width
+                        if virtual_height > screen_height:
+                            screen_height = virtual_height
+                    except:
+                        pass
+
+                    margin = 10
+                    x = max(margin, min(x, screen_width - window_width - margin))
+                    y = max(margin, min(y, screen_height - window_height - margin))
+
+                    positioned = True
+                except Exception as e:
+                    logger.debug(f"Mouse position fallback failed: {e}")
+
+            # Apply geometry
+            if positioned:
+                self.geometry(f"{window_width}x{window_height}+{x}+{y}")
+                self.target_x = x
+                self.target_y = y
+                logger.debug(f"Window positioned at +{x}+{y}")
+                self.positioning_complete = True
+                # Show window now that it's positioned correctly
+                logger.debug("Showing window...")
+                # Ensure full opacity before showing
+                self.attributes("-alpha", 1.0)
+                self.update_idletasks()
+                self.deiconify()
+                # Force rendering after deiconify
+                self.after(50, lambda: self.attributes("-alpha", 1.0))
+                logger.debug("Window shown")
+
+        except Exception as e:
+            logger.warning(f"Could not reposition window on map event: {e}", exc_info=True)
+            self.positioning_complete = True  # Mark complete to avoid infinite loop
+            # Show window anyway even if positioning failed
+            self.attributes("-alpha", 1.0)
+            self.update_idletasks()
+            self.deiconify()
+            self.after(50, lambda: self.attributes("-alpha", 1.0))
+
+
+    def _start_persistent_positioning(self) -> None:
+        """Disabled - persistent repositioning was causing window jitter."""
+        pass
+
+    def _setup_ui(self) -> None:
+        """Setup user interface."""
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self._create_sidebar()
+        self._create_main_area()
+        # Ctrl+R reloads the app (shows the same confirmation popup as the button)
+        self.bind_all("<Control-r>", lambda _e: self._restart_app())
+        self.bind_all("<Control-R>", lambda _e: self._restart_app())
+
+    def _create_sidebar(self) -> None:
+        """Create left sidebar with navigation."""
+        sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
+        sidebar.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        # The stretchy row is chosen after the nav is built, below —
+        # a fixed index here became a nav button as tabs were added.
+
+        # Logo + title at top of sidebar
+        try:
+            from PIL import Image as _PILImage
+            _logo_path = Path(__file__).parent.parent / "utils" / "logo.png"
+            _pil = _PILImage.open(_logo_path).convert("RGBA").resize((48, 48), _PILImage.LANCZOS)
+            _ctk_logo = ctk.CTkImage(light_image=_pil, dark_image=_pil, size=(48, 48))
+            title_label = ctk.CTkLabel(
+                sidebar,
+                text="BioScout",
+                image=_ctk_logo,
+                compound="top",
+                font=("Segoe UI", 16, "bold"),
+            )
+        except Exception:
+            title_label = ctk.CTkLabel(sidebar, text="BioScout", font=("Segoe UI", 16, "bold"))
+        title_label.grid(row=0, column=0, padx=20, pady=(16, 8), sticky="ew")
+
+        self.nav_buttons = {}
+        # GROUPED BY WHAT YOU ARE DOING, not by the order the tabs were written.
+        # A flat list of eleven buttons made "which of these do I need next?" a
+        # reading exercise; the sections answer it: capture the data, curate it,
+        # simulate it, look at the results.
+        #
+        # Order INSIDE a section is still the pipeline order.
+        NAV_SECTIONS = [
+            ("Record",        ["Recording", "Video Analysis"]),
+            # "EMG Analysis" is the MERGED tab (Processing + Analysis as left
+            # sub-tabs, gui/widgets/emg_tab.py). The separate "EMG Processing"
+            # entry only reappears when the merged tab failed to import.
+            ("Data curation", ["C3D Export", "EMG Analysis", "CEINMS Setup"]
+             + ([] if EMGTab is not None else ["EMG Processing"])),
+            # "Trial Analysis" is no longer a top-level entry: the same widget
+            # is now the "Trial" sub-view inside Session Analysis, so a session
+            # and one of its trials are one click apart instead of two tabs.
+            # It reappears here only if Session Analysis failed to import, so
+            # a broken new tab never takes the trial tools down with it.
+            ("Simulations",   ["Model Scaling"]
+             + ([] if SessionAnalysisTab is not None else ["Trial Analysis"])
+             + ["Session Analysis", "CEINMS Calibration"]),
+            ("Results",       ["Results", "Training Tracking"]),
+            ("Project",       ["File Editor", "Settings"]),
+        ]
+        # A tab that failed to import, or does not exist yet ("Session
+        # Analysis"), is simply absent — and a section left with no tabs at all
+        # does not print its heading over empty space.
+        def _available(name):
+            if name == "File Editor":
+                return FileEditorTab is not None
+            if name == "EMG Processing":
+                return EMGProcessingTab is not None
+            if name == "Recording":
+                return RecordingTab is not None
+            if name == "Video Analysis":
+                return VideoAnalysisTab is not None
+            if name == "Settings":
+                return SettingsTab is not None
+            if name == "CEINMS Setup":
+                return CEINMSSetupTab is not None
+            if name == "Session Analysis":
+                return SessionAnalysisTab is not None
+            if name == "Trial Analysis":
+                # Only when it is still its own tab — see NAV_SECTIONS.
+                return SessionAnalysisTab is None
+            return name in getattr(self, "tab_definitions", {}) or \
+                name in ("C3D Export", "EMG Analysis",
+                         "Model Scaling", "CEINMS Calibration", "Results",
+                         "Training Tracking")
+
+        # The nav lives in its OWN frame, packed rather than gridded. The old
+        # code numbered sidebar rows by hand — including a version label pinned
+        # to row=16 — so adding a tab silently overlapped the status box. One
+        # container means the sidebar grid has four rows, forever.
+        nav_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav_frame.grid(row=1, column=0, sticky="new", padx=0, pady=0)
+        sidebar.grid_rowconfigure(2, weight=1)     # slack pushes status down
+
+        for section, names in NAV_SECTIONS:
+            names = [n for n in names if _available(n)]
+            if not names:
+                continue
+            ctk.CTkLabel(
+                nav_frame, text=section.upper(), anchor="w",
+                font=("Segoe UI", 10, "bold"), text_color="#7a8290",
+            ).pack(fill="x", padx=14, pady=(12, 3))
+            for tab_name in names:
+                btn = ctk.CTkButton(
+                    nav_frame,
+                    text=tab_name,
+                    command=lambda t=tab_name: self.switch_tab(t),
+                    fg_color="#2d2d2d",
+                    hover_color="#3d3d3d",
+                    border_width=2,
+                    border_color="#404040",
+                )
+                btn.pack(fill="x", padx=10, pady=3)
+                self.nav_buttons[tab_name] = btn
+
+        status_frame = ctk.CTkFrame(sidebar, corner_radius=8)
+        status_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+
+        ctk.CTkLabel(status_frame, text="Status:", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5), anchor="w")
+        self.status_label = ctk.CTkLabel(status_frame, text="Ready", text_color="#28a745", font=("Segoe UI", 10))
+        self.status_label.pack(padx=10, pady=(0, 10), anchor="w")
+
+        # Utility buttons row (Help + Screen Record)
+        button_frame = ctk.CTkFrame(sidebar)
+        button_frame.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkButton(button_frame, text="Help", width=60,
+                      command=self.show_help).grid(row=0, column=0, padx=(0, 2), sticky="ew")
+        ctk.CTkButton(button_frame, text="📹 Record",
+                      fg_color="#1a3a5a", hover_color="#2a4a6a",
+                      width=60, command=self._open_screen_recorder
+                      ).grid(row=0, column=1, padx=(2, 0), sticky="ew")
+        # Reload: relaunch the app to pick up the latest code (no manual restart)
+        ctk.CTkButton(button_frame, text="🔄 Reload App",
+                      fg_color="#5a3a00", hover_color="#7a5000",
+                      command=self._restart_app
+                      ).grid(row=1, column=0, columnspan=2, padx=0, pady=(4, 0),
+                             sticky="ew")
+
+        version_label = ctk.CTkLabel(sidebar, text=f"v{APP_VERSION}",
+                                     text_color="#666666", font=("Segoe UI", 8))
+        version_label.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
+
+    def _create_main_area(self) -> None:
+        """Create main content area with tabs and resizable console."""
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.main_frame.grid_rowconfigure(1, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+
+        self._create_topbar()
+        self.main_frame.grid_rowconfigure(0, weight=0)
+
+        self.splitter = ResizablePanelSplitter(self.main_frame)
+        self.splitter.grid(row=1, column=0, sticky="nsew")
+        self.splitter.grid_rowconfigure(0, weight=1)
+
+        self.tab_container = ctk.CTkFrame(self.splitter.content_frame)
+        self.tab_container.grid(row=0, column=0, sticky="nsew")
+        self.tab_container.grid_rowconfigure(0, weight=1)
+        self.tab_container.grid_columnconfigure(0, weight=1)
+
+        # Tab definitions for lazy loading
+        self.tab_definitions = {}
+        if RecordingTab is not None:
+            self.tab_definitions["Recording"] = {"class": RecordingTab, "args": (self.config_manager, self.update_status)}
+        if VideoAnalysisTab is not None:
+            self.tab_definitions["Video Analysis"] = {"class": VideoAnalysisTab, "args": (self.config_manager, self.update_status)}
+        self.tab_definitions.update({
+            # NOT registered when Session Analysis is available: the same
+            # widget is its "Trial" sub-view, and every definition here is
+            # eagerly constructed by _schedule_background_tab_loading, so
+            # leaving it in would build a second, invisible copy of a panel
+            # that reads matplotlib and the whole session tree.
+            **({} if SessionAnalysisTab is not None else {
+                "Trial Analysis": {"class": TrialAnalysisTab,
+                                   "args": (self.config_manager,
+                                            self.update_status)}}),
+            # merged tab when it imported; the plain analysis tab otherwise
+            "EMG Analysis": {"class": EMGTab or EMGAnalysisTab,
+                             "args": (self.config_manager, self.update_status)},
+            # Given the same (config_manager, status) pair as every other tab.
+            # It used to be constructed with args=(), which is why it was the
+            # only tab with no way to report status and no place to remember
+            # anything between launches.
+            "C3D Export": {"class": BatchC3DExport,
+                           "args": (self.config_manager, self.update_status)},
+            "Model Scaling": {"class": ModelScalingTab, "args": (self.config_manager, self.update_status)},
+            "CEINMS Calibration": {"class": CEINMSCalibrationSessionTab, "args": (self.config_manager, self.update_status)},
+            "Results": {"class": ResultsViewerTab, "args": (self.config_manager, self.update_status)},
+            "Training Tracking": {"class": TrainingTrackingTab, "args": (self.config_manager, self.update_status)},
+        })
+        if EMGProcessingTab is not None:
+            self.tab_definitions["EMG Processing"] = {
+                "class": EMGProcessingTab,
+                "args": (self.config_manager, self.update_status)}
+        if FileEditorTab is not None:
+            self.tab_definitions["File Editor"] = {
+                "class": FileEditorTab,
+                "args": (self.config_manager, self.update_status)}
+        if SettingsTab is not None:
+            self.tab_definitions["Settings"] = {
+                "class": SettingsTab,
+                "args": (self.config_manager, self.update_status)}
+        if CEINMSSetupTab is not None:
+            self.tab_definitions["CEINMS Setup"] = {
+                "class": CEINMSSetupTab,
+                "args": (self.config_manager, self.update_status)}
+        if SessionAnalysisTab is not None:
+            self.tab_definitions["Session Analysis"] = {
+                "class": SessionAnalysisTab,
+                "args": (self.config_manager, self.update_status)}
+
+        # Initialize tabs dict - will be populated on demand (lazy loading)
+        self.tabs = {}
+        self.tabs_loaded = set()  # Track which tabs have been created
+
+        self.console = self.splitter.console
+
+        # Get default tab from settings, fallback to "Recording"
+        default_tab = UISettings.DEFAULT_TAB_ON_LAUNCH
+        if default_tab not in self.tab_definitions:
+            logger.warning(f"Default tab '{default_tab}' not found, using 'Recording'")
+            default_tab = next(iter(self.tab_definitions), "Recording")
+
+        self.current_tab = default_tab
+
+        # Create only the default tab immediately with explicit grid
+        logger.debug(f"Loading default tab: {default_tab}")
+        self._ensure_tab_loaded(default_tab, grid_it=True)
+
+        if default_tab not in self.tabs:
+            # The default tab is the one most likely to be broken by a missing
+            # optional dependency (Recording needs psutil, opencv, mediapipe).
+            # Losing it must not mean opening a window with nothing in it — try
+            # the rest in nav order and show the first that works.
+            logger.error(f"{default_tab} tab failed to load — trying the others")
+            for _alt in self.tab_definitions:
+                if _alt == default_tab:
+                    continue
+                self._ensure_tab_loaded(_alt, grid_it=True)
+                if _alt in self.tabs:
+                    logger.warning(f"Opening on '{_alt}' instead of '{default_tab}'. "
+                                   f"Check the log above for why '{default_tab}' failed.")
+                    default_tab = _alt
+                    self.current_tab = _alt
+                    break
+            else:
+                logger.critical("No tab could be loaded — the window will be empty. "
+                                "This is almost always missing dependencies: run "
+                                "`bioscout --env` and then pip install what it names.")
+
+        if default_tab in self.tabs:
+            logger.debug(f"{default_tab} tab created, grid state: {self.tabs[default_tab].winfo_manager()}")
+            self.tabs[default_tab].tkraise()
+            logger.debug(f"{default_tab} tab raised to front")
+
+        self.update()  # Force rendering
+        self.update_nav_buttons()
+
+        # Load other tabs in background to avoid blocking UI
+        self._schedule_background_tab_loading()
+
+    def _ensure_tab_loaded(self, tab_name: str, grid_it: bool = True) -> None:
+        """Load a tab on demand (lazy loading). Grid it only if grid_it=True."""
+        if tab_name not in self.tab_definitions:
+            logger.warning(f"Tab {tab_name} not found in definitions")
+            return
+
+        # Create tab if not yet created
+        if tab_name not in self.tabs_loaded:
+            try:
+                logger.debug(f"Attempting to load tab: {tab_name}")
+                tab_def = self.tab_definitions[tab_name]
+                tab_class = tab_def["class"]
+                tab_args = tab_def["args"]
+                logger.debug(f"Tab definition: {tab_class.__name__}, args: {len(tab_args)}")
+
+                # Create tab with arguments
+                try:
+                    logger.debug(f"Creating tab instance: {tab_name}")
+                    self.tabs[tab_name] = tab_class(self.tab_container, *tab_args)
+                    self.tabs_loaded.add(tab_name)
+                    logger.info(f"Tab created successfully: {tab_name}")
+                    # A tab created after the project was broadcast missed it.
+                    _proj = ""
+                    try:
+                        _proj = (self._project_dir.get() or "").strip()
+                    except Exception:                              # noqa: BLE001
+                        _proj = ""
+                    if _proj and hasattr(self.tabs[tab_name], "set_project_dir"):
+                        try:
+                            self.tabs[tab_name].set_project_dir(_proj)
+                        except Exception as _e:                    # noqa: BLE001
+                            logger.error(
+                                f"Error setting project dir for {tab_name}: {_e}")
+                except AttributeError as ae:
+                    # Handle CustomTkinter initialization issues
+                    if "_last_geometry_manager_call" in str(ae) or "_canvas" in str(ae):
+                        logger.warning(f"CustomTkinter initialization issue for {tab_name}, retrying...")
+                        # Defer creation to next frame
+                        self.after(50, lambda t=tab_name, g=grid_it: self._ensure_tab_loaded(t, g))
+                        return
+                    else:
+                        logger.error(f"AttributeError in {tab_name}: {ae}", exc_info=True)
+                        raise
+            except Exception as e:
+                logger.critical(f"FAILED TO LOAD TAB '{tab_name}': {type(e).__name__}: {e}", exc_info=True)
+                import traceback
+                print(f"ERROR loading tab {tab_name}:")
+                traceback.print_exc()
+                return
+
+        # Grid the tab if requested (even if it was created earlier without gridding)
+        if grid_it and tab_name in self.tabs:
+            try:
+                self.tabs[tab_name].grid(row=0, column=0, sticky="nsew")
+                logger.debug(f"Tab gridded: {tab_name}")
+            except Exception as e:
+                logger.debug(f"Could not grid {tab_name} immediately: {e}")
+
+
+    def _schedule_background_tab_loading(self) -> None:
+        """Schedule loading of remaining tabs in background thread (silently, without gridding)."""
+        def load_tabs_in_background():
+            import time
+            # Load tabs in background WITHOUT gridding them (silent background creation)
+            for tab_name in self.tab_definitions.keys():
+                if tab_name not in self.tabs_loaded:
+                    try:
+                        # Load but don't grid (grid_it=False means create in memory only)
+                        self._ensure_tab_loaded(tab_name, grid_it=False)
+                        time.sleep(0.05)  # Small delay to spread out loading
+                    except Exception as e:
+                        logger.debug(f"Background load error for {tab_name}: {e}")
+
+        # Run in daemon thread so it doesn't block
+        thread = threading.Thread(target=load_tabs_in_background, daemon=True)
+        thread.start()
+
+    def _create_topbar(self) -> None:
+        """Create top bar with project selector and version status indicator."""
+        topbar = ctk.CTkFrame(self.main_frame, corner_radius=8)
+        topbar.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 10))
+        topbar.grid_columnconfigure(2, weight=1)
+
+        # Title label (current tab)
+        self.title_label = ctk.CTkLabel(topbar, text="", font=("Segoe UI", 14, "bold"))
+        self.title_label.pack(side="left", padx=15, pady=10)
+
+        # ── Project path selector ──────────────────────────────────────────
+        proj_frame = ctk.CTkFrame(topbar, fg_color="transparent")
+        proj_frame.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+
+        ctk.CTkLabel(proj_frame, text="Project:", font=("Segoe UI", 11, "bold")).pack(side="left", padx=(0, 6))
+
+        from tkinter import filedialog
+
+        # Pre-fill from where the GUI was launched. `python -m bioscout` is
+        # almost always run FROM the project, so starting with an empty box and
+        # making the user Browse to the folder they are already standing in is
+        # a step that never had to exist. Only a folder that actually looks
+        # like a bioscout project is offered, so launching from elsewhere still
+        # opens blank rather than pointing at something wrong.
+        self._project_dir = ctk.StringVar(value=_guess_project_dir())
+        proj_entry = ctk.CTkEntry(
+            proj_frame,
+            textvariable=self._project_dir,
+            placeholder_text="Select project folder…",
+            width=420,
+        )
+        proj_entry.pack(side="left", padx=4)
+
+        # Status icon: shown after the entry
+        self._proj_status = ctk.CTkLabel(
+            proj_frame, text="", font=("Segoe UI", 11), width=26
+        )
+        self._proj_status.pack(side="left", padx=(2, 6))
+
+        def _browse_project():
+            folder = filedialog.askdirectory(title="Select Project Folder")
+            if folder:
+                self._project_dir.set(folder)
+                self._load_project(folder)
+
+        ctk.CTkButton(proj_frame, text="Browse", width=76,
+                      command=_browse_project).pack(side="left", padx=3)
+
+        # ── Simulations folder ─────────────────────────────────────────────
+        # Which folder under the project holds <subject>/<session>. Part of
+        # ADDRESSING the project, like the path itself — not a preference — so
+        # it belongs here rather than behind a Settings tab, and takes effect
+        # on Refresh instead of on Save.
+        ctk.CTkLabel(proj_frame, text="Simulations:",
+                     font=("Segoe UI", 11, "bold")).pack(side="left", padx=(14, 6))
+        self._sims_dir = ctk.StringVar(
+            value=str(self.config_manager.get("project.simulations_dir", "")
+                      or "simulations"))
+        _sims_entry = ctk.CTkEntry(proj_frame, textvariable=self._sims_dir,
+                                   width=150,
+                                   placeholder_text="simulations")
+        _sims_entry.pack(side="left", padx=4)
+        _sims_entry.bind("<Return>", lambda _e: self._refresh_simulations())
+        ctk.CTkButton(proj_frame, text="⟳ Refresh", width=86,
+                      command=self._refresh_simulations).pack(side="left", padx=3)
+        self._sims_status = ctk.CTkLabel(proj_frame, text="",
+                                         font=("Segoe UI", 10), width=150,
+                                         anchor="w")
+        self._sims_status.pack(side="left", padx=(4, 6))
+        ctk.CTkButton(proj_frame, text="Load", width=56,
+                      command=lambda: self._load_project(self._project_dir.get())
+                      ).pack(side="left", padx=3)
+
+        self._update_settings_btn = ctk.CTkButton(
+            proj_frame, text="↑ Update Settings", width=130,
+            fg_color="#5a3a00", hover_color="#7a5000",
+            font=("Segoe UI", 10),
+            command=self._update_project_settings,
+            state="disabled",
+        )
+        self._update_settings_btn.pack(side="left", padx=(8, 3))
+
+    def _autoload_project(self) -> None:
+        """Load the pre-filled project, if there is one, once the tabs exist."""
+        _p = self._project_dir.get()
+        if _p:
+            try:
+                self._load_project(_p)
+            except Exception as _e:                                # noqa: BLE001
+                logger.warning(f"could not auto-load project {_p}: {_e}")
+
+    def _refresh_simulations(self) -> None:
+        """Persist the simulations folder and re-scan the project with it.
+
+        Reports what it found next to the box: a folder name that does not
+        exist used to be accepted silently, leaving every Subject list empty
+        with nothing on screen to say why.
+        """
+        name = (self._sims_dir.get() or "").strip()
+        self.config_manager.set("project.simulations_dir", name)
+        try:
+            self.config_manager.save()
+        except Exception:                                          # noqa: BLE001
+            pass
+
+        proj = (self._project_dir.get() or "").strip()
+        if not proj:
+            self._sims_status.configure(text="load a project first",
+                                        text_color="#c9a227")
+            return
+        try:
+            from . import simulations_root as _sim_root
+            p = _sim_root(proj, self.config_manager)
+        except Exception as _e:                                    # noqa: BLE001
+            self._sims_status.configure(text=f"error: {_e}", text_color="#dc3545")
+            return
+
+        if p is None or not p.is_dir():
+            self._sims_status.configure(text=f"{name}: not found",
+                                        text_color="#dc3545")
+            return
+        try:
+            n = sum(1 for d in p.iterdir() if d.is_dir())
+        except Exception:                                          # noqa: BLE001
+            n = 0
+        # Say the folder actually used — a name that does not exist falls back
+        # to settings.py, and you should be able to see that it happened.
+        used = p.name
+        if name and used != name:
+            self._sims_status.configure(
+                text=f"{name} missing -> {used} ({n})", text_color="#c9a227")
+        else:
+            self._sims_status.configure(text=f"{used}: {n} subject(s)",
+                                        text_color="#28a745")
+        self.broadcast_project_dir(proj)
+
+    def _load_project(self, project_dir: str) -> None:
+        """Validate project settings.py version and broadcast to tabs."""
+        if not project_dir:
+            return
+        p = Path(project_dir)
+        self._project_dir.set(str(p))
+
+        # ── Version check (AST-only — avoids executing the file, which can
+        #    fail if the project's settings.py references names like SubjectConfig
+        #    that are no longer in the template's global scope) ────────────────
+        settings_file = p / "settings.py"
+        ok = False
+        needs_update = False
+        tooltip = ""
+        if not settings_file.exists():
+            tooltip = "⚠  No settings.py — run: python -m bioscout --init"
+        else:
+            try:
+                import ast as _ast
+                src = settings_file.read_text(encoding="utf-8", errors="replace")
+                tree = _ast.parse(src)
+                proj_ver = None
+                for node in tree.body:
+                    if (isinstance(node, _ast.Assign) and
+                            any(isinstance(t, _ast.Name) and t.id == "__version__"
+                                for t in node.targets)):
+                        if isinstance(node.value, _ast.Constant):
+                            proj_ver = node.value.value
+                        break
+                from settings import __version__ as _SRC_VER
+                if proj_ver is None:
+                    tooltip = "⚠  settings.py has no __version__ — click ↑ Update Settings"
+                    needs_update = True
+                elif proj_ver != _SRC_VER:
+                    tooltip = f"⚠  settings v{proj_ver} ≠ src v{_SRC_VER} — click ↑ Update Settings"
+                    needs_update = True
+                else:
+                    ok = True
+                    tooltip = f"✓  settings v{proj_ver}"
+            except Exception as e:
+                tooltip = f"⚠  Could not read settings.py: {e}"
+                needs_update = True
+
+        if ok:
+            self._proj_status.configure(text="✓", text_color="#28a745")
+            self._update_settings_btn.configure(state="disabled",
+                                                fg_color="#5a3a00")
+        else:
+            self._proj_status.configure(text="⚠", text_color="#dc3545")
+            if needs_update:
+                self._update_settings_btn.configure(
+                    state="normal",
+                    fg_color="#c87000", hover_color="#e08800")
+            else:
+                self._update_settings_btn.configure(state="disabled",
+                                                    fg_color="#5a3a00")
+
+        self.update_status(tooltip, "success" if ok else "warning")
+
+        # Redirect log file into the project folder — only when the project
+        # actually changes to avoid opening multiple handlers on re-validate.
+        if str(p) != getattr(self, "_last_logged_project", None):
+            self._last_logged_project = str(p)
+            logger.set_project_log_dir(p / "logs")
+
+        self.broadcast_project_dir(project_dir)
+        try:
+            self._refresh_simulations()
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    def _update_project_settings(self) -> None:
+        """Preview and apply a settings.py migration for the current project."""
+        project_dir = self._project_dir.get().strip()
+        if not project_dir:
+            messagebox.showwarning("No Project", "Load a project folder first.", parent=self)
+            return
+        settings_file = Path(project_dir) / "settings.py"
+        if not settings_file.exists():
+            messagebox.showerror("Missing settings.py",
+                                 "No settings.py found in this folder.\n"
+                                 "Run: python -m bioscout --init", parent=self)
+            return
+
+        try:
+            from utils.settings_updater import build_updated_settings
+            new_text, preserved = build_updated_settings(settings_file)
+        except Exception as e:
+            messagebox.showerror("Migration Error", str(e), parent=self)
+            return
+
+        # ── Preview dialog ────────────────────────────────────────────────
+        dlg = tkinter.Toplevel(self)
+        dlg.title("Update Settings — Preview")
+        dlg.geometry("820x680")
+        dlg.grab_set()
+        dlg.configure(bg="#1a1a2a")
+
+        ctk.CTkLabel(dlg, text="Settings Update Preview",
+                     font=("Segoe UI", 14, "bold")).pack(padx=16, pady=(14, 4))
+        ctk.CTkLabel(dlg,
+                     text="The values below will be preserved from your current settings.py.\n"
+                          "All other fields will be updated to the latest schema.\n"
+                          "A backup (settings.py.bak_<timestamp>) will be created automatically.",
+                     font=("Segoe UI", 10), justify="left", text_color="#aaaaaa"
+                     ).pack(padx=16, pady=(0, 8), anchor="w")
+
+        # ── Buttons at the top so they are always visible ─────────────────
+        def _apply():
+            try:
+                from utils.settings_updater import write_updated_settings
+                write_updated_settings(settings_file)
+                dlg.destroy()
+                messagebox.showinfo("Settings Updated",
+                                    "settings.py has been updated.\n"
+                                    "A backup was saved alongside it.",
+                                    parent=self)
+                self._load_project(project_dir)   # re-validate
+            except Exception as e:
+                messagebox.showerror("Write Error", str(e), parent=self)
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 10))
+        ctk.CTkButton(btn_row, text="✓  Apply Update", fg_color="#28a745",
+                      hover_color="#218838", width=150,
+                      command=_apply).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Cancel", fg_color="#555555",
+                      hover_color="#666666", width=100,
+                      command=dlg.destroy).pack(side="left")
+
+        # ── Preserved values (scrollable, capped height) ──────────────────
+        pf_outer = ctk.CTkFrame(dlg, fg_color="#111118", corner_radius=6)
+        pf_outer.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(pf_outer, text="Preserved values:", font=("Segoe UI", 10, "bold"),
+                     anchor="w").pack(anchor="w", padx=10, pady=(6, 2))
+        pf_scroll = ctk.CTkScrollableFrame(pf_outer, fg_color="transparent", height=140)
+        pf_scroll.pack(fill="x", padx=6, pady=(0, 6))
+        for line in preserved:
+            ctk.CTkLabel(pf_scroll, text=line, font=("Courier New", 9),
+                         text_color="#aaddaa", anchor="w").pack(anchor="w", padx=8, pady=1)
+
+        # ── New file preview ──────────────────────────────────────────────
+        ctk.CTkLabel(dlg, text="New settings.py (preview):",
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16)
+        txt_frame = ctk.CTkFrame(dlg, fg_color="#111118")
+        txt_frame.pack(fill="both", expand=True, padx=16, pady=(4, 14))
+
+        import tkinter as _tk
+        txt = _tk.Text(txt_frame, bg="#111118", fg="#cccccc",
+                       font=("Courier New", 9), wrap="none",
+                       insertbackground="#cccccc")
+        sb_y = _tk.Scrollbar(txt_frame, orient="vertical",   command=txt.yview)
+        sb_x = _tk.Scrollbar(txt_frame, orient="horizontal", command=txt.xview)
+        txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        sb_y.pack(side="right", fill="y")
+        sb_x.pack(side="bottom", fill="x")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", new_text)
+        txt.configure(state="disabled")
+
+    def broadcast_project_dir(self, project_dir: str) -> None:
+        """Broadcast project directory to all tabs that support set_project_dir()."""
+        if not project_dir:
+            return
+        for tab_name, tab in self.tabs.items():
+            if hasattr(tab, "set_project_dir"):
+                try:
+                    tab.set_project_dir(project_dir)
+                except Exception as e:
+                    logger.error(f"Error setting project dir for {tab_name}: {e}")
+
+    def switch_tab(self, tab_name: str) -> None:
+        """Switch to specified tab (with lazy loading support)."""
+        if tab_name in self.tab_definitions:
+            # Ensure tab is loaded before switching (grid it when accessed)
+            self._ensure_tab_loaded(tab_name, grid_it=True)
+
+            if tab_name in self.tabs:
+                self.tabs[tab_name].tkraise()
+                self.current_tab = tab_name
+                self.update_nav_buttons()
+                logger.debug(f"Switched to tab: {tab_name}")
+
+    def update_nav_buttons(self) -> None:
+        """Update navigation button states."""
+        for tab_name, btn in self.nav_buttons.items():
+            if tab_name == self.current_tab:
+                btn.configure(border_color="#0084ff", text_color="#0084ff", fg_color="#2a2a2a")
+            else:
+                btn.configure(border_color="#404040", fg_color="#2d2d2d")
+
+    def broadcast_session_dir(self, session_dir: str) -> None:
+        """Broadcast session directory to all tabs that support it."""
+        if not session_dir:
+            return
+
+        # Update tabs that have set_session_dir method
+        for tab_name, tab in self.tabs.items():
+            if hasattr(tab, 'set_session_dir'):
+                try:
+                    tab.set_session_dir(session_dir)
+                    logger.info(f"Set session dir for {tab_name}: {session_dir}")
+                except Exception as e:
+                    logger.error(f"Error setting session dir for {tab_name}: {e}")
+
+    def update_status(self, status: str, status_type: str = "info") -> None:
+        """Update status bar."""
+        color_map = {
+            "info": "#0084ff",
+            "success": "#28a745",
+            "warning": "#ffc107",
+            "error": "#dc3545"
+        }
+        color = color_map.get(status_type, color_map["info"])
+        self.status_label.configure(text=status, text_color=color)
+        logger.info(f"Status: {status} ({status_type})")
+
+    def _restart_app(self) -> None:
+        """Relaunch BioScout so the latest code is loaded.
+
+        Python can't reliably hot-swap a running tkinter GUI, so 'Reload'
+        spawns a fresh instance with the same interpreter, arguments, and
+        working directory, then closes this one. The new process picks up any
+        edited source files (and the active project, since cwd is preserved).
+        """
+        import os
+        import subprocess
+        if not messagebox.askyesno(
+                "Reload BioScout",
+                "Restart the app to load the latest code?\n\n"
+                "Any unsaved state in the tabs will be lost.",
+                parent=self):
+            return
+        cmd = [sys.executable, "-m", "bioscout"] + sys.argv[1:]
+        try:
+            logger.info(f"Reloading BioScout: {' '.join(cmd)} (cwd={os.getcwd()})")
+            subprocess.Popen(cmd, cwd=os.getcwd())
+        except Exception as e:
+            logger.error(f"Reload failed to launch new instance: {e}")
+            messagebox.showerror(
+                "Reload failed",
+                f"Could not start a new instance:\n{e}", parent=self)
+            return
+        # Close this window and hard-exit so the two instances don't clash.
+        self._release_std_streams()
+        try:
+            self.destroy()
+        finally:
+            os._exit(0)
+
+    def _open_screen_recorder(self) -> None:
+        """Launch the screen recorder as a floating panel."""
+        try:
+            from record.screen_record import ScreenRecorder
+            rec = ScreenRecorder()
+            rec.open_panel(parent=self)
+        except ImportError as e:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Screen Recorder",
+                f"Could not load screen recorder:\n{e}\n\n"
+                "Make sure pyautogui and opencv-python are installed:\n"
+                "  pip install pyautogui opencv-python",
+                parent=self)
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Screen Recorder", str(e), parent=self)
+
+    def show_help(self) -> None:
+        """Show help dialog."""
+        help_text = "BioScout\n\n"
+        help_text += "QUICK START:\n"
+        help_text += "1. C3D Export - Convert motion capture files\n"
+        help_text += "2. Batch C3D - Batch process multiple C3D files\n"
+        help_text += "3. EMG Processing - Process session-level EMG data\n"
+        help_text += "4. Session Analysis - Run biomechanical analysis\n"
+        help_text += "5. CEINMS Calibration - Configure CEINMS settings\n"
+        help_text += "6. View results in Results tab\n"
+        messagebox.showinfo("Help", help_text)
+
+    def _save_window_geometry(self) -> None:
+        """Remember where the window was, if the user asked us to.
+
+        Skipped while maximised: Tk reports the maximised size as the geometry,
+        so saving it would restore a window that LOOKS maximised but is not,
+        and un-maximising it would then snap to the full screen."""
+        try:
+            if not self.gui_settings.get("window.remember", True):
+                return
+            if str(self.state()) == "zoomed":
+                return
+            geom = self.winfo_geometry()
+            # winfo_geometry() is REAL pixels, but CTk's geometry() multiplies
+            # by the window scaling before applying. Saved raw and restored
+            # through geometry(), a 120 %-scaled window grows 20 % on every
+            # launch. Divide the scale back out so the round trip is stable.
+            rev = getattr(self, "_reverse_geometry_scaling", None)
+            if callable(rev):
+                try:
+                    geom = rev(geom)
+                except Exception:                              # noqa: BLE001
+                    pass
+            if geom and "x" in geom:
+                self.gui_settings.set("window.geometry", geom)
+        except Exception as exc:                               # noqa: BLE001
+            logger.debug(f"could not save window geometry: {exc}")
+
+    @staticmethod
+    def _release_std_streams() -> None:
+        """Point sys.stdout/stderr back at the real streams.
+
+        They are redirected into the console WIDGET while the app runs, so any
+        print that happens after destroy() — an atexit hook, a daemon thread,
+        Tcl teardown chatter — writes to a dead Tcl object and explodes as
+        `TclError ... !scrolledtext` + "lost sys.stderr" on every exit. Detach
+        BEFORE the widgets die and those late writes land harmlessly in the
+        terminal instead."""
+        try:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def on_closing(self) -> None:
+        """Handle application closing."""
+        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            self._save_window_geometry()
+            logger.info("Application closed")
+            self._release_std_streams()
+            self.destroy()
+
+    def run(self) -> None:
+        """Start the application."""
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.mainloop()
+
+
+def main(fullscreen=False, screen_x=None, screen_y=None):
+    """Main entry point.
+
+    Args:
+        fullscreen: Start in fullscreen mode
+        screen_x: Force window X position (for multi-monitor workaround)
+        screen_y: Force window Y position (for multi-monitor workaround)
+    """
+    print("[main_window] Creating MainWindow...", flush=True)
+    try:
+        app = MainWindow(fullscreen=fullscreen)
+    except BaseException as e:
+        import traceback as _tb
+        # Report on the REAL streams, not on sys.stdout/sys.stderr. By the
+        # time a tab fails, _setup_ui has already pointed both at the console
+        # WIDGET of a window that is never going to appear — so this handler
+        # ran correctly and printed into the void, leaving the user with a
+        # silent exit right after "Creating MainWindow...".
+        _err = sys.__stderr__ or sys.__stdout__
+        try:
+            print(f"[main_window] MainWindow() FAILED ({type(e).__name__}): {e}",
+                  file=_err, flush=True)
+            _tb.print_exc(file=_err)
+            _err.flush()
+        except Exception:                                          # noqa: BLE001
+            _tb.print_exc()
+        # And into the log file, which outlives the console window.
+        try:
+            logger.error(f"MainWindow() failed: {type(e).__name__}: {e}\n"
+                         + _tb.format_exc())
+        except Exception:                                          # noqa: BLE001
+            pass
+        return
+    print(f"[main_window] MainWindow created OK, state={app.state()}", flush=True)
+    # Load the pre-filled project AFTER the tabs are registered, so the
+    # broadcast reaches them; deferred with after() so the window paints first
+    # and a slow project scan cannot look like a hung launch.
+    try:
+        app.after(50, app._autoload_project)
+    except Exception:                                              # noqa: BLE001
+        pass
+
+    # If custom screen position provided, use it
+    if screen_x is not None and screen_y is not None:
+        app.after(500, lambda: app.geometry(f"1400x900+{screen_x}+{screen_y}"))
+        logger.info(f"Using custom screen position: +{screen_x}+{screen_y}")
+
+    print("[main_window] Entering mainloop...", flush=True)
+    app.run()
+    print("[main_window] mainloop() returned — window was closed.", flush=True)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="BioScout")
+    parser.add_argument("--fullscreen", action="store_true", help="Start in fullscreen mode")
+    parser.add_argument("--screen-x", type=int, help="Force window X position (e.g., 1920 for secondary screen)")
+    parser.add_argument("--screen-y", type=int, help="Force window Y position")
+
+    args = parser.parse_args()
+    main(fullscreen=args.fullscreen, screen_x=args.screen_x, screen_y=args.screen_y)

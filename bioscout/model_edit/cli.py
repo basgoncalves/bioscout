@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import io
 import os
 import sys
 from pathlib import Path
@@ -332,10 +333,136 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overwrite", action="store_true")
     p.set_defaults(func=cmd_recipe)
 
+    p = sub.add_parser("promote",
+                       help="publish a candidate model into models/generic/")
+    p.add_argument("model", help="the candidate .osim, e.g. tests/<campaign>/_models/x.osim")
+    p.add_argument("--as", dest="as_name", default=None,
+                   help="published name (default: the file's stem)")
+    p.add_argument("--gate", required=True,
+                   help="campaign summary that must contain a 'PROMOTE: PASS' line")
+    p.add_argument("--root", default=None, help="project root (default: cwd)")
+    p.add_argument("--dest", default=None, help="override models/generic/")
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run")
+    p.add_argument("--force", action="store_true",
+                   help="publish despite a failing gate; needs --reason")
+    p.add_argument("--reason", default=None)
+    p.set_defaults(func=cmd_promote)
+
     p = sub.add_parser("guided", help="the interactive prompt")
     p.add_argument("project", nargs="?", default=None)
     p.set_defaults(func=lambda a: run(a.project))
     return ap
+
+
+PASS_MARKER = "PROMOTE: PASS"
+
+
+def _gate_ok(gate_path):
+    """(ok, evidence_line). The gate must SAY it passed, in those words.
+
+    Deliberately not inferred from prose. A campaign summary argues with
+    itself -- it holds the failures, the superseded arms and the reasons a
+    thing was nearly built. Reading intent out of that is how a disqualified
+    model gets promoted. The campaign has to type one line on purpose.
+    """
+    try:
+        text = io.open(gate_path, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        return False, f"cannot read gate: {e}"
+    for line in text.splitlines():
+        if PASS_MARKER.lower() in line.strip().lower():
+            return True, line.strip()
+    return False, ""
+
+
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def cmd_promote(args) -> int:
+    """Copy a candidate model into models/generic/ with provenance.
+
+    Candidates live in tests/<campaign>/_models/ and nothing resolves them.
+    Promotion is the deliberate act that makes a model publishable, so it is
+    a command with a gate rather than a cp -- a provisional model sitting
+    beside the published ones is how the wrong .osim reaches a manuscript.
+    """
+    import datetime
+    src = os.path.abspath(args.model)
+    if not os.path.isfile(src):
+        print(f"[promote] no such model: {src}")
+        return 2
+
+    root = os.path.abspath(args.root or os.getcwd())
+    dest_dir = os.path.abspath(args.dest or os.path.join(root, "models", "generic"))
+    name = args.as_name or os.path.splitext(os.path.basename(src))[0]
+    dest = os.path.join(dest_dir, name + ".osim")
+
+    ok, evidence = _gate_ok(args.gate)
+    if not ok:
+        print(f"[promote] REFUSED — the gate does not record a pass.")
+        print(f"           gate: {args.gate}")
+        if evidence:
+            print(f"           {evidence}")
+        print(f"\n  Add a line reading exactly:\n\n      {PASS_MARKER}\n")
+        print("  to the campaign summary, next to the evidence for it. If the")
+        print("  campaign did NOT pass, that is the answer — do not promote.")
+        if not args.force:
+            return 1
+        if not args.reason:
+            print("\n[promote] --force needs --reason \"...\".")
+            return 2
+        print(f"\n[promote] FORCED: {args.reason}")
+
+    if os.path.exists(dest) and not args.overwrite:
+        print(f"[promote] REFUSED — already published: {dest}")
+        print("           pass --overwrite to replace it (the old file is kept "
+              "as .superseded_<date>.osim)")
+        return 1
+
+    if args.dry_run:
+        print(f"[promote] would copy\n    {src}\n  -> {dest}")
+        return 0
+
+    import shutil
+    os.makedirs(dest_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d")
+    if os.path.exists(dest):
+        keep = dest.replace(".osim", f".superseded_{stamp}.osim")
+        shutil.move(dest, keep)
+        print(f"[promote] previous version kept as {os.path.basename(keep)}")
+    shutil.copy2(src, dest)
+
+    prov = os.path.join(dest_dir, name + ".provenance.yaml")
+    lines = [
+        "# Written by `model_edit promote`. Do not hand-edit.",
+        f"name: {name}",
+        f"source: {os.path.relpath(src, root).replace(os.sep, '/')}",
+        f"sha256: {_sha256(dest)}",
+        f"bytes: {os.path.getsize(dest)}",
+        f"promoted: {datetime.datetime.now().isoformat(timespec='seconds')}",
+        f"gate: {os.path.relpath(os.path.abspath(args.gate), root).replace(os.sep, '/')}",
+        f"gate_evidence: {evidence or '(forced)'!r}",
+    ]
+    if args.force and args.reason:
+        lines.append(f"forced_reason: {args.reason!r}")
+    # carry the build record across if the campaign wrote one
+    side = os.path.join(os.path.dirname(src), "provenance.yaml")
+    if os.path.isfile(side):
+        lines.append("build_record: |")
+        lines += ["  " + l for l in
+                  io.open(side, encoding="utf-8", errors="replace").read().splitlines()]
+    io.open(prov, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
+
+    print(f"[promote] published {os.path.relpath(dest, root)}")
+    print(f"[promote] provenance {os.path.relpath(prov, root)}")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:

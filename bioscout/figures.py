@@ -564,6 +564,13 @@ _reg("mi_motion", "model", "moment arm vs joint angle over a trial (wrap QC)",
       P("out_dir", "output folder (blank = next to --ma)", "", kind="opt"),
       SIDE, P("min_ma_mm", "min peak |MA| (mm)", 3.0, kind="float"),
       P("min_jump_mm", "discontinuity sensitivity (mm)", 1.0, kind="float")])
+_reg("mi_check", "model", "moment-arm discontinuity check from a MODEL (fig06-style column)",
+     lambda model, ik, out_dir, side, min_jump_mm, step_mm: _mod("bioscout.muscle_inspect.model_ma_check").check_ma_discontinuities(model, ik, out_dir=out_dir or None, side=side,
+                                       min_jump_mm=min_jump_mm, step_mm=step_mm),
+     [MODEL, P("ik", "IK joint_angles.mot", None, kind="path"),
+      P("out_dir", "output folder (blank = next to the model)", "", kind="opt"),
+      SIDE, P("min_jump_mm", "discontinuity sensitivity (mm)", 1.0, kind="float"),
+      P("step_mm", "flag any frame-to-frame step above (mm)", 2.0, kind="float")])
 _reg("mi_jcf_lit", "model", "JCF vs literature bands",
      lambda out_path, entity: _mod("bioscout.muscle_inspect.literature_jcf").plot_jcf_validation(out_path, entity=entity),
      [P("out_path", "output .png", "jcf_validation.png", kind="path"),

@@ -346,10 +346,15 @@ class CEINMSSetupTab(ctk.CTkFrame):
         if self.form is None:
             return
         try:
-            self.form.set_list("calibration_trials",
-                               [t for t, v in self._cal_vars.items() if v.get()])
-            self.form.set_list("normalisation_trials",
-                               [t for t, v in self._norm_vars.items() if v.get()])
+            # PER-TRIAL flags, not the top-level lists. The lists are legacy:
+            # `_trial_role()` prefers the flags, and `normalisation_trials: all`
+            # resolved to [] -- indistinguishable from "nothing ticked", which
+            # is exactly how a session came to look empty in this dialog while
+            # meaning "every trial". Writing the flag says one thing only.
+            for _role, _store in (("calibration", self._cal_vars),
+                                  ("emg_normalisation", self._norm_vars)):
+                for _t, _v in _store.items():
+                    self.form.set_trial_role(_t, _role, bool(_v.get()))
             if self.default_cal_var.get() not in ("", "—"):
                 self.form.set_scalar("default_calibration",
                                      self.default_cal_var.get())

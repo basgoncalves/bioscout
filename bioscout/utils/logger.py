@@ -119,25 +119,50 @@ class AppLogger:
             _sys.stdout = _TeeStream(_sys.stdout, self.file_handler.stream)
             _sys.stderr = _TeeStream(_sys.stderr, self.file_handler.stream)
 
-    def debug(self, message: str) -> None:
+    # ------------------------------------------------------------------
+    # Level methods.
+    #
+    # These forward *args/**kwargs straight to the stdlib logger instead of
+    # taking `message` alone. The narrow signature was a live landmine: 21
+    # call sites across the GUI log with `exc_info=True`, and EVERY one of
+    # them sits inside an `except` block. `logger.critical(msg,
+    # exc_info=True)` therefore raised TypeError from inside the handler, the
+    # TypeError escaped the `except`, and a failure the code had correctly
+    # CAUGHT became fatal. That is how a missing psutil — which should have
+    # cost the Recording tab and nothing else — took down the whole app.
+    #
+    # Anything logging's own methods accept now works: exc_info, stack_info,
+    # stacklevel, extra, and %-style lazy formatting args.
+    # ------------------------------------------------------------------
+
+    def debug(self, message, *args, **kwargs) -> None:
         """Log debug message."""
-        self.logger.debug(message)
+        self.logger.debug(message, *args, **kwargs)
 
-    def info(self, message: str) -> None:
+    def info(self, message, *args, **kwargs) -> None:
         """Log info message."""
-        self.logger.info(message)
+        self.logger.info(message, *args, **kwargs)
 
-    def warning(self, message: str) -> None:
+    def warning(self, message, *args, **kwargs) -> None:
         """Log warning message."""
-        self.logger.warning(message)
+        self.logger.warning(message, *args, **kwargs)
 
-    def error(self, message: str) -> None:
+    def error(self, message, *args, **kwargs) -> None:
         """Log error message."""
-        self.logger.error(message)
+        self.logger.error(message, *args, **kwargs)
 
-    def critical(self, message: str) -> None:
+    def critical(self, message, *args, **kwargs) -> None:
         """Log critical message."""
-        self.logger.critical(message)
+        self.logger.critical(message, *args, **kwargs)
+
+    def exception(self, message, *args, **kwargs) -> None:
+        """Log an error with the active traceback (call from inside `except`)."""
+        kwargs.setdefault("exc_info", True)
+        self.logger.error(message, *args, **kwargs)
+
+    def log(self, level: int, message, *args, **kwargs) -> None:
+        """Log at an explicit level."""
+        self.logger.log(level, message, *args, **kwargs)
 
     def set_console_level(self, level: int) -> None:
         """

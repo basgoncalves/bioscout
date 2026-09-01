@@ -35,8 +35,10 @@ from pathlib import Path
 #: discoverable from the Settings tab.
 DEFAULTS = {
     # -- appearance -------------------------------------------------------
-    "ui.scale": 1.0,            # customtkinter widget+font scaling, 0.8 – 2.0
+    "ui.scale": 1.0,            # user scale, RELATIVE to BASE_SCALE (see below)
     "ui.appearance": "dark",    # dark | light | system
+    "ui.accent": "blue",        # base colour, see ACCENTS
+    "ui.scale_rebased": False,  # one-time migration marker, see _rebase()
     # -- window -----------------------------------------------------------
     "window.remember": True,    # restore last size/position on launch
     "window.geometry": "",      # "WxH+X+Y", written on close
@@ -48,6 +50,28 @@ DEFAULTS = {
 }
 
 SCALE_MIN, SCALE_MAX = 0.7, 2.0
+
+#: What "100 %" means in toolkit units. The old 100 % was too small to read on
+#: a high-DPI screen and everyone ran the app at 120 %, so 120 % IS the new
+#: 100 % — every other size is relative to it (old 140 % ≈ new 117 %).
+BASE_SCALE = 1.2
+
+#: Minimum point size for BUTTON text. Dozens of buttons were written with
+#: font=("Segoe UI", 7..9), which is unreadable at any window size; rather than
+#: chase every literal, CTkButton is patched once (see _patch_button_fonts).
+MIN_BUTTON_FONT = 11
+
+#: Selectable base colours. fg / hover / a light-mode pair, in the shape
+#: customtkinter's theme dict wants: [light, dark].
+ACCENTS = {
+    "blue":   ("#1f6aa5", "#144870"),
+    "teal":   ("#0e7c86", "#0a5b63"),
+    "green":  ("#2e7d32", "#1b5e20"),
+    "purple": ("#6a3fa0", "#4b2c73"),
+    "orange": ("#c2610a", "#8f4707"),
+    "red":    ("#b13030", "#802020"),
+    "grey":   ("#4a4a4a", "#333333"),
+}
 
 
 def settings_path() -> Path:
@@ -143,6 +167,16 @@ class GuiSettings:
         except (TypeError, ValueError):
             return 1.0
 
+    def effective_scale(self):
+        """What actually goes into customtkinter: the user scale times
+        :data:`BASE_SCALE`. Keeping the two apart is what lets the Settings tab
+        keep saying "100 %" while the app is really drawn at 120 %."""
+        return self.scale() * BASE_SCALE
+
+    def accent(self):
+        name = str(self.get("ui.accent", "blue")).lower()
+        return name if name in ACCENTS else "blue"
+
     def remember_path(self, key, path):
         """Store a last-used folder, ignoring blanks and non-existent paths."""
         try:
@@ -165,36 +199,122 @@ def gui_settings() -> GuiSettings:
     return _ACTIVE
 
 
-def apply_appearance(settings=None):
-    """Push the stored scale + appearance mode into customtkinter.
+def _patch_button_fonts():
+    """Raise every too-small BUTTON font, once, at the class level.
+
+    The alternative was editing ~120 ``font=("Segoe UI", 7)`` literals across
+    the tabs and re-editing them every time a widget is added. Buttons only:
+    labels and entries are free to be small, an unreadable BUTTON is the thing
+    that was actually reported."""
+    global _FONTS_PATCHED
+    if _FONTS_PATCHED:
+        return
+    try:
+        import customtkinter as ctk
+        orig = ctk.CTkButton.__init__
+
+        def patched(self, *a, **kw):
+            f = kw.get("font")
+            if isinstance(f, (tuple, list)) and len(f) >= 2:
+                try:
+                    if float(f[1]) < MIN_BUTTON_FONT:
+                        f = tuple(f)
+                        kw["font"] = (f[0], MIN_BUTTON_FONT) + tuple(f[2:])
+                except (TypeError, ValueError):
+                    pass
+            return orig(self, *a, **kw)
+
+        ctk.CTkButton.__init__ = patched
+        _FONTS_PATCHED = True
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def _apply_accent(ctk, name):
+    """Recolour the theme's accent-coloured widgets in place.
+
+    customtkinter only ships blue/green/dark-blue themes and reads colours out
+    of ``ThemeManager.theme`` when a widget is CREATED — so this must run
+    before the window is built, and a change mid-session needs a reload. Said
+    plainly in the Settings tab rather than pretended away."""
+    fg, hover = ACCENTS.get(name, ACCENTS["blue"])
+    t = ctk.ThemeManager.theme
+    pairs = [fg, fg]
+    hpairs = [hover, hover]
+    for widget, keys in (
+            ("CTkButton", ("fg_color", "hover_color")),
+            ("CTkCheckBox", ("fg_color", "hover_color")),
+            ("CTkRadioButton", ("fg_color", "hover_color")),
+            ("CTkSwitch", ("progress_color",)),
+            ("CTkProgressBar", ("progress_color",)),
+            ("CTkSlider", ("button_color", "button_hover_color", "progress_color")),
+            ("CTkOptionMenu", ("fg_color", "button_color", "button_hover_color")),
+            ("CTkComboBox", ("button_color", "button_hover_color")),
+            ("CTkSegmentedButton", ("selected_color", "selected_hover_color")),
+            ("CTkEntry", ()),
+    ):
+        d = t.get(widget)
+        if not isinstance(d, dict):
+            continue
+        for k in keys:
+            if k in d:
+                d[k] = hpairs if "hover" in k else pairs
+
+
+def apply_appearance(settings=None, live=False):
+    """Push the stored scale, accent and appearance mode into customtkinter.
 
     ``set_widget_scaling`` is how "make the text bigger" is done in this
     toolkit: it scales widget geometry AND font sizes together, so the hundreds
     of ``font=("Segoe UI", 9)`` literals across the tabs do not have to be
-    touched, and nothing goes out of proportion. ``set_window_scaling`` goes
-    with it or every ``.geometry("1400x900")`` call stays in unscaled pixels
-    and the enlarged widgets overflow a window that did not grow.
+    touched, and nothing goes out of proportion.
 
-    WHAT THIS CANNOT DO, so the Settings tab must say it plainly: only CTk
-    widgets rescale live. Plain-tkinter widgets (the console, table Text
-    widgets, scrollbars) take their size from :func:`font_size` at CREATION —
-    they follow the scale after an app reload, not while running. Changing
-    scale mid-session is therefore a preview; Reload App is the clean apply.
+    ``live=True`` is the mid-session call from the Settings tab. It deliberately
+    does NOT touch ``set_window_scaling``: doing that on an existing window
+    makes CTk re-apply the geometry through deferred callbacks, which is what
+    made the window jump, un-maximise and leave half-laid-out grids — the
+    "scaling is buggy" report. Window scaling is set once, before the window
+    exists (``live=False``).
+
+    Plain-tkinter widgets (console, tables) do not follow CTk scaling at all;
+    they are re-fonted explicitly by :func:`refresh_tk_fonts`.
     """
     s = settings or gui_settings()
+    _rebase(s)
     try:
         import customtkinter as ctk
         mode = str(s.get("ui.appearance", "dark")).lower()
         if mode in ("dark", "light", "system"):
             ctk.set_appearance_mode(mode)
-        ctk.set_widget_scaling(s.scale())
-        try:
-            ctk.set_window_scaling(s.scale())
-        except Exception:                                      # noqa: BLE001
-            pass
+        if not live:
+            _patch_button_fonts()
+            _apply_accent(ctk, s.accent())
+        ctk.set_widget_scaling(s.effective_scale())
+        if not live:
+            try:
+                ctk.set_window_scaling(s.effective_scale())
+            except Exception:                                  # noqa: BLE001
+                pass
     except Exception:                                          # noqa: BLE001
         pass
+    if live:
+        refresh_tk_fonts()
     return s
+
+
+def _rebase(s):
+    """One-time migration to the new 100 %. Someone running at the old 120 %
+    means "normal size" — after rebasing, normal size IS 120 %, so their stored
+    1.2 must become 1.0 or the app doubles up to 144 %."""
+    try:
+        if bool(s.get("ui.scale_rebased", False)):
+            return
+        old = float(s.get("ui.scale", 1.0))
+        s.set("ui.scale", round(max(SCALE_MIN, min(SCALE_MAX, old / BASE_SCALE)), 2),
+              save=False)
+        s.set("ui.scale_rebased", True)
+    except Exception:                                          # noqa: BLE001
+        pass
 
 
 def font_size(base):
@@ -203,10 +323,45 @@ def font_size(base):
     and scrollbars do not, and were the parts left small when everything else
     grew — pass their sizes through here at construction."""
     try:
-        return max(7, int(round(float(base) * gui_settings().scale())))
+        return max(7, int(round(float(base) * gui_settings().effective_scale())))
     except Exception:                                          # noqa: BLE001
         return int(base)
 
 
-__all__ = ["DEFAULTS", "SCALE_MIN", "SCALE_MAX", "GuiSettings", "gui_settings",
-           "settings_path", "apply_appearance", "font_size"]
+#: Plain-tk widgets that asked to follow the UI scale live.
+#: (widget, family, base_size, extra) — weak-ish: dead widgets are dropped on
+#: the next refresh rather than tracked, which is enough for a single window.
+_TK_FONTS = []
+_FONTS_PATCHED = False
+
+
+def register_tk_font(widget, family, base, *extra):
+    """Set ``widget``'s font at the current scale AND keep following it.
+
+    This is the other half of the scaling fix: ``font_size()`` alone was
+    applied at CREATION only, so the console and the tables stayed at the size
+    they were born at until the app was relaunched — which is most of what
+    "the rescaling is buggy" looked like."""
+    _TK_FONTS.append((widget, family, float(base), tuple(extra)))
+    try:
+        widget.configure(font=(family, font_size(base)) + tuple(extra))
+    except Exception:                                          # noqa: BLE001
+        pass
+    return widget
+
+
+def refresh_tk_fonts():
+    """Re-font every registered plain-tk widget at the current scale."""
+    alive = []
+    for w, fam, base, extra in _TK_FONTS:
+        try:
+            w.configure(font=(fam, font_size(base)) + extra)
+            alive.append((w, fam, base, extra))
+        except Exception:                                      # noqa: BLE001
+            pass                                # widget destroyed — drop it
+    _TK_FONTS[:] = alive
+
+
+__all__ = ["DEFAULTS", "SCALE_MIN", "SCALE_MAX", "BASE_SCALE", "ACCENTS",
+           "GuiSettings", "gui_settings", "settings_path", "apply_appearance",
+           "font_size", "register_tk_font", "refresh_tk_fonts"]

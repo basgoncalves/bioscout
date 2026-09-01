@@ -88,6 +88,22 @@ STAGES_IO: Dict[str, tuple] = {
 STAGE_ORDER = ["ik", "ma", "so", "ceinms"]
 STAGE_LABELS = [STAGES_IO[k][0] for k in STAGE_ORDER]
 
+#: Where the GRF plot's DATA AREA sits inside its figure, as figure fractions.
+#:
+#: One constant, used twice: ``fig.subplots_adjust`` positions the axes with it,
+#: and the start/end sliders are ``place``d at the same fractions. They used to
+#: be set independently — the axes at 0.10–0.98 and the sliders in a grid column
+#: whose width came from whatever the label and readout happened to need — so
+#: the slider track and the time axis spanned different pixels. Dragging a
+#: handle to the middle of its travel did NOT put the line in the middle of the
+#: plot, which is exactly the thing you are using the slider to judge.
+#:
+#: The sliders and the canvas live in the same one-column grid, so both are the
+#: same width and these fractions map to the same pixels in each. Anything that
+#: moves the axes must move through here, or the two drift apart again.
+AX_LEFT, AX_RIGHT = 0.13, 0.98
+AX_TOP, AX_BOTTOM = 0.92, 0.14
+
 #: A new iteration copied from nothing starts from this block.
 NEW_ITERATION_TEMPLATE = {
     "generic": "", "ceinms_model": "scaled_opt_N10.osim",
@@ -104,16 +120,43 @@ def _layout():
 
 
 class TrialAnalysisTab(ctk.CTkFrame):
-    def __init__(self, parent, config_manager=None, status_callback=None):
+    def __init__(self, parent, config_manager=None, status_callback=None,
+                 embedded: bool = False):
+        """``embedded=True`` mounts this inside another panel (Session
+        Analysis' "Trial" sub-view) rather than as a top-level tab: the
+        subject and session pickers are hidden and driven by the host through
+        :meth:`set_selection`. Same widget, same code, one place to fix a bug.
+        """
         super().__init__(parent, fg_color="transparent")
         self.config_manager = config_manager
         self.status_callback = status_callback or (lambda *a, **k: None)
+        self._embedded = bool(embedded)
         self._project_root: Optional[Path] = None
         self._running = False
         self._input_rows: List[tuple] = []     # (label, StringVar, marker widget)
+        self._output_rows: List[tuple] = []
         self._grf_df = None
         self._span = None
         self._build()
+
+    # ------------------------------------------------------------ embedding
+    def set_selection(self, subject: str, session: str) -> None:
+        """Point an embedded instance at one subject/session.
+
+        Order matters: writing ``_subj_var`` fires ``_on_subject``, which
+        repopulates the session menu and sets ``_sess_var`` to the FIRST
+        session it finds. Setting the session afterwards is what makes the
+        host's choice stick rather than being overwritten a moment later.
+        """
+        if not subject or not session:
+            return
+        if self._subj_var.get() != subject:
+            self._subj_var.set(subject)
+        if self._sess_var.get() != session:
+            self._sess_var.set(session)
+        else:
+            # Same session as before: no trace fires, so nothing would reload.
+            self.refresh()
 
     # ------------------------------------------------------------- layout
     def _build(self):
@@ -141,6 +184,22 @@ class TrialAnalysisTab(ctk.CTkFrame):
         self._subj_var.trace_add("write", lambda *_: self._on_subject())
         self._sess_var.trace_add("write", lambda *_: self._on_session())
         self._trial_var.trace_add("write", lambda *_: self._on_trial())
+
+        # EMBEDDED (inside Session Analysis): the host already asks which
+        # subject and session, so only the trial is still a question here. The
+        # widgets are hidden rather than skipped — every method below reads
+        # _subj_var / _sess_var, and set_selection() drives them — so there is
+        # exactly one code path whether this is a tab or a sub-view.
+        if self._embedded:
+            # Hide, do not re-grid: an emptied column collapses to zero width
+            # on its own, so the trial picker slides left without any of the
+            # column-renumbering that would break the moment someone adds a
+            # widget to this row.
+            for w in pick.grid_slaves():
+                if int(w.grid_info()["column"]) < 4:
+                    w.grid_remove()
+            for c in (1, 3):
+                pick.grid_columnconfigure(c, weight=0)
 
         ctk.CTkButton(self, text="↻  Refresh", height=28, width=110,
                       font=("Segoe UI", 12),
@@ -197,35 +256,80 @@ class TrialAnalysisTab(ctk.CTkFrame):
         # Sliders, because dragging a span is fine for roughing out a window
         # and useless for nudging an edge 20 ms. Each one moves its dashed line
         # live, so the number, the slider and the plot can never disagree.
-        sliders = ctk.CTkFrame(self._grf_pane, fg_color="transparent")
+        #
+        # LAID OUT WITH place(), NOT grid(). The track has to span exactly the
+        # plot's time axis — AX_LEFT..AX_RIGHT of the width — or the handle's
+        # position is not the line's position and the slider lies about where
+        # you are in the trial. A grid cannot do that: its column width comes
+        # from whatever the label and readout ask for, which is unrelated to
+        # where matplotlib put the axes. `sliders` sits in the same one-column
+        # grid as the canvas, so it is the same width, and relx/relwidth land
+        # on the same pixels as the axes — at any window size, no <Configure>
+        # handler needed.
+        #
+        # place()d children do not contribute to a frame's requested size, so
+        # the height is explicit and propagation is off; without that the frame
+        # collapses to nothing and the sliders are invisible.
+        _ROW_H = 30
+        sliders = ctk.CTkFrame(self._grf_pane, fg_color="transparent",
+                               height=_ROW_H * 2 + 6)
         sliders.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        sliders.grid_columnconfigure(1, weight=1)
+        sliders.grid_propagate(False)
+        self._slider_frame = sliders
 
-        ctk.CTkLabel(sliders, text="start", font=("Segoe UI", 11),
-                     text_color="#4cc46a", width=40, anchor="w").grid(
-            row=0, column=0, sticky="w", padx=(2, 6))
-        self._t0_slider = ctk.CTkSlider(
-            sliders, from_=0.0, to=1.0, number_of_steps=1000,
-            progress_color="#2f6f4f", button_color="#4cc46a",
-            button_hover_color="#6cd486",
-            command=lambda v: self._on_slider("start", v))
-        self._t0_slider.grid(row=0, column=1, sticky="ew", pady=2)
-        self._t0_read = ctk.CTkLabel(sliders, text="—", font=("Consolas", 11),
-                                     width=90, anchor="e")
-        self._t0_read.grid(row=0, column=2, sticky="e", padx=(6, 2))
+        # A CTkSlider's HANDLE does not travel the full width of the widget.
+        # From customtkinter's draw engine:
+        #
+        #   slider_x = corner_radius + button_length/2
+        #              + (width - 2*corner_radius - button_length) * value
+        #
+        # so with button_length=0 the handle centre runs from `corner_radius`
+        # to `width - corner_radius`. Line the widget's EDGES up with the axes
+        # and the handle is still that inset short at both extremes — visibly
+        # wrong exactly at the ends, which is where you look when checking you
+        # have the whole lift. Setting the geometry explicitly instead of
+        # taking CTk's defaults lets the widget be grown by that inset on each
+        # side, so it is the handle CENTRE that spans AX_LEFT..AX_RIGHT. Tk
+        # adds `x` to `relx` and `width` to `relwidth`, which is what makes
+        # that expressible in one place() call.
+        _SL_H = 16
+        _INSET = _SL_H // 2                       # == corner_radius passed below
+        _relw = AX_RIGHT - AX_LEFT
 
-        ctk.CTkLabel(sliders, text="end", font=("Segoe UI", 11),
-                     text_color="#e06c75", width=40, anchor="w").grid(
-            row=1, column=0, sticky="w", padx=(2, 6))
-        self._t1_slider = ctk.CTkSlider(
-            sliders, from_=0.0, to=1.0, number_of_steps=1000,
-            progress_color="#6f3f3f", button_color="#e06c75",
-            button_hover_color="#f08c95",
-            command=lambda v: self._on_slider("end", v))
-        self._t1_slider.grid(row=1, column=1, sticky="ew", pady=2)
-        self._t1_read = ctk.CTkLabel(sliders, text="—", font=("Consolas", 11),
-                                     width=90, anchor="e")
-        self._t1_read.grid(row=1, column=2, sticky="e", padx=(6, 2))
+        def _edge(row, name, colour, prog, hov, which):
+            """One labelled slider whose handle travel matches the time axis."""
+            y = row * _ROW_H + _ROW_H // 2
+            ctk.CTkLabel(sliders, text=name, font=("Segoe UI", 11),
+                         text_color=colour, anchor="w"
+                         ).place(x=4, y=y, anchor="w")
+            sl = ctk.CTkSlider(
+                sliders, from_=0.0, to=1.0, number_of_steps=1000,
+                height=_SL_H, corner_radius=_INSET, button_length=0,
+                progress_color=prog, button_color=colour,
+                button_hover_color=hov,
+                command=lambda v, w=which: self._on_slider(w, v))
+            # CTk SCALES corner_radius by the UI scale factor before drawing,
+            # while place()'s pixel offsets are raw. At 100 % they agree; at
+            # 125 % the radius is 10 px and a hard-coded 8 leaves the ends 2 px
+            # out. Ask the widget what its radius actually became.
+            try:
+                inset = int(round(sl._apply_widget_scaling(_INSET)))
+            except Exception:                                  # noqa: BLE001
+                inset = _INSET
+            sl.place(relx=AX_LEFT, x=-inset, y=y,
+                     relwidth=_relw, width=2 * inset, anchor="w")
+            # The readout sits in the axis's own left margin, right-aligned
+            # against the start of the track — so it never overhangs the plot
+            # and never steals width from it.
+            read = ctk.CTkLabel(sliders, text="—", font=("Consolas", 11),
+                                anchor="e", text_color="#bbbbbb")
+            read.place(relx=AX_LEFT, x=-(inset + 8), y=y, anchor="e")
+            return sl, read
+
+        self._t0_slider, self._t0_read = _edge(
+            0, "start", "#4cc46a", "#2f6f4f", "#6cd486", "start")
+        self._t1_slider, self._t1_read = _edge(
+            1, "end", "#e06c75", "#6f3f3f", "#f08c95", "end")
 
         grfbar = ctk.CTkFrame(self._grf_pane, fg_color="transparent")
         grfbar.grid(row=2, column=0, sticky="ew", pady=(6, 0))
@@ -570,25 +674,49 @@ class TrialAnalysisTab(ctk.CTkFrame):
             self._input_rows.append((name, var, mark))
             row += 1
 
+        # ---- outputs -------------------------------------------------------
+        # Given the same row treatment as the inputs above: name, full resolved
+        # path, presence marker. It used to be one coloured line per output
+        # showing only the RELATIVE path, so the one question you ask after a
+        # run — "where did it actually write it?" — was the one thing the panel
+        # would not tell you, even though the inputs three rows up answered
+        # exactly that for their side.
         ctk.CTkLabel(self._inputs_pane, text="writes", font=("Segoe UI", 10, "bold"),
                      text_color="#8a8a8a").grid(row=row, column=0, sticky="w",
                                                 padx=6, pady=(12, 2))
         row += 1
         itd = self._iter_dir()
+        self._output_rows = []
         for rel in outputs:
             p = (itd / rel) if itd else None
             present = bool(p and p.exists())
-            ctk.CTkLabel(self._inputs_pane,
-                         text=("✓  " if present else "·  ") + rel,
-                         font=("Consolas", 10), anchor="w",
-                         text_color="#4cc46a" if present else "#777777"
-                         ).grid(row=row, column=0, columnspan=4, sticky="w",
-                                padx=14, pady=1)
+            # A trailing "/" in STAGES_IO means the stage writes a DIRECTORY
+            # (muscle_analysis/, static_optimisation/, ceinms/). Name it as one
+            # rather than showing a file that will never exist.
+            is_dir = rel.endswith("/")
+            name = rel.rstrip("/").split("/")[-1] + ("/" if is_dir else "")
+            ctk.CTkLabel(self._inputs_pane, text=name, font=("Segoe UI", 11),
+                         anchor="w", width=170, text_color="#9aa4b0"
+                         ).grid(row=row, column=0, sticky="w",
+                                padx=(6, 6), pady=3)
+            var = ctk.StringVar(value=str(p) if p else "")
+            ctk.CTkEntry(self._inputs_pane, textvariable=var,
+                         font=("Consolas", 10), height=26).grid(
+                row=row, column=1, sticky="ew", pady=3)
+            ctk.CTkLabel(self._inputs_pane, text="✓" if present else "·",
+                         font=("Segoe UI", 13, "bold"),
+                         text_color="#4cc46a" if present else "#777777",
+                         width=20).grid(row=row, column=2, padx=4)
+            self._output_rows.append((name, var, present))
             row += 1
 
+        n_out = sum(1 for _n, _v, ok in self._output_rows if ok)
+        bits = ["all inputs present" if not missing
+                else f"{missing} input(s) missing"]
+        if self._output_rows:
+            bits.append(f"{n_out}/{len(self._output_rows)} output(s) on disk")
         self._left_note.configure(
-            text="all inputs present" if not missing
-            else f"{missing} input(s) missing",
+            text="   ·   ".join(bits),
             text_color="#4cc46a" if not missing else "#e5b567")
 
     def _browse_into(self, var):
@@ -652,7 +780,9 @@ class TrialAnalysisTab(ctk.CTkFrame):
              [c for c in df.columns[1:] if "force" in c.lower()][:6]
 
         fig = Figure(figsize=(7, 4.2), dpi=96, facecolor="#111118")
-        fig.subplots_adjust(left=0.10, right=0.98, top=0.92, bottom=0.14)
+        # Same fractions the sliders are placed at — see AX_LEFT.
+        fig.subplots_adjust(left=AX_LEFT, right=AX_RIGHT,
+                            top=AX_TOP, bottom=AX_BOTTOM)
         ax = fig.add_subplot(1, 1, 1)
         ax.set_facecolor("#1a1a28")
         ax.tick_params(colors="#888888", labelsize=8)
@@ -793,8 +923,10 @@ class TrialAnalysisTab(ctk.CTkFrame):
     def _redraw_window(self, a: float, b: float):
         """Move the two dashed lines and the shaded band, cheaply."""
         try:
-            self._t0_read.configure(text=f"{a:8.3f} s")
-            self._t1_read.configure(text=f"{b:8.3f} s")
+            # Right-aligned by place(anchor="e") now, so no padding to a fixed
+            # width — leading spaces would just push the number off its edge.
+            self._t0_read.configure(text=f"{a:.3f} s")
+            self._t1_read.configure(text=f"{b:.3f} s")
         except Exception:
             pass
         line0 = getattr(self, "_grf_line0", None)

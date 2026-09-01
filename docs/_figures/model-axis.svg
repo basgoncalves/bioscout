@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 660" width="1120" height="660" role="img" aria-labelledby="t d">
+<title id="t">The model axis: personalisation, organisation, verification</title>
+<desc id="d">The other axis of bioscout: producing, organising and trusting the osim files themselves. A generic template plus subject measurements goes through one of four morph back-ends selected by method, including a rigid passthrough that produces the baseline arm through the identical code path. The result is verified in three steps — model-diff on the edit, geometry resolution per mesh tier, and muscle_inspect against literature bands — before the model enters the trial pipeline. Three of the four steps are still hand-run scripts with no bioscout verb.</desc>
+<style>
+  .bg{fill:#fbfaf8}
+  .card{fill:#ffffff;stroke:#d9d5cd}
+  .panel{fill:#f4f2ee;stroke:#dedad2}
+  .ink{fill:#22201d}
+  .muted{fill:#6d6960}
+  .bad{fill:#b1503a}
+  .good{fill:#2c7a6b}
+  .goodS{stroke:#2c7a6b}
+  .blue{fill:#3a6ba5}
+  .blueS{stroke:#3a6ba5}
+  .line{stroke:#a9a49a;fill:none}
+  .ship{fill:#e2f0ec;stroke:#8ec6b7}
+  .open{fill:#f7ece8;stroke:#dcb9ac}
+  .tint{fill:#eef3f9;stroke:#c3d4e6}
+  text{font-family:ui-sans-serif,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+  .mono{font-family:ui-monospace,"SFMono-Regular","Consolas","Liberation Mono",monospace}
+  .h{font-size:19px;font-weight:700}
+  .sh{font-size:13px;font-weight:700;letter-spacing:.07em}
+  .b{font-size:13.5px}
+  .s{font-size:12px}
+  .xs{font-size:10.5px}
+  @media (prefers-color-scheme: dark){
+    .bg{fill:#15171a}
+    .card{fill:#1e2226;stroke:#3b4148}
+    .panel{fill:#191d21;stroke:#333940}
+    .ink{fill:#e7e4df}
+    .muted{fill:#9aa1a8}
+    .bad{fill:#e59175}
+    .good{fill:#63c2ad}
+    .goodS{stroke:#63c2ad}
+    .blue{fill:#84b2e2}
+    .blueS{stroke:#84b2e2}
+    .line{stroke:#5a626a}
+    .ship{fill:#17302c;stroke:#3d7a6b}
+    .open{fill:#2e2320;stroke:#5c4038}
+    .tint{fill:#1b2733;stroke:#2f4a63}
+  }
+</style>
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#a9a49a"/></marker>
+  <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="blue"/></marker>
+</defs>
+
+<rect class="bg" width="1120" height="660"/>
+<text class="ink h" x="28" y="38">§3 — the other axis: producing, organising and trusting the .osim files</text>
+<text class="muted b" x="28" y="60">§2 is about getting a trial through the pipeline. This is about whether the model it ran on can be believed.</text>
+
+<!-- legend -->
+<rect class="ship" x="836" y="26" width="14" height="14" rx="3"/>
+<text class="muted xs" x="856" y="38">in bioscout today</text>
+<rect class="open" x="960" y="26" width="14" height="14" rx="3"/>
+<text class="muted xs" x="980" y="38">hand-run script, no verb</text>
+
+<!-- INPUTS -->
+<rect class="card" x="24" y="92" width="180" height="62" rx="8"/>
+<text class="ink s" x="40" y="114" font-weight="700">generic template</text>
+<text class="muted xs" x="40" y="132">Rajagopal / Catelli / …</text>
+<text class="muted xs" x="40" y="146">+ its own baseline angles</text>
+
+<rect class="card" x="24" y="170" width="180" height="62" rx="8"/>
+<text class="ink s" x="40" y="192" font-weight="700">subject measurement</text>
+<text class="muted xs" x="40" y="210">MRI segmentation, landmarks,</text>
+<text class="muted xs" x="40" y="224">AVA / NSA / tibial torsion</text>
+
+<path class="line blueS" d="M204 123 C 236 123, 236 160, 268 160" marker-end="url(#arB)"/>
+<path class="line blueS" d="M204 201 C 236 201, 236 168, 268 168" marker-end="url(#arB)"/>
+
+<!-- MORPH BACK-ENDS -->
+<rect class="tint" x="272" y="86" width="270" height="222" rx="9"/>
+<text class="blue sh" x="290" y="110">§3.1 · MORPH, SELECTED BY --method</text>
+
+<rect class="ship" x="290" y="122" width="234" height="38" rx="6"/>
+<text class="ink mono xs" x="302" y="140" font-weight="700">TPSMorph</text>
+<text class="muted xs" x="302" y="154">landmark-driven · already shipped</text>
+
+<rect class="open" x="290" y="168" width="234" height="38" rx="6"/>
+<text class="ink mono xs" x="302" y="186" font-weight="700">TorsionMorph</text>
+<text class="muted xs" x="302" y="200">AVA + NSA, distal femur invariant</text>
+
+<rect class="open" x="290" y="214" width="234" height="38" rx="6"/>
+<text class="ink mono xs" x="302" y="232" font-weight="700">TibialTorsionMorph</text>
+<text class="muted xs" x="302" y="246">the same, distally</text>
+
+<rect class="open" x="290" y="260" width="234" height="38" rx="6"/>
+<text class="ink mono xs" x="302" y="278" font-weight="700">RigidPassthrough</text>
+<text class="muted xs" x="302" y="292">changes nothing — the M0 baseline arm</text>
+
+<path class="line blueS" d="M542 197 L 588 197" marker-end="url(#arB)"/>
+
+<!-- OUTPUT MODEL -->
+<rect class="card" x="592" y="150" width="196" height="94" rx="8"/>
+<text class="ink s" x="608" y="174" font-weight="700">personalised .osim</text>
+<text class="muted xs" x="608" y="194">models/personalised/&lt;subject&gt;/</text>
+<text class="muted xs" x="608" y="212">morph_markers = false by default:</text>
+<text class="muted xs" x="608" y="226">if the skin markers do not move, IK is</text>
+<text class="muted xs" x="608" y="240">driven by identical data in every arm.</text>
+
+<!-- VERIFY CHAIN -->
+<text class="good sh" x="28" y="356">THE VERIFY CHAIN — an edit is not done until an output proves it</text>
+
+<rect class="open" x="24" y="370" width="252" height="112" rx="8"/>
+<text class="ink s" x="40" y="392" font-weight="700">§3.3 model-diff</text>
+<text class="muted xs" x="40" y="412">element count + tag sequence unchanged,</text>
+<text class="muted xs" x="40" y="426">XML comments still present, the region that</text>
+<text class="muted xs" x="40" y="440">must not move displaced by exactly 0.0,</text>
+<text class="muted xs" x="40" y="454">the region that should move moved 0.1–60 mm,</text>
+<text class="muted xs" x="40" y="468">child joint frames bit-identical.</text>
+
+<rect class="ship" x="292" y="370" width="252" height="112" rx="8"/>
+<text class="ink s" x="308" y="392" font-weight="700">§3.2 geometry resolution</text>
+<text class="muted xs" x="308" y="412">Every &lt;geometry_file&gt; / &lt;mesh_file&gt; resolved</text>
+<text class="muted xs" x="308" y="426">from the model's own folder outward. The</text>
+<text class="muted xs" x="308" y="440">report names the TIER that hit — local is the</text>
+<text class="muted xs" x="308" y="454">only pass; parent, bundled, search, absolute,</text>
+<text class="muted xs" x="308" y="468">case, empty, missing all warn.</text>
+
+<rect class="ship" x="560" y="370" width="252" height="112" rx="8"/>
+<text class="ink s" x="576" y="392" font-weight="700">§2.6 muscle_inspect / validate</text>
+<text class="muted xs" x="576" y="412">Moment arms, fibre lengths and strength</text>
+<text class="muted xs" x="576" y="426">against literature bands; wrap-surface QC;</text>
+<text class="muted xs" x="576" y="440">JCF vs literature. The most transferable</text>
+<text class="muted xs" x="576" y="454">thing in the package, and currently the</text>
+<text class="muted xs" x="576" y="468">least discoverable.</text>
+
+<rect class="open" x="828" y="370" width="268" height="112" rx="8"/>
+<text class="ink s" x="844" y="392" font-weight="700">§3.2 reorganise + registry</text>
+<text class="muted xs" x="844" y="412">generic models/&lt;family&gt;/{*.osim, Geometry/},</text>
+<text class="muted xs" x="844" y="426">geometry paths rewritten by text substitution</text>
+<text class="muted xs" x="844" y="440">on the tag lines ONLY, backups, then the</text>
+<text class="muted xs" x="844" y="454">generic: key updated in 54 session.yaml files</text>
+<text class="muted xs" x="844" y="468">— because bioscout does not search subfolders.</text>
+
+<path class="line blueS" d="M690 244 L 690 366" marker-end="url(#arB)"/>
+
+<!-- what it found -->
+<rect class="panel" x="24" y="500" width="1072" height="112" rx="9"/>
+<text class="bad sh" x="44" y="524">WHAT THE VERIFIER FOUND ON FIRST CONTACT, IN TREES BELIEVED TO BE FINE</text>
+<text class="ink xs" x="44" y="548">FAIS models/ — 3 BROKEN. All three Catelli models reference l_pat.vtp; the file is l_patella.vtp. They have been opening with no left patella.</text>
+<text class="ink xs" x="44" y="566">FAIS models/ — 56 NOT PORTABLE. Two hand meshes resolve only because bioscout is installed and ships the same file. Open them in the OpenSim GUI and two bones vanish.</text>
+<text class="ink xs" x="44" y="584">Powerlifting generic models/ — live models clean; 8 broken copies under to_delete/.  ·  FAIS models/personalised/ — clean.</text>
+<text class="muted xs" x="44" y="602">The tier that resolved a path is the finding, not whether it resolved. A missing mesh does not make a solve wrong — it breaks every visual check a human would use to notice that something else is.</text>
+
+<text class="muted xs" x="28" y="638">bioscout/tps_personalise/ should be renamed to personalise/: TPS is now one option of four, and the least trustworthy of them.</text>
+</svg>

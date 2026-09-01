@@ -75,7 +75,9 @@ if _ENV_FLAGS & set(sys.argv[1:]):
 # models still find their bones?" is on a machine where the scientific stack is
 # not installed — a collaborator's, a CI runner, a fresh checkout. Making it
 # wait for scipy would put the check out of reach exactly there.
-if {"--model"} & set(sys.argv[1:]):
+# `bioscout plot jcf --model ...` owns its own --model flag; the early model
+# check must not hijack it.
+if {"--model"} & set(sys.argv[1:]) and sys.argv[1:3] != ["plot", "jcf"]:
     from bioscout.model.cli import main as _early_model
     _argv = list(sys.argv[1:])
     _out = []

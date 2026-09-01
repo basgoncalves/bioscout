@@ -11,12 +11,158 @@ All notable changes to BioScout are documented here.
 > possible in 2.x while the session/iteration API settles; they get a minor bump
 > and a note here.
 
+
+## [2.1.0] — 2026-09-01
+
+- New `bioscout plot jcf` (`bioscout/plot/jcf_direction.py`): polar plot of
+  joint contact force direction and magnitude on the model's own bones, from
+  any OpenSim JointReaction .sto + .osim — no OpenSim install needed. Optional
+  `--ik` converts the hip to the pelvis frame exactly. Docs:
+  `docs/JCF_DIRECTION.md`.
+- `__main__.py`: the early `--model` model-check no longer hijacks
+  `bioscout plot jcf --model ...`.
+
+- Includes everything in the unreleased 2.0.0c1–c4 series below (stage registry, JCF muscle contributions, session/iteration work). First release on PyPI after 2.0.0; the [2.1.0]–[2.4.2] entries far below are pre-renumber history, not PyPI releases.
+
+## Unreleased
+
+### Changed
+- `Iteration.models_dir()` now writes and reads
+  `models/personalised/<subject>/<session>/` instead of
+  `models/personalised/<subject>/`. A scaled model is built from ONE session's static
+  trial and marker set, so two sessions of the same subject produce two different
+  `<generic>_scaled.osim`; sharing one subject folder meant the second session silently
+  overwrote the first and neither could be re-analysed without rescaling. Models still
+  live in the models tree rather than scattered through `3_iterations/` -- only the
+  subject folder gained a session level underneath it.
+- Backwards compatible on read: `models_dir()`, `_resolve_model_file()` and
+  `analysis.py`'s model-folder search fall back to the flat
+  `models/personalised/<subject>/` when it exists and holds `.osim` files, so sessions
+  scaled before this change keep resolving until they are next rescaled.
+- `bioscout.gui` reports the scale output path with the session level included.
+
+## 2.0.0c4
+
+### Added
+
+- **Muscle contributions to the joint contact force** —
+  `bioscout.utils.jcf_contributions` and `Analyse.run_jra_contributions()`.
+
+  The JointReaction analysis is linear in the applied actuator forces at fixed
+  kinematics, so the contact force decomposes exactly into a non-muscle
+  baseline (gravity, inertia, GRF, residuals, reserves) plus one term per
+  muscle group, each obtained by re-running the JRA with only that group
+  switched on. Nothing is re-optimised; the SO / CEINMS forces are untouched.
+
+  Reported per joint, per source, per frame: the contribution vector
+  (`fx, fy, fz`) and `along_total`, its projection on the unit vector of the
+  total JCF — the additive scalar contribution to the resultant. Vector
+  magnitudes do not add up and must not be quoted as contributions.
+
+  Every muscle is named: `settings.BatchSettings.MUSCLE_GROUPS` first, then the
+  module's `EXTRA_GROUPS` (iliopsoas, tibialis posterior, peroneals, …), then
+  one source per leftover muscle. 36 groups on the Rajagopal family = 38 JRA
+  runs per trial per force set.
+
+  Two guards carried over from the JRA itself: only *muscle* columns are ever
+  zeroed — the residual / reserve / GRF columns stay in every run, or the
+  analysis cannot balance and every group returns the same wrong answer — and
+  the CEINMS decomposition refuses to run when
+  `add_so_columns_to_ceinms_results()` fails. Each run writes `closure.txt`
+  (`max |Σ sources − total|`, must be ~0); read it before quoting anything.
+
+  Docs: `docs/JCF_CONTRIBUTIONS.md`.
+
+
+## 2.0.0c3
+
+### Added
+
+- **`wrap_add`** and **`wrap_detach`** (`model_edit`, verb `moment_arms`).
+  `wrap_add` creates a wrap surface on a body and optionally connects muscles to
+  it; `wrap_detach` removes one muscle's `PathWrap` while leaving the surface in
+  place. With `wrap_repoint` (2.0.0c2) the set is now complete: **create,
+  connect, move, disconnect, resize, restrict**.
+
+  `wrap_add` is **the only op that invents geometry**, and its notes say so —
+  every other moment-arm op presupposes the surface exists. Use it when the
+  geometry a model needs is in neither the model nor a published sibling, and
+  score the result as an invention.
+
+  Two details that bite:
+
+  - a surface with no `PathWrap` changes no moment arm, so `wrap_add` warns when
+    called without `muscles` (GPK_v3 already carries 32 such orphans);
+  - each `PathWrap` is named `pathwrap_<surface>`, not `pathwrap`. OpenSim's own
+    files name every one of them `pathwrap`, so a second on the same muscle
+    makes the GUI warn *"subcomponents with duplicate name 'pathwrap', the
+    duplicate is being renamed to 'pathwrap_0'"* — after which which wrap is
+    which depends on file order.
+
+  `attach_path_wrap` appends, so an existing `PathWrap` keeps priority: OpenSim
+  applies them in file order and a muscle on two surfaces can solve differently
+  depending on which is listed first.
+
+  The new-surface parameter is **`wrap_name`, not `name`** — op params reach
+  `model_edit.apply()` as `**kwargs` and `name` is that function's own first
+  argument, so a param called `name` fails with *"got multiple values for
+  argument 'name'"*. The reserved set is `name, model, out, out_dir, overwrite,
+  dry_run`; no op param may shadow one.
+
+  Verified on GPK_v3: create `BF_at_condyles_r` on `femur_r`, attach `bfsh_r`,
+  detach `BF_at_gastroc_r` → 8132 → 8143 elements, the surface lands in
+  `BodySet/femur_r/WrapObjectSet/objects`, and `bfsh_r` ends up wrapping on the
+  new surface alone.
+
+## 2.0.0c2
+
+### Added
+
+- **`wrap_repoint`** (`model_edit`, verb `moment_arms`; delegates to
+  `change_moment_arms.wraps.repoint_path_wrap`). Points a muscle's `PathWrap`
+  at a **different wrap surface that already exists in the model**. It invents
+  no geometry, so the edit is reproducible from published parts rather than
+  tuned to an objective — the gap every other moment-arm op left open.
+
+  It exists because a model can carry a published wrap surface and never
+  connect it. GPK_v3 defines **32 wrap objects no muscle uses**, against two in
+  each of the published models it is compared with, and **14 of those orphans
+  are surfaces Catelli does wire up**. The clearest case: `BF140_at_gastroc_r`
+  — Catelli's wrap built for 140° of knee flexion — is present in GPK and
+  connected to nothing, while `bfsh_r` runs on `BF_at_gastroc_r`, 19 mm further
+  posterior, which the path leaves as the knee closes. The hamstring knee
+  moment arm reverses sign as a result. The repair is a wire that was never
+  connected, not a new radius or a moved via point.
+
+  Unlike `wrap_quadrant`, which edits the wrap OBJECT and so constrains every
+  muscle on it, this is **per muscle**: a `PathWrap` belongs to the muscle, so
+  re-pointing one leaves every other user of either surface untouched. Mirrors
+  the `_l`/`_r` twin by default. Raises on a missing muscle, `PathWrap` or
+  target — a silent no-op would read as a repair that did nothing.
+
+  Round-trip verified on GPK_v3: 8132 elements in, 8132 out, exactly the two
+  intended `wrap_object` changes and nothing else (the byte-size delta is
+  CRLF → LF only).
+
 ## 2.0.0c1 — 2026-08-17 (unreleased, branch `implementations-c1`)
 
 Post-2.0.0 work driven by the Powerlifting and FAIS studies — see
 `docs/IMPLEMENTATIONS.md` for the full field-tested bug list and roadmap.
 
 ### Added
+- **`muscle_inspect.model_ma_check` — moment-arm discontinuity check from a
+  MODEL.** `check_ma_discontinuities(model, joint_angles_mot)` drives the
+  `.osim` through a trial's measured joint angles with OpenSim and computes the
+  moment arms itself (no MuscleAnalysis stage needed), so a model can be QC'd
+  right after scaling or a wrap edit. One fig06-style column — one row per
+  muscle group about its primary DOF (or `dofs=[...]` for a per-coordinate
+  view), arms in cm over the task cycle, X at every discontinuity — plus a CSV
+  and a flagged table; the CLI (`python -m bioscout.muscle_inspect.model_ma_check`)
+  exits 1 when anything is flagged. Two detectors: the MAD-based
+  `detect_discontinuities` AND a plain frame-to-frame step threshold
+  (`step_mm`, default 2 mm) — the 2026-08 psoas/iliacus wrap flicker showed the
+  MAD detector alone can miss a clean two-frame square jump. Registered as
+  figure `mi_check`. Docs: `docs/MODEL_MA_CHECK.md`.
 - **GUI: per-machine settings + Settings tab.** `gui/gui_settings.py` →
   `~/.bioscout/gui_settings.json` (UI scale, theme, window memory, last-used
   folders, C3D-export form state). Deliberately NOT ConfigManager, which

@@ -1,0 +1,307 @@
+"""Moment-arm operations — wrap radii and path points.
+
+Delegates to :mod:`bioscout.change_moment_arms`, which already has the right
+mechanism and the right argument: in OpenSim the wrap surface IS the geometric
+stand-in for muscle bulk, so growing its radius is how a bigger muscle holds its
+line of action further from the joint axis. Nothing here re-derives that.
+
+Two routes, deliberately separate ops rather than one with a mode flag:
+
+``ma_scale_wraps``   pure XML, no OpenSim, no solver. You name the factor. Fast,
+                     exactly reproducible, and the only route that works on a
+                     machine without the bindings. This is what you want when
+                     transplanting a known edit onto a re-scaled model.
+``ma_target``        solves for a moment-arm target by bisecting the radius,
+                     with a path-translation fallback for wrap-less muscles.
+                     Needs OpenSim. This is what you want when the requirement
+                     is "+25 % moment arm", not "x1.25 radius" -- the two are
+                     not the same number.
+
+All three of those change the moment arm's MAGNITUDE. None of them can repair a
+DISCONTINUITY, and asking one to is a category error -- `ma_target --scale 1.0`
+requests the arm the muscle already has and correctly writes an unchanged file.
+For a path that jumps from one side of a surface to the other there is:
+
+``wrap_quadrant``    restrict which side of a wrap surface the path may run on.
+                     Pure XML, no solver, no geometry change.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from ..naming import prepare_out
+from ..spec import OpResult, Param, op
+
+__all__ = []
+
+
+def _fmt_factor(x: float) -> str:
+    """1.25 -> '1p25', for a filename that survives a shell and a Windows path."""
+    return f"{float(x):g}".replace(".", "p").replace("-", "m")
+
+
+@op("ma_scale_wraps",
+    verb="moment_arms",
+    summary="Multiply named wrap-surface radii by a factor (pure XML, no OpenSim)",
+    delegates_to="bioscout.change_moment_arms.wraps.scale_wrap_radii",
+    needs_opensim=False,
+    suffix="_ma{factor_tag}",
+    notes=("Radius ratios are dimensionless, so an edit captured on one model "
+           "transplants exactly onto a re-scaled version of it. Mirroring is ON "
+           "by default: a one-sided wrap change makes every left/right "
+           "comparison an artefact of the model rather than the athlete."),
+    params=[
+        Param("wraps", "list[str]", required=True, choices_from="wraps",
+              help="Wrap surfaces to grow. Use ALL for every scalable wrap."),
+        Param("factor", "float", default=1.25, unit="x",
+              help="Multiply each radius by this. >1 grows the muscle's bulk."),
+        Param("mirror", "bool", default=True,
+              help="Apply the same factor to each wrap's _l/_r twin."),
+    ])
+def ma_scale_wraps(model, out, *, wraps, factor=1.25, mirror=True, **_):
+    from bioscout.change_moment_arms.wraps import read_wraps, scale_wrap_radii
+
+    have = read_wraps(model)
+    names = list(wraps)
+    if len(names) == 1 and str(names[0]).upper() == "ALL":
+        names = [n for n, i in have.items() if i.scalable]
+
+    unknown = [n for n in names if n not in have]
+    if unknown:
+        return OpResult(False, "ma_scale_wraps", str(model),
+                        reason=f"not in the model: {', '.join(unknown)}")
+    unscalable = [n for n in names if not have[n].scalable]
+    if unscalable:
+        return OpResult(
+            False, "ma_scale_wraps", str(model),
+            reason=(f"no single radius to scale on: {', '.join(unscalable)} "
+                    f"(ellipsoid/torus wraps need three numbers — use ma_target)"))
+
+    if mirror:
+        for n in list(names):
+            if n[-2:] in ("_r", "_l"):
+                twin = n[:-2] + ("_l" if n.endswith("_r") else "_r")
+                if twin in have and twin not in names:
+                    names.append(twin)
+
+    factors = {n: float(factor) for n in names}
+    changed = scale_wrap_radii(model, out, factors)
+    return OpResult(
+        True, "ma_scale_wraps", str(model), str(out),
+        changed={k: {"old_radius_m": o, "new_radius_m": n} for k, (o, n) in changed.items()},
+        messages=[f"[model-edit] {k}: {o:.5f} -> {n:.5f} m  (x{n / o:.4f})"
+                  for k, (o, n) in sorted(changed.items())])
+
+
+@op("ma_target",
+    verb="moment_arms",
+    summary="Solve wrap radius (or path translation) for a moment-arm target",
+    delegates_to="bioscout.change_moment_arms.core.apply_batch / apply_to_muscle",
+    suffix="_ma{factor_tag}",
+    notes=("A muscle whose wrap runs out of room falls back to translating its "
+           "path, and a target that still cannot be reached is applied "
+           "PARTIALLY and reported as such — a run that silently changes 4 of "
+           "70 muscles reads as success and is not. Re-run an inspect "
+           "afterwards: inflating a wrap is the edit most likely to push a "
+           "path through a bone."),
+    params=[
+        Param("coordinate", "str", required=True, choices_from="coordinates",
+              help="Coordinate whose moment arm should change, e.g. hip_flexion_r"),
+        Param("muscles", "list[str]", required=True, choices_from="muscles",
+              help="Muscles to adjust. ALL = every muscle spanning the coordinate."),
+        Param("scale", "float", default=None, unit="x",
+              help="Target moment arm as a multiple of the current one (1.25 = +25%%)."),
+        Param("offset_mm", "float", default=None, unit="mm",
+              help="Target moment-arm change in mm. Give this OR scale, not both."),
+        Param("mirror", "bool", default=True,
+              help="Repeat on the opposite side's coordinate and muscles."),
+    ])
+def ma_target(model, out, *, coordinate, muscles, scale=None, offset_mm=None,
+              mirror=True, **_):
+    from bioscout.change_moment_arms.core import apply_batch, list_targets
+
+    if (scale is None) == (offset_mm is None):
+        return OpResult(False, "ma_target", str(model),
+                        reason="give exactly one of scale= or offset_mm=")
+
+    def _side_of(name):
+        return name[-2:] if name[-2:] in ("_r", "_l") else ""
+
+    def _flip(name):
+        s = _side_of(name)
+        return name[:-2] + ("_l" if s == "_r" else "_r") if s else name
+
+    passes = [(coordinate, list(muscles))]
+    if mirror and _side_of(coordinate):
+        passes.append((_flip(coordinate), [_flip(m) for m in muscles]))
+
+    src = Path(model)
+    tmp_out = Path(out)
+    results, messages, changed = [], [], {}
+    for i, (coord, mus) in enumerate(passes):
+        names = list(mus)
+        if len(names) == 1 and str(names[0]).upper() == "ALL":
+            names = [t.muscle for t in list_targets(src, coord)]
+            if not names:
+                messages.append(f"[model-edit] no muscle spans {coord} — skipped")
+                continue
+        r = apply_batch(str(src), str(tmp_out), names, coord,
+                        scale=scale, offset_mm=offset_mm,
+                        log=lambda m: messages.append(m))
+        results.append(r)
+        for one in r.get("results", []):
+            if one.get("applied"):
+                changed[f"{coord}:{one['muscle']}"] = {
+                    "route": one.get("route"),
+                    "baseline_mm": one.get("baseline_mm"),
+                    "achieved_mm": one.get("achieved_mm"),
+                    "partial": bool(one.get("partial")),
+                }
+        src = tmp_out          # second pass composes onto the first
+
+    if not results:
+        return OpResult(False, "ma_target", str(model),
+                        reason="nothing to do — no muscle matched")
+    n_ok = sum(r.get("n_ok", 0) for r in results)
+    n_part = sum(r.get("n_partial", 0) for r in results)
+    n_fail = sum(r.get("n_failed", 0) for r in results)
+    messages.append(f"[model-edit] {n_ok} applied, {n_part} partial, {n_fail} failed")
+    return OpResult(bool(n_ok or n_part), "ma_target", str(model), str(tmp_out),
+                    changed=changed, messages=messages,
+                    data={"n_ok": n_ok, "n_partial": n_part, "n_failed": n_fail},
+                    reason="" if (n_ok or n_part) else "no muscle could be changed")
+
+
+@op("ma_translate_path",
+    verb="moment_arms",
+    summary="Rigidly translate one muscle's path points (pure XML, no OpenSim)",
+    delegates_to="bioscout.change_moment_arms.paths.translate_path_points",
+    needs_opensim=False,
+    suffix="_path",
+    notes=("Models the ATTACHMENT moving, not the muscle getting bigger — a "
+           "weaker justification than wrap radius, and the right route only for "
+           "muscles with no wrap on their path (glmed/glmin in GPK). Past about "
+           "25 mm it stops being the same muscle."),
+    params=[
+        Param("muscle", "str", required=True, choices_from="muscles",
+              help="Muscle whose path points move"),
+        Param("offset_mm", "list[float]", required=True, unit="mm",
+              help="Translation as three numbers: x y z"),
+        Param("bodies", "list[str]", default=None, choices_from="bodies",
+              help="Only move points attached to these bodies (default: all)"),
+    ])
+def ma_translate_path(model, out, *, muscle, offset_mm, bodies=None, **_):
+    from bioscout.change_moment_arms.paths import translate_path_points
+
+    v = [float(x) for x in offset_mm]
+    if len(v) != 3:
+        return OpResult(False, "ma_translate_path", str(model),
+                        reason=f"offset_mm needs three numbers, got {len(v)}")
+    moved = translate_path_points(model, out, muscle,
+                                  [x / 1000.0 for x in v],
+                                  bodies=bodies or None)
+    return OpResult(True, "ma_translate_path", str(model), str(out),
+                    changed={k: {"old_m": o, "new_m": n} for k, (o, n) in moved.items()},
+                    messages=[f"[model-edit] moved {len(moved)} path point(s) "
+                              f"of {muscle} by {v} mm"])
+
+
+def _tag_factor(params: dict) -> dict:
+    """Make ``{factor_tag}`` available to the suffix templates above."""
+    p = dict(params)
+    f = p.get("factor", p.get("scale"))
+    p["factor_tag"] = _fmt_factor(f) if f is not None else "off"
+    return p
+
+
+#: Consumed by :func:`bioscout.model_edit.run.apply` before formatting a suffix.
+SUFFIX_HOOKS = {"ma_scale_wraps": _tag_factor,
+                "ma_target": _tag_factor}
+
+
+@op("wrap_quadrant",
+    verb="moment_arms",
+    summary="Restrict which side of a wrap surface a path may run on (pure XML)",
+    delegates_to="bioscout.change_moment_arms.wraps.set_wrap_quadrant",
+    needs_opensim=False,
+    suffix="_q{quadrant_tag}",
+    notes=("The CONTINUITY lever, and the only one here. A two-point path over "
+           "a surface whose quadrant is 'all' may wrap either way round it; as "
+           "the joint moves the shortest-path solution jumps sides and the "
+           "moment arm steps from +r to -r. No radius change can fix that -- "
+           "the step is in WHICH SIDE is chosen, not in how big the surface "
+           "is. The quadrant belongs to the wrap OBJECT, not to one muscle's "
+           "PathWrap, so it constrains every muscle wrapping that surface: "
+           "check `info --wraps` for the user list before applying it to a "
+           "shared surface."),
+    params=[
+        Param("wraps", "list[str]", required=True, choices_from="wraps",
+              help="Wrap surfaces to constrain."),
+        Param("quadrant", "str", required=True,
+              help="One of all, +x, -x, +y, -y, +z, -z (the surface's own frame)."),
+        Param("mirror", "bool", default=True,
+              help="Apply to each wrap's _l/_r twin. The mirrored side gets the "
+                   "MIRRORED quadrant when the axis is z (left/right), because "
+                   "the twin surface sits in a mirrored frame."),
+    ])
+def wrap_quadrant(model, out, *, wraps, quadrant, mirror=True, **_):
+    from bioscout.change_moment_arms.wraps import (QUADRANTS, read_wraps,
+                                                   set_wrap_quadrant)
+
+    q = str(quadrant).lower()
+    if q not in QUADRANTS:
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason=f"quadrant must be one of {', '.join(QUADRANTS)}")
+
+    have = read_wraps(model)
+    names = list(wraps)
+    if len(names) == 1 and str(names[0]).upper() == "ALL":
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason="ALL is not accepted here: constraining every "
+                               "surface at once is never the intended edit")
+    unknown = [n for n in names if n not in have]
+    if unknown:
+        return OpResult(False, "wrap_quadrant", str(model),
+                        reason=f"wrap surface(s) not in the model: "
+                               f"{', '.join(unknown)}")
+
+    def _twin(n):
+        if n.endswith("_r"):
+            return n[:-2] + "_l"
+        if n.endswith("_l"):
+            return n[:-2] + "_r"
+        return None
+
+    want = {n: q for n in names}
+    if mirror:
+        # z is the left/right axis in OpenSim's body frames, so the twin
+        # surface's equivalent side is the opposite z. x and y are shared.
+        qm = ("-z" if q == "+z" else "+z" if q == "-z" else q)
+        for n in names:
+            t = _twin(n)
+            if t and t in have and t not in want:
+                want[t] = qm
+
+    shared = {n: have[n].muscles for n in want
+              if n in have and len(have[n].muscles) > 1}
+
+    changed = set_wrap_quadrant(model, out, want)
+    msgs = [f"[model-edit] quadrant {old} -> {new} on {n}"
+            for n, (old, new) in sorted(changed.items())]
+    for n, mus in sorted(shared.items()):
+        msgs.append(f"[model-edit] NOTE {n} is shared by {len(mus)} muscles "
+                    f"({', '.join(mus[:6])}{' ...' if len(mus) > 6 else ''}) — "
+                    f"this constrains all of them")
+    if not changed:
+        msgs.append("[model-edit] every named surface was already on that "
+                    "quadrant — nothing written differs")
+    return OpResult(bool(changed), "wrap_quadrant", str(model), str(out),
+                    changed={n: {"old": o, "new": nw}
+                             for n, (o, nw) in changed.items()},
+                    messages=msgs,
+                    reason="" if changed else "no quadrant changed")
+
+
+SUFFIX_HOOKS["wrap_quadrant"] = lambda p: dict(
+    p, quadrant_tag=str(p.get("quadrant", "")).replace("+", "p").replace("-", "m"))

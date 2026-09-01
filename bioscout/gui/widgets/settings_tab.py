@@ -13,8 +13,9 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from ..gui_settings import (DEFAULTS, SCALE_MAX, SCALE_MIN, apply_appearance,
-                            gui_settings, settings_path)
+from ..gui_settings import (ACCENTS, BASE_SCALE, DEFAULTS, SCALE_MAX,
+                            SCALE_MIN, apply_appearance, gui_settings,
+                            settings_path)
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,10 @@ class SettingsTab(ctk.CTkFrame):
     def _appearance_section(self, parent):
         card = self._card(
             parent, "Appearance",
-            "UI scale resizes widgets AND text together. It applies to the "
-            "modern widgets immediately; the console and plain tables pick it "
-            "up on reload — use 'Apply cleanly' after choosing a size.")
+            "UI scale resizes widgets AND text together. 100 % is what used "
+            "to be 120 % — the size most people ran the app at. Widgets, the "
+            "console and the tables all follow it immediately; use 'Apply "
+            "cleanly' only if a panel ends up mid-layout.")
 
         ctk.CTkLabel(card, text="UI scale", font=("Segoe UI", 12)).grid(
             row=2, column=0, sticky="w", padx=14, pady=6)
@@ -106,9 +108,11 @@ class SettingsTab(ctk.CTkFrame):
             row=3, column=0, sticky="w", padx=14, pady=(0, 10))
         quick = ctk.CTkFrame(card, fg_color="transparent")
         quick.grid(row=3, column=1, columnspan=2, sticky="w", padx=14, pady=(0, 10))
-        for label, value in (("Small 90%", 0.9), ("Normal 100%", 1.0),
-                             ("Large 120%", 1.2), ("Larger 140%", 1.4),
-                             ("Huge 160%", 1.6)):
+        # Rebased: "100 %" now means BASE_SCALE (1.2) in toolkit units, so
+        # these are the readable steps either side of it, not the old ones.
+        for label, value in (("Smaller 85%", 0.85), ("Small 92%", 0.92),
+                             ("Normal 100%", 1.0), ("Large 115%", 1.15),
+                             ("Larger 130%", 1.3)):
             ctk.CTkButton(quick, text=label, width=96, height=28,
                           font=("Segoe UI", 11),
                           command=lambda v=value: self._set_scale(v)
@@ -122,13 +126,31 @@ class SettingsTab(ctk.CTkFrame):
                       command=self._reload_app).pack(side="left", padx=(12, 0))
 
         ctk.CTkLabel(card, text="Theme", font=("Segoe UI", 12)).grid(
-            row=4, column=0, sticky="w", padx=14, pady=(0, 12))
+            row=4, column=0, sticky="w", padx=14, pady=(0, 6))
         self.appearance_var = ctk.StringVar(
             value=str(self.settings.get("ui.appearance", "dark")))
         ctk.CTkSegmentedButton(
             card, values=["dark", "light", "system"],
             variable=self.appearance_var, command=self._on_appearance
-        ).grid(row=4, column=1, sticky="w", padx=14, pady=(0, 12))
+        ).grid(row=4, column=1, sticky="w", padx=14, pady=(0, 6))
+
+        ctk.CTkLabel(card, text="Base colour", font=("Segoe UI", 12)).grid(
+            row=5, column=0, sticky="w", padx=14, pady=(0, 12))
+        accent_row = ctk.CTkFrame(card, fg_color="transparent")
+        accent_row.grid(row=5, column=1, columnspan=2, sticky="w",
+                        padx=14, pady=(0, 12))
+        self.accent_var = ctk.StringVar(value=self.settings.accent())
+        # Swatches, not a dropdown: the choice IS the colour, and a name in a
+        # list does not tell you what "teal" looks like on this theme.
+        self._accent_btns = {}
+        for name, (fg, hover) in ACCENTS.items():
+            b = ctk.CTkButton(accent_row, text=name, width=74, height=28,
+                              font=("Segoe UI", 11),
+                              fg_color=fg, hover_color=hover,
+                              command=lambda n=name: self._pick_accent(n))
+            b.pack(side="left", padx=(0, 5))
+            self._accent_btns[name] = b
+        self._mark_accent(self.accent_var.get())
 
     def _show_scale(self, value):
         self.scale_value.configure(text=f"{float(value) * 100:.0f}%")
@@ -146,8 +168,22 @@ class SettingsTab(ctk.CTkFrame):
         self.scale_slider.set(value)
         self._show_scale(value)
         self.settings.set("ui.scale", round(value, 2))
-        apply_appearance(self.settings)
-        self._saved(f"UI scale {value * 100:.0f}% — reload for a clean re-layout")
+        # live=True: widget scaling + plain-tk fonts only. Re-applying WINDOW
+        # scaling to a live window is what made it jump and un-maximise.
+        apply_appearance(self.settings, live=True)
+        self._saved(f"UI scale {value * 100:.0f}%")
+
+    def _pick_accent(self, name):
+        self.accent_var.set(name)
+        self._mark_accent(name)
+        self._on_accent(name)
+
+    def _mark_accent(self, name):
+        """A border on the chosen swatch — with seven same-sized buttons there
+        is otherwise nothing on screen saying which one is active."""
+        for n, b in getattr(self, "_accent_btns", {}).items():
+            b.configure(border_width=(2 if n == name else 0),
+                        border_color="#ffffff")
 
     def _reload_app(self):
         """Relaunch through the main window's own restart, so the whole tree is
@@ -161,8 +197,15 @@ class SettingsTab(ctk.CTkFrame):
 
     def _on_appearance(self, value):
         self.settings.set("ui.appearance", value)
-        apply_appearance(self.settings)
+        apply_appearance(self.settings, live=True)
         self._saved(f"theme: {value}")
+
+    def _on_accent(self, value):
+        """Base colour. customtkinter reads widget colours when the widget is
+        CREATED, so existing widgets keep the old accent — say so and offer
+        the reload rather than pretending it applied."""
+        self.settings.set("ui.accent", value)
+        self._saved(f"base colour: {value} — reload to apply everywhere")
 
     # ----------------------------------------------------------- window
     def _window_section(self, parent):
@@ -248,10 +291,11 @@ class SettingsTab(ctk.CTkFrame):
 
     def _reset(self):
         self.settings.reset()
-        apply_appearance(self.settings)
+        apply_appearance(self.settings, live=True)
         self.scale_slider.set(self.settings.scale())
         self._show_scale(self.settings.scale())
         self.appearance_var.set(str(self.settings.get("ui.appearance")))
+        self._mark_accent(self.settings.accent())
         self.remember_var.set(bool(self.settings.get("window.remember")))
         self.maximised_var.set(bool(self.settings.get("window.start_maximised")))
         for key, var in getattr(self, "_path_rows", {}).items():

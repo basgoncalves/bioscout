@@ -13,7 +13,7 @@ import sys
 
 def classify_session(session_path: str, settings=None, no_plots: bool = False,
                      write_session_yaml: bool = False, per_trial: bool = True,
-                     quiet: bool = False):
+                     quiet: bool = False, trials=None):
     """Classify every trial in ``session_path`` and write the outputs.
 
     Per trial, beside the data it describes (``per_trial``, the default) —
@@ -41,12 +41,21 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
     ``write_session_yaml`` corrects ``session.yaml``'s trial types from the
     detection, backing the old file up first. ``quiet`` trims the per-trial
     chatter to one summary line — the export already prints a line per trial.
+
+    ``trials`` re-detects only the named trials. Every other trial keeps the
+    result it already has, read back from its own
+    ``movement_detection.yaml``, so the session-level files stay complete and
+    a one-trial re-run costs one trial's work instead of the session's. Re-run
+    one capture after changing a threshold, or after fixing the marker set,
+    without waiting for the sixty that did not change.
+
     Returns the detection dict, or None when the session could not be read.
     """
     import csv as _csv
     import yaml as _yaml
     from bioscout.movement_detector import (classify_trial, segment_trial,
-                                            plot_trial_tasks, MocapConfig)
+                                            gait_cycles, plot_trial_tasks,
+                                            MocapConfig)
 
     _say = (lambda *_a, **_k: None) if quiet else print
 
@@ -125,6 +134,15 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
 
     _trials = sorted(d for d in os.listdir(_exp)
                      if os.path.isdir(os.path.join(_exp, d)))
+    _only = set(trials or ())
+    _unknown = _only - set(_trials)
+    if _unknown:
+        print(f"[classifier] no such trial(s) under {_exp}: "
+              f"{', '.join(sorted(_unknown))}")
+    _todo = [_t for _t in _trials if not _only or _t in _only]
+    if _only:
+        _say(f"[classifier] re-detecting {len(_todo)} of {len(_trials)} "
+             f"trial(s); the rest keep their existing movement_detection.yaml")
     # Everything this command produces lands together, beside the session it
     # describes, so the detection travels with the data rather than living in
     # whichever project happened to run it.
@@ -132,12 +150,59 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
     _plots = os.path.join(_det, "plots")
     _do_plots = not no_plots
     _out, _n_multi, _rows, _n_png = {}, 0, [], 0
+    # One row per CYCLE across the whole session. The per-trial CSV cannot
+    # hold this: a walking capture has forty of them and a squat has none, so
+    # they get a table of their own rather than forty more columns.
+    _cycle_rows = []
+
+    def _existing_rows(path, key="trial"):
+        """Rows of a previously written CSV, grouped by trial."""
+        _by = {}
+        if not os.path.isfile(path):
+            return _by
+        try:
+            with open(path, newline="", encoding="utf-8") as _fh:
+                for _r in _csv.DictReader(_fh):
+                    # csv gives back strings; `agrees` is read as a boolean
+                    # further down and "False" is a truthy string.
+                    if "agrees" in _r:
+                        _r["agrees"] = str(_r["agrees"]).strip().lower() \
+                            in ("true", "1", "yes")
+                    _by.setdefault(_r.get(key, ""), []).append(_r)
+        except Exception:
+            return {}
+        return _by
+
+    _det_dir = os.path.join(_sess, "movement_detection")
+    _prev_rows = _existing_rows(os.path.join(_det_dir, "classification.csv")) \
+        if _only else {}
+    _prev_cycles = _existing_rows(os.path.join(_det_dir, "cycles.csv")) \
+        if _only else {}
     for _t in _trials:
         _d = os.path.join(_exp, _t)
+        if _t not in _todo:
+            # Not asked for. Keep what this trial already knows about itself:
+            # the per-trial file is the authoritative record, so the session
+            # aggregates stay complete without re-reading a 46 MB TRC.
+            _prev = os.path.join(_d, "movement_detection.yaml")
+            try:
+                _pd = _yaml.safe_load(open(_prev, encoding="utf-8")) or {}
+            except Exception:
+                _pd = {}
+            if _pd:
+                _out[_t] = {_k: _v for _k, _v in _pd.items()
+                            if _k not in ("trial", "generated_by",
+                                          "session_yaml_type", "agrees")}
+                if len(_pd.get("tasks") or []) > 1:
+                    _n_multi += 1
+            _rows.extend(_prev_rows.get(_t, []))
+            _cycle_rows.extend(_prev_cycles.get(_t, []))
+            continue
         try:
             _lab, _conf, _why, _f = classify_trial(_d, body_mass=_mass,
                                                    cfg=_mcfg)
             _segs = segment_trial(_d, body_mass=_mass, cfg=_mcfg)
+            _cyc = gait_cycles(_d, body_mass=_mass, cfg=_mcfg, segments=_segs)
         except Exception as _e:
             print(f"  {_t:24} ERROR {type(_e).__name__}: {_e}")
             continue
@@ -170,6 +235,7 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
         if _segs:
             _entry["tasks"] = [
                 {"task": _g.task, "time_range": [_g.t_start, _g.t_end],
+                 **({"name": _g.name} if getattr(_g, "name", "") else {}),
                  **({"side": _g.side} if _g.side else {}),
                  **({"direction": _g.direction}
                     if getattr(_g, "direction", None) else {}),
@@ -190,6 +256,16 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
                                  **({"side": _p.side} if _p.side else {})}
                                 for _p in _g.phases]} if _g.phases else {})}
                 for _g in _segs]
+        # THE CYCLES. A capture is one recording; a cycle is one thing to
+        # simulate, and a long overground trial holds dozens of them. Listing
+        # them here is what lets the pipeline build one run per cycle instead
+        # of one run per capture, and each carries the window, the leg, the
+        # plate and the events that window was cut with.
+        if _cyc:
+            _entry["cycles"] = _cyc
+            _entry["n_cycles"] = len(_cyc)
+            _entry["n_cycles_left"] = sum(1 for _c in _cyc if _c["side"] == "left")
+            _entry["n_cycles_right"] = sum(1 for _c in _cyc if _c["side"] == "right")
         _out[_t] = _entry
 
         _yt = str(((_cfg.get("trials") or {}).get(_t) or {}).get("type", ""))
@@ -204,6 +280,10 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
                 "longest_flight_s": getattr(_f, "longest_flight_s", ""),
                 "peak_vgrf_bw": getattr(_f, "peak_vgrf_bw", ""),
                 "single_support_frac": getattr(_f, "single_support_frac", ""),
+                "n_cycles": len(_cyc),
+                "n_cycles_left": sum(1 for _c in _cyc if _c["side"] == "left"),
+                "n_cycles_right": sum(1 for _c in _cyc if _c["side"] == "right"),
+                "cycles": " ".join(_c["name"] for _c in _cyc),
                 "tasks": "; ".join(f"{_g.task}[{_g.t_start:.2f}-{_g.t_end:.2f}]"
                                    for _g in _segs)}
         for _g, _sfx in zip(_segs, "abcdefghijklmnop"):
@@ -219,6 +299,19 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
                 if getattr(_g, _fld, None) is not None:
                     _row[f"task_{_sfx}_{_fld}"] = getattr(_g, _fld)
         _rows.append(_row)
+        for _c in _cyc:
+            _cycle_rows.append({
+                "trial": _t, "cycle": _c["name"], "side": _c["side"],
+                "index": _c["index"], "task": _c["task"],
+                "t_start": _c["time_range"][0], "t_end": _c["time_range"][1],
+                "duration_s": _c["duration_s"], "cycle_from": _c["cycle_from"],
+                "stance_start": (_c["stance"] or [None, None])[0],
+                "stance_end": (_c["stance"] or [None, None])[1],
+                "plates": " ".join(_c.get("plates") or []),
+                "peak_n": _c["peak_n"], "side_margin_m": _c["side_margin_m"],
+                "shared_plate": _c["shared_plate"],
+                "straddled": _c["straddled"],
+                "reason": _c["reason"]})
 
         # The detection belongs beside the data it describes. Written per
         # trial it survives a trial being copied, re-exported or moved, and
@@ -298,6 +391,16 @@ def classify_session(session_path: str, settings=None, no_plots: bool = False,
         with open(_csv_path, "w", newline="", encoding="utf-8") as _fh:
             _w = _csv.DictWriter(_fh, fieldnames=_keys)
             _w.writeheader(); _w.writerows(_rows)
+
+    _cyc_path = os.path.join(_det, "cycles.csv")
+    if _cycle_rows:
+        os.makedirs(_det, exist_ok=True)
+        with open(_cyc_path, "w", newline="", encoding="utf-8") as _fh:
+            _w = _csv.DictWriter(_fh, fieldnames=list(_cycle_rows[0].keys()))
+            _w.writeheader(); _w.writerows(_cycle_rows)
+        if not quiet:
+            print(f"[classifier] wrote {_cyc_path} "
+                  f"({len(_cycle_rows)} gait cycle(s))")
 
     _dis = [_r for _r in _rows if not _r["agrees"]]
     if quiet:

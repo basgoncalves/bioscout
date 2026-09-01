@@ -185,19 +185,67 @@ def _osim_quiet_ctx():
         _sys.stdout.flush()
     except Exception:
         pass
-    _saved = os.dup(1)
-    _devnull = os.open(os.devnull, os.O_WRONLY)
+    # Swapping fd 1 for devnull silences OpenSim's C++ chatter, but it is only
+    # safe when fd 1 is a real file or console. Under MINGW / Git Bash it is a
+    # pty, and after the dup2 the NEXT ordinary print() raises
+    # "OSError: [WinError 1] Incorrect function" -- from inside the wrapped
+    # function, which makes it look like the OpenSim call failed when nothing
+    # of the sort happened. If the swap cannot be done safely, skip it: noisy
+    # output is a far smaller problem than a tool that appears to crash.
+    # On Windows `sys.stdout` wraps a _WindowsConsoleIO bound to the CONSOLE
+    # HANDLE, not to fd 1. Swapping fd 1 therefore leaves it writing to a
+    # handle that is no longer a console, and the next ordinary print() dies
+    # with "OSError: [WinError 1] Incorrect function" -- raised from inside the
+    # wrapped function, so it reads as an OpenSim failure when nothing of the
+    # sort happened. Only swap when stdout is NOT a console: a redirected file
+    # or pipe survives it, and that is the case where the C++ chatter is worth
+    # suppressing anyway.
+    _console = False
     try:
-        os.dup2(_devnull, 1)
+        _raw = getattr(getattr(_sys.stdout, "buffer", None), "raw", None)
+        _console = (os.name == "nt"
+                    and (type(_raw).__name__ == "_WindowsConsoleIO"
+                         or _sys.stdout.isatty()))
+    except Exception:                                        # noqa: BLE001
+        _console = os.name == "nt"
+    if _console:
+        try:
+            yield
+        finally:
+            _quiet_osim()
+        return
+    try:
+        _saved = os.dup(1)
+        _devnull = os.open(os.devnull, os.O_WRONLY)
+    except OSError:
+        try:
+            yield
+        finally:
+            _quiet_osim()
+        return
+    _swapped = False
+    try:
+        try:
+            os.dup2(_devnull, 1)
+            _swapped = True
+        except OSError:
+            pass                      # keep the real stdout; just do not silence
         yield
     finally:
         try:
             _sys.stdout.flush()
         except Exception:
             pass
-        os.dup2(_saved, 1)
-        os.close(_devnull)
-        os.close(_saved)
+        if _swapped:
+            try:
+                os.dup2(_saved, 1)
+            except OSError:
+                pass
+        for _fd in (_devnull, _saved):
+            try:
+                os.close(_fd)
+            except OSError:
+                pass
         _quiet_osim()
 
 
@@ -3346,9 +3394,18 @@ def create_setup_IK(osim_modelPath=None, marker_trc=None,
         ikTool.setStartTime(markers.getFirstTime())  # Default start time
         ikTool.setEndTime(markers.getLastTime())    # Default end time
     
-    # Set the output motion file name relative to the results directory
-    ikTool.setResultsDir('./')
-    resultsDir = os.path.dirname(ik_output)
+    # Set the output motion file name relative to the results directory.
+    #
+    # setResultsDir('./') meant the PROCESS CWD, not the trial folder, and
+    # set_report_errors(True) above makes OpenSim write `_ik_marker_errors.sto`
+    # and `_ik_model_marker_locations.sto` into that results dir. Run from a
+    # project root (as settings.py is) and those land in the repo root, are
+    # rewritten by every trial, and `Analyse.calculate_mean_marker_error`
+    # then reads whichever one happened to be last -- for the wrong trial.
+    # Point it at the trial's own folder.
+    resultsDir = os.path.dirname(os.path.abspath(ik_output))
+    os.makedirs(resultsDir, exist_ok=True)
+    ikTool.setResultsDir(resultsDir)
     ikTool.setOutputMotionFileName(os.path.relpath(ik_output, resultsDir))
     if saveXMLPath is None:
         saveXMLPath = ik_output.replace('.mot', '_ik_setup.xml')
@@ -3816,6 +3873,17 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
     ik.setStartTime(t0)
     ik.setEndTime(t1)
     ik.setOutputMotionFileName(_mot)
+    # OpenSim defaults results_directory to './' (the PROCESS CWD) and
+    # report_errors to True, so this registration pass used to drop
+    # `_ik_marker_errors.sto` in whatever directory the run started from --
+    # the project root -- overwritten by every model and session. Keep it
+    # next to the model it belongs to.
+    _ik_res = os.path.dirname(os.path.abspath(_mot))
+    os.makedirs(_ik_res, exist_ok=True)
+    try:
+        ik.setResultsDir(_ik_res)
+    except Exception:
+        pass
     with _osim_quiet_ctx():
         ik.run()
 
@@ -4271,7 +4339,8 @@ def run_id(osimModelPath=None, ikOutputPath=None, grfXmlPath=None,
 
 @_quiet_console
 def run_ma(osim_modelPath=None, ik_output=None,
-         grf_xml=None, results_dir=None, coordinates=None):
+         grf_xml=None, results_dir=None, coordinates=None,
+         solve_equilibrium=False):
     if osim_modelPath is None:
         osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
     if ik_output is None:
@@ -4362,7 +4431,17 @@ def run_ma(osim_modelPath=None, ik_output=None,
     maTool.setInitialTime(motion.getFirstTime())
     maTool.setFinalTime(motion.getLastTime())
     maTool.setExternalLoadsFileName(os.path.relpath(grf_xml, start=os.path.dirname(setup_xml)))
-    maTool.setSolveForEquilibrium(False)
+    # With equilibrium OFF the tool never solves the fibre/tendon force
+    # balance, so _MuscleAnalysis_FiberLength.sto comes back at the muscle's
+    # INITIAL fibre length for every frame -- 0.1000 m for every muscle in
+    # every model -- and FiberVelocity is then the derivative of a flat line,
+    # reaching 631 m/s. Moment arms, MTU length and the kinematic outputs are
+    # unaffected, which is why this went unnoticed: only the fibre columns are
+    # wrong. Turn it on when a fibre-level quantity is actually wanted; it is
+    # slower, and with a coordinates file and no states OpenSim solves at a
+    # default activation, so the result is a kinematically consistent fibre
+    # length rather than an activation-specific one.
+    maTool.setSolveForEquilibrium(bool(solve_equilibrium))
     maTool.setReplaceForceSet(False)
     maTool.setMaximumNumberOfSteps(20000)
     maTool.setOutputPrecision(8)
@@ -4853,8 +4932,9 @@ def run_cmc(osim_modelPath=None, ik_output=None, grf_xml=None, emg_file=None, ac
             # Use existing CMC setup file
             try:
                 tool = osim.CMCTool(setup_xml)
-                model = _quiet_model(osim_modelPath)
-                tool.setModel(model)
+                # Do NOT setModel() here: CMCTool(setup) already built its model
+                # WITH force_set_files applied; replacing it would silently drop
+                # the residual/reserve actuators. The setup's <model_file> rules.
                 tool.run()
                 utils.print_to_log("CMC completed successfully using existing setup file.")
                 print("CMC calculation completed.")

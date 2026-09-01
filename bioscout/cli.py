@@ -254,6 +254,11 @@ def build_parser() -> argparse.ArgumentParser:
                     "`bioscout plot figures p01 s_all` are the same command.")
     pls = pl.add_subparsers(dest="action", metavar="ACTION")
 
+    import argparse as _ap
+    pjc = pls.add_parser("jcf", help="polar JCF direction/magnitude on the model's bones",
+                         add_help=False)
+    pjc.add_argument("jcf_args", nargs=_ap.REMAINDER)
+
     pf = pls.add_parser("figures", help="draw catalogue figures by key (the default)")
     pf.add_argument("keys", nargs="*", metavar="KEY",
                     help="figure keys (p01, s_all, m_curves, mi_ma, ...) or a group name")
@@ -576,6 +581,10 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
             return None
         return open_session_editor(ns.path)
 
+    if v == "plot" and a == "jcf":
+        from bioscout.plot.jcf_direction import main as _jcf
+        return _jcf(ns.jcf_args) or 0
+
     if v == "plot" and a == "figures":
         from bioscout.figures import main as _figures
         argv = list(ns.keys)
@@ -610,6 +619,12 @@ def route(argv: Sequence[str]) -> Tuple[str, object]:
     parser = build_parser()
     argv = list(argv)
 
+    # `plot jcf` forwards its whole tail to the module's own parser (argparse
+    # REMAINDER does not reliably swallow leading options like -h).
+    if argv[:2] == ["plot", "jcf"]:
+        from bioscout.plot.jcf_direction import main as _jcf
+        return ("exit", _jcf(argv[2:]) or 0)
+
     # `bioscout plot p01 s_all` == `bioscout plot figures p01 s_all`. argparse
     # cannot have both a free positional list and subcommands on one parser, so
     # the default action is inserted here rather than fought for in the grammar.
@@ -619,7 +634,7 @@ def route(argv: Sequence[str]) -> Tuple[str, object]:
         # the default action's, or summary and collings become undiscoverable.
         if rest and rest[0] in ("-h", "--help"):
             pass
-        elif not rest or rest[0] not in ("figures", "summary", "collings"):
+        elif not rest or rest[0] not in ("figures", "summary", "collings", "jcf"):
             argv = ["plot", "figures"] + rest
 
     # `bioscout help [VERB]` == `bioscout [VERB] --help`

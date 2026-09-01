@@ -78,6 +78,14 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
         root = (ctk.CTk() if ctk else tk.Tk())
     except Exception:
         return 1
+    # Logo in the title bar AND the taskbar. A standalone dialog builds its own
+    # root, so it inherits nothing from main_window -- without this it comes up
+    # as a generic Python window.
+    try:
+        from .window_icon import apply as _apply_icon
+        _apply_icon(root)
+    except Exception:                                          # noqa: BLE001
+        pass
 
     Frame = ctk.CTkFrame if ctk else tk.Frame
     Label = ctk.CTkLabel if ctk else tk.Label
@@ -246,6 +254,26 @@ def open_session_editor(session_dir=None) -> int:                 # noqa: C901 â
         for c, text in enumerate(header):
             Label(body, text=text, **colour({}, _MUTED)).grid(
                 row=section.row, column=c, sticky="w", padx=(0, 10))
+        section.row += 1
+
+        # all / none per tick column. Fourteen trials x two roles is 28 clicks
+        # to say something as simple as "every trial feeds the EMG maximum",
+        # which is why sessions ended up written as `normalisation_trials: all`
+        # -- a string that resolves to [], the same value this form reads as
+        # "nothing ticked". Ticking is now cheap, so the explicit per-trial
+        # flags are the easy path rather than the tedious one.
+        def _set_col(which, value):
+            for _n, _vars in trial_vars.items():
+                _vars[0 if which == "cal" else 1].set(value)
+
+        for _col, _which in ((2, "cal"), (3, "nor")):
+            _bar = Frame(body)
+            _bar.grid(row=section.row, column=_col)
+            for _txt, _val in (("all", True), ("none", False)):
+                Button(_bar, text=_txt,
+                       command=lambda w=_which, v=_val: _set_col(w, v),
+                       **({"width": 34, "height": 18} if ctk else {"padx": 1})
+                       ).pack(side="left", padx=1)
         section.row += 1
 
         c3ds = set(form.c3d_trials())
