@@ -1497,7 +1497,7 @@ class Analyse:
             return
         
         else:
-            os.chdir(self.path)
+            os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
             
             try:
                 # Check file size of settings XML to ensure it's not empty or corrupted
@@ -1513,7 +1513,7 @@ class Analyse:
         
     def _reset_settings_xml(self):
         '''Create a settings xml for the trial at the specified path'''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # delete existing settings xml if it exists
         if os.path.exists(self.settingsXML):
             os.remove(self.settingsXML)
@@ -1590,7 +1590,7 @@ class Analyse:
                 return
         except Exception:
             pass
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # The analysis window is persisted ONLY as start_time / end_time (scalars),
         # kept in sync with the working self.time_range; the redundant time_range
         # tag is not serialized (avoids two disagreeing representations).
@@ -2088,7 +2088,7 @@ class Analyse:
     def get_time_range_from_eventDetector(self):
         '''Get time range from event detector'''
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         try:
             detector = _u.EventDetector()
             events = detector.analyze_task(trc_file=self.markers, grf_file=self.grf_mot, kinematics_file=self.ik, task=self._trial_type())
@@ -2099,7 +2099,7 @@ class Analyse:
             return False
 
     def get_time_range(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         # session.yaml is authoritative: if the Session injected a time_range via
         # _overrides, return it so the auto-derived event/marker span never wins
@@ -2222,7 +2222,7 @@ class Analyse:
           ``gait_like``   whether gait-based literature curves may be overlaid
         Returns None if the trial has no events.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         pairs = self._raw_event_pairs()
         if not pairs:
             return None
@@ -2311,7 +2311,7 @@ class Analyse:
         Contact'). With ``write=True`` they are persisted via set_events(). Note
         this returns EVERY detected step; pick a single stride for a gait cycle.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         try:
             grf = _u.load_any_data_file(self.grf_mot)
         except Exception as e:
@@ -2394,7 +2394,7 @@ class Analyse:
         ref: pelvis reference marker names (default SACR*/PSIS).
         Returns time-sorted [{'name','time'}]; write=True persists via set_events.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         try:
             trc = _u.load_any_data_file(self.markers)
         except Exception as e:
@@ -2496,7 +2496,7 @@ class Analyse:
         Uses the trial's events (events_list / <events> subtree) if present, else
         detects them with detect_events_from_grf(). Saves inputs/grf_events.png.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         grf = _u.load_any_data_file(self.grf_mot)
         t = pd.to_numeric(grf['time'], errors='coerce').to_numpy(float)
         foot = {}
@@ -2601,7 +2601,7 @@ class Analyse:
         ``redetect=True`` first re-detects the events from the GRF and overwrites
         them; otherwise the current (possibly hand-edited) events are used as-is.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
         if redetect:
             self.detect_events(method='auto', write=True)
@@ -2644,7 +2644,7 @@ class Analyse:
         ``norm_source`` (optional) is a ``{channel: trial_name}`` map of which
         trial provided the session max (MVC reference) for each channel; when
         given it is shown in red under each subplot title."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         raw = _u.load_any_data_file(self.emg)
         try:
             norm = _u.load_any_data_file(self.emg_filtered_normalised)
@@ -2700,7 +2700,7 @@ class Analyse:
         return a dataFrame with the name of each marker in the model and it's parent body
         '''
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         try:
             model = self.load_model()
             state = model.initSystem()
@@ -2788,7 +2788,7 @@ class Analyse:
             factor (float): Factor to increase muscle force by. Default is 1.5.
             replace (bool): Whether to replace existing modified model. Default is False.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
         
         model_path = os.path.join(self.path, self.model_dir)
@@ -2840,7 +2840,7 @@ class Analyse:
         Returns:
             float: Body mass in kg.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
         
         if not os.path.exists(self.model_dir):
@@ -2862,7 +2862,7 @@ class Analyse:
 
     def get_body_mass_from_grf(self, update=False):
         '''Calculate body mass from GRF data if available.'''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         try:
             grf_data = _u.load_any_data_file(self.grf_mot)
@@ -2886,7 +2886,7 @@ class Analyse:
         Returns:
             list: List of muscle names.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         
         if not os.path.exists(self.model_dir):
             print(f"Model not found: {self.model_dir}")
@@ -2908,7 +2908,7 @@ class Analyse:
             coordinate_name (str): Name of the coordinate to modify. 
             new_range (list): New range of motion as [min, max] in radians.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         
         if not os.path.exists(self.model_dir):
             print(f"Model not found: {self.model_dir}")
@@ -2923,7 +2923,7 @@ class Analyse:
         Args:
             scale_factor (float): Factor to scale EMG data by. Default is 1.0.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if not os.path.exists(os.path.abspath(self.emg_normalised)):
             print(f"EMG normalised file not found: {self.emg_normalised}")
             return
@@ -2987,7 +2987,7 @@ class Analyse:
         # "[export ERROR] ... The system cannot find the file specified".
         # Fixing it at the callers was not enough: this chdir runs first.
         os.makedirs(self.path, exist_ok=True)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         c3d_abs = os.path.abspath(self.c3d)
         if not os.path.exists(c3d_abs):
             print(f"C3D file not found: {c3d_abs}")
@@ -3247,7 +3247,7 @@ class Analyse:
 
     def run_id(self, replace=None):
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         # Guard: ID is external-load driven — without ground reaction forces there
         # is nothing to solve. Skip rather than building a GRF.xml around an empty
@@ -3315,7 +3315,7 @@ class Analyse:
 
     def run_ma(self, replace=None):
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # self.ma is a DIRECTORY (always exists after layout setup) — check for an
         # actual MA output file instead, or we'd always skip.
         _ma_len = os.path.join(self.path, self.ma, "_MuscleAnalysis_Length.sto")
@@ -3340,7 +3340,7 @@ class Analyse:
     
     def run_so(self, replace=None):
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _os = self._get_openSim()
 
         # Resolve all paths to absolute so openSim.run_so never hits a
@@ -3422,7 +3422,7 @@ class Analyse:
 
         Output: energetics_ProbeReporter_probes.sto in the trial folder.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _os = self._get_openSim()
 
         ik_abs     = os.path.join(self.path, self.ik)
@@ -3455,7 +3455,7 @@ class Analyse:
 
     def run_jra(self, replace=None):
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
         _os = self._get_openSim()
 
@@ -3559,7 +3559,7 @@ class Analyse:
 
     def run_jra_ceinms(self, replace=None):
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
 
         # CEINMS JRA gets its OWN setup in joint_contact_forces/ (separate from SO).
@@ -3668,7 +3668,7 @@ class Analyse:
         """
         from . import jcf_contributions as _jc
         self._set_replace(replace)
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(self.settingsXML)
 
         types = ["so", "ceinms"] if str(forces_type).lower() == "both" else [str(forces_type).lower()]
@@ -3754,7 +3754,7 @@ class Analyse:
         so_only=True ignores any CEINMS output and produces an SO-only figure
         (used right after run_jra so a JCF plot exists even when CEINMS has not
         run / produced no output)."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         so = _u.load_any_data_file(self.jra) if os.path.exists(self.jra) else None
         ce = (None if so_only else
               (_u.load_any_data_file(self.jra_ceinms) if os.path.exists(self.jra_ceinms) else None))
@@ -4034,7 +4034,7 @@ class Analyse:
 
     def run_emg_filter(self):
         """Per-trial: filter raw EMG -> emg_filtered.mot."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         emg_path = os.path.join(self.path, self.emg)
         if not os.path.exists(emg_path):
             self._log(f"[Warning] EMG file not found: {emg_path}")
@@ -4166,7 +4166,7 @@ class Analyse:
 
     def run_emg_normalise(self):
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         emg_normalise_list = []
         
         for trialName in os.listdir(self.parentdir):
@@ -4190,7 +4190,7 @@ class Analyse:
     
     def convert_mot_to_sto(self, attr=None):
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if attr:
             mot_file = getattr(self, attr)
         
@@ -4288,7 +4288,7 @@ class Analyse:
 
     #--- Valid
     def compare_marker_locations(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         try:
             # IK writes the model marker locations to self.model_markers
             # (external_biomechanics/_ik_model_marker_locations.sto), not the
@@ -4305,7 +4305,7 @@ class Analyse:
     def check_moment_arms(self):
         ''' Using the openSim.py function checkMomentArms to plot moment arms for each coordinate and muscle, and compare to expected patterns based on muscle geometry.'''
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         results = {}
         for leg in ['l', 'r']:
@@ -4332,7 +4332,7 @@ class Analyse:
         import shutil
         import opensim as osim
 
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         # Make a one-time backup of the original model
         backup_path = self.model_dir.replace('.osim', '_original_backup.osim')
@@ -4415,7 +4415,7 @@ class Analyse:
 
     def calculate_emg_activation_errors(self):
         '''Calculate errors between EMG activations and CEINMS excitations, and save to a new file.'''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         emg_data = _u.load_any_data_file(self.emg_normalised)
         ceinms_activations = _u.load_any_data_file(self.jra_forces_ceinms.replace('MuscleForces.sto', 'Activations.sto'))  
@@ -4427,7 +4427,7 @@ class Analyse:
         '''
         Load the _ik_marker_errors.sto file and calculate the mean marker error across all markers and time frames, and save to a new file.
         '''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         marker_errors = _u.load_any_data_file(
             os.path.join(self.path, '_ik_marker_errors.sto'))
         mean_error = marker_errors.drop(columns='time').mean().mean()
@@ -4439,7 +4439,7 @@ class Analyse:
         '''
         Calculate errors between muscle moments calculated from SO or CEINMS forces and the inverse dynamics joint moments, and save to a new file.
         '''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         
         id_moments = _u.load_any_data_file(self.id)
         muscle_forces = _u.load_any_data_file(self.so_forces) if forces_type == 'so' else _u.load_any_data_file(self.jra_forces_ceinms)
@@ -4531,7 +4531,7 @@ class Analyse:
       
     def plot_moment_arms(self, coord_name: str = None, fig=None):
         
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         fileList = os.listdir(self.ma)
         fileList = [file for file in fileList if file.startswith('_MuscleAnalysis_MomentArm') and file.endswith('.sto')]
         
@@ -4574,7 +4574,7 @@ class Analyse:
         return fig, axes
 
     def plot_ik(self, columns_to_plot='all'):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         ik_df = _u.load_any_data_file(self.ik)
 
         cols = list(ik_df.columns)
@@ -4759,7 +4759,7 @@ class Analyse:
         residual (dashed line, right axis, Nm or N) overlaid. Right leg blue,
         left leg red. Uses the same proximal->distal joint-row layout as plot_id.
         Saved next to the ID result as ``<id>_summary.png``."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         ang = _u.load_any_data_file(self.ik)
         mom = _u.load_any_data_file(self.id)
 
@@ -4864,7 +4864,7 @@ class Analyse:
         DOFs come from SummarySettings.dofs unless overridden. Saved to the
         external_biomechanics folder as ``kinematics_moments.png``. Replaces the
         old joint_angles.png / inverse_dynamics.png / inverse_dynamics_summary.png."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # Name the model this figure describes. Four printBasicInfo blocks used
         # to sit here saying it in 52 lines; one line says it better, and says
         # WHICH model -- which is the part that actually varies between runs.
@@ -5030,7 +5030,7 @@ class Analyse:
         background. Uses the model's real muscle set, so pelvis residuals
         (FX/FY/..) and reserve actuators are excluded. Saved as SO_results.png
         (no trial name) next to the SO results."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         so_forces = _u.load_any_data_file(self.so_forces)
         so_activations = _u.load_any_data_file(self.so_activations)
         try:
@@ -5259,7 +5259,7 @@ class Analyse:
         gold (±25%) shaded acceptance bands — small reserves mean the muscles are
         carrying the joint moment. Saved to the SO folder as
         ``SO_reserves_inspection.png``."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         so = _u.load_any_data_file(self.so_forces)
         idm = _u.load_any_data_file(self.id)
         t0, t1 = self.get_time_range()
@@ -5334,7 +5334,7 @@ class Analyse:
         proxy (moments use |GRF| too), with green (±10%) and gold (±25%) shaded
         bands — the standard residual-acceptance thresholds. Saved to the
         external_biomechanics folder as ``residuals.png``."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         idm = _u.load_any_data_file(self.id)
         t0, t1 = self.get_time_range()
         ti = pd.to_numeric(idm['time'], errors='coerce').to_numpy(float)
@@ -5421,7 +5421,7 @@ class Analyse:
         Outputs go to ``<trial>/muscle_inspect/``. Returns
         ``(success, corrected_model_path, log_path)``. Needs the `opensim` package.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         from ..muscle_inspect import muscle_checker as _mc
 
         model = os.path.abspath(self.model_path)          # alias of model_dir
@@ -5479,7 +5479,7 @@ class Analyse:
           3. joint-contact-force literature bands for the trial TYPE (gait) if any.
 
         Everything is best-effort (wrapped) so it never breaks the pipeline."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         out = os.path.join(self.path, "validation")
         os.makedirs(out, exist_ok=True)
         model = os.path.abspath(self.model_dir)
@@ -5563,7 +5563,7 @@ class Analyse:
         return out
 
     def plot_jra(self, origin='SO'):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if origin == 'CEINMS':
             self.jra_results = _u.load_any_data_file(self.jra_ceinms)
         else:
@@ -5624,7 +5624,7 @@ class Analyse:
     
     def plot_emg(self):
         
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         emg_file_path = os.path.abspath(self.emg)
         if not os.path.exists(emg_file_path):
             print(f"EMG file not found: {emg_file_path}")
@@ -5907,7 +5907,7 @@ class Analyse:
       
     # ceinms
     def create_ceinms_model(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if os.path.exists(self.ceinms_uncalibrated_model) and not self.replace:
             self._log(f'CEINMS uncalibrated model already exists: {os.path.abspath(self.ceinms_uncalibrated_model)}')
             return
@@ -5987,7 +5987,7 @@ class Analyse:
             return emg_file
 
     def create_ceinms_input_data(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # Prefer the session-normalised CEINMS excitations (emg_ceinms.mot): a
         # rectified, low-pass enveloped, session-max normalised signal clipped to
         # [0,1] — the only range CEINMS accepts. Fall back to older normalised /
@@ -6077,7 +6077,7 @@ class Analyse:
         Create ceinms_cfg_calibration.xml for CEINMS calibration.
         """
         
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         # trialSet paths in the cfg are resolved relative to the cfg's OWN folder
         # (ceinms_calibration/), so compute them relative to that, not the session.
         _cfg_dir = os.path.dirname(os.path.abspath(os.path.join(self.path, self.ceinms_calibration_cfg)))
@@ -6098,7 +6098,7 @@ class Analyse:
 
     def create_excitation_generator(self):
         import traceback as _tb
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _abs_eg = os.path.abspath(self.ceinms_excitation_generator)
         self._log(f'CEINMS excitation generator path: {_abs_eg} (exists={os.path.exists(_abs_eg)})', terminal=False)
         if os.path.exists(_abs_eg) and not self.replace:
@@ -6123,7 +6123,7 @@ class Analyse:
             excitation_file: Path to excitationGenerator.xml
             output_file: Path for output ceinms_cfg_optimise.xml
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         excitation_file = self.ceinms_excitation_generator
         output_file = self.ceinms_exe_cfg
         
@@ -6210,7 +6210,7 @@ class Analyse:
         print(f"adjustMTUs: {len(adjust_mtus)} muscles")
     
     def create_ceinms_calibration_setup(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _u.ceinms.create_calibrationSetupXML(uncalibratedCEINMSModelPath=self.ceinms_uncalibrated_model,
                                            excitationGeneratorFile=self.ceinms_excitation_generator,
                                            calibrationCfgPath=self.ceinms_calibration_cfg,
@@ -6219,7 +6219,7 @@ class Analyse:
                                            setupXMLPath=self.ceinms_calibration_setup)
 
     def create_ceinms_optimise_setup(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         
         if os.path.exists(self.ceinms_optimise_setup) and not self.replace:
             self._log(f'CEINMS optimisation setup already exists: {os.path.abspath(self.ceinms_optimise_setup)}', terminal=True)
@@ -6333,7 +6333,7 @@ class Analyse:
         print(f"Created {os.path.abspath(self.ceinms_exe_setup)}")
 
     def create_ceinms_exe_cfg(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         
         try:
             dofSet = ' '.join(_u.settings.BatchSettings.dof_list)
@@ -6380,7 +6380,7 @@ class Analyse:
           5. create_ceinms_calibration_setup
           6. run calibration executable
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         # Session-level CEINMS files live in ceinms_calibration/. If a previous
         # VALID calibration is already there, archive the whole folder as
@@ -6490,7 +6490,7 @@ class Analyse:
 
         # -- Run calibration --
         start_time = _u.time.time()
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         if os.path.exists(self.ceinms_uncalibrated_model):
             _u.ceinms.plot_ceinms_model_parameters(self.ceinms_uncalibrated_model)
@@ -6506,7 +6506,7 @@ class Analyse:
         self._to_xml()
 
         # if date modified of calibrated model is after start time, assume success
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if not os.path.exists(self.ceinms_calibrated_model):
             self._log(f'[ERROR] CEINMS calibration failed: calibrated model not found at {self.ceinms_calibrated_model}. Check calibrationOutput/out.txt for details.', terminal=True)
             raise FileNotFoundError(f'Calibrated model not produced: {self.ceinms_calibrated_model}')
@@ -6591,7 +6591,7 @@ class Analyse:
             raise
 
     def run_ceinms_exe_single(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         self.load_settings(settingsXML=self.settingsXML)
         # Tag execution logs distinctly from calibration ("CEINMS-exe <trial>"
         # vs "CEINMS-cal <session>"). Set AFTER load_settings so it isn't reset.
@@ -6694,7 +6694,7 @@ class Analyse:
         per muscle, thick = mean). All on a 0-1 axis over the analysis window.
         Colours follow settings.PlottingSettings (utils.plot_style): EMG, CEINMS,
         static_optimisation. Saved to ceinms/emg_vs_activations.png."""
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _c_emg = _u.plot_style('emg')['color']
         _c_ce  = _u.plot_style('ceinms')['color']
         _c_so  = _u.plot_style('static_optimisation')['color']
@@ -6764,7 +6764,7 @@ class Analyse:
         return fig, axg
 
     def run_ceinms_optimise(self):
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         setupAbsPath = os.path.abspath(self.ceinms_optimise_setup)
         _u.ceinms.optimise(setupXML_path=setupAbsPath)
 
@@ -6782,7 +6782,7 @@ class Analyse:
     
     def run_ceinms_exe_loop(self):        
         
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         if not os.path.exists(self.ceinms_exe_setup):
             self.create_ceinms_exe_setup()
         
@@ -6807,7 +6807,7 @@ class Analyse:
 
     def check_best_ceinms_results(self):
         ''' loop through ceinms exe results and find best alpha, beta, gamma based on RMS error for joint moments and EMG vs CEINMS excitations '''
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
 
         self.load_settings(settingsXML=self.settingsXML)
         best_params_csv = os.path.join(self.path, 'best_ceinms_parameters.csv')
@@ -6865,7 +6865,7 @@ class Analyse:
         ``a{alpha}_b{beta}_g{gamma}_results.png`` plus a companion muscle-groups
         figure ``a{alpha}_b{beta}_g{gamma}_muscle_groups.png``.
         """
-        os.chdir(self.path)
+        os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         exe_dir = os.path.dirname(os.path.join(self.path, self.jra_forces_ceinms))
         ce_f = _u.load_any_data_file(os.path.join(exe_dir, 'MuscleForces.sto'))
         ce_a = _u.load_any_data_file(os.path.join(exe_dir, 'Activations.sto'))

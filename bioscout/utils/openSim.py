@@ -3620,6 +3620,16 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
             ikTool.run()
         utils.print_to_log(f"Inverse Kinematics calculation completed. Results saved to {resultsDir}")
         print(f"Inverse Kinematics calculation completed successfully")
+        # Cold-start repair: the FIRST solved frame starts from the model's
+        # default pose and can converge to a folded mirror solution (pelvis
+        # ~90 deg off) that the warm-started frames never revisit. ID then
+        # differentiates that single frame into multi-kNm pelvis moments.
+        # Replace leading frames that sit far from the trial median with the
+        # first good frame.
+        try:
+            _sanitize_ik_leading_frames(_om_abs)
+        except Exception as _se:
+            print(f"[IK] leading-frame check skipped: {_se}")
 
     except Exception as e:
         utils.print_to_log(f"Error running IK: {e}")
@@ -3646,6 +3656,39 @@ def run_ik(osim_modelPath=None, setup_xml=None, resultsDir=None):
             print(f"Restored working directory to: {original_cwd}")
         except Exception as e:
             print(f"Warning: Could not restore original working directory: {e}")
+
+def _sanitize_ik_leading_frames(mot_path, max_lead=5, tol_deg=30.0):
+    """Replace up to `max_lead` leading frames whose pelvis orientation is more
+    than `tol_deg` from the trial median (IK cold-start fold) with the first
+    good frame's values. In-place; no-op when the file starts clean."""
+    import numpy as _np
+    lines = open(mot_path, errors="replace").read().splitlines()
+    h = max(i for i, l in enumerate(lines) if l.strip().lower() == "endheader")
+    cols = lines[h + 1].split()
+    body = [l for l in lines[h + 2:] if l.strip()]
+    d = _np.array([[float(x) for x in l.split()] for l in body])
+    idx = [cols.index(c) for c in ("pelvis_tilt", "pelvis_list", "pelvis_rotation")
+           if c in cols]
+    if not idx or len(d) < max_lead + 2:
+        return
+    med = _np.median(d[:, idx], axis=0)
+    bad = _np.abs(d[:, idx] - med).max(axis=1) > tol_deg
+    n = 0
+    while n < min(max_lead, len(d) - 1) and bad[n]:
+        n += 1
+    if n == 0:
+        return
+    good = d[n].copy()
+    for k in range(n):
+        t = d[k, 0]
+        d[k] = good
+        d[k, 0] = t
+    fmt = "\t".join(["%12.8f"] * d.shape[1])
+    out = lines[:h + 2] + [fmt % tuple(r) for r in d]
+    open(mot_path, "w").write("\n".join(out) + "\n")
+    print(f"[IK] cold-start repair: replaced {n} leading frame(s) with the "
+          f"first good frame (pelvis was >{tol_deg:.0f} deg off the trial median)")
+
 
 def _check_ik_prerequisites(osim_modelPath, setup_xml, resultsDir):
     """
