@@ -9,3 +9,7 @@ recursive-include bioscout/config *.yaml *.xml
 recursive-include bioscout/setup_files *.xml *.txt
 recursive-include bioscout/models *.osim *.txt
 recursive-include bioscout/tps_personalise *.xml *.yaml *.md
+# The force surrogate (122 KB) and its model card. The 9.4 MB MediaPipe task
+# file that sits beside them at runtime is NOT shipped: *.task is gitignored and
+# pose.py resolves it from bioscout/record/ or downloads instructions.
+recursive-include bioscout/movement_detector/markerless/models *.pkl *.md

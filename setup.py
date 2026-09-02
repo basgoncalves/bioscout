@@ -88,6 +88,9 @@ setup(
         # falls back or fails. Source checkouts hid it.
         'bioscout.muscle_inspect': ['validation/*.csv', 'validation/*.json'],
         'bioscout.utils': ['*.jpg', '*.png'],
+        # The force surrogate the markerless pipeline loads. Not the 9.4 MB
+        # MediaPipe task file, which is gitignored and resolved at runtime.
+        'bioscout.movement_detector.markerless': ['models/*.pkl', 'models/*.md'],
         # *.zip is torch_cpu.zip; torch_cpu.dll is excluded below.
         'bioscout.utils.ceinms.bin': ['*.exe', '*.dll', '*.txt', '*.zip'],
     },
