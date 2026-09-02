@@ -2,12 +2,25 @@
 Markerless single-camera movement analysis: video -> pose -> kinematics ->
 reps -> inverse dynamics -> muscle-force estimate.
 
-This is the desktop source of truth for the BioScout Web browser app
-(https://github.com/basgoncalves/bioscout-web), whose ``pullupkit.js`` is a
-line-by-line port of these modules. The two are held together by a fixture,
-``reference.json``, checked from both sides in that repository's CI -- see its
-*Verification* section. Change anything numerical in here and that check will
-fail until the fixture and the port are updated with it.
+Layout
+------
+``kinematics.py``  what every movement shares: landmark naming, angle and
+                   smoothing helpers, pixel-to-metre scaling, view quality.
+``pullup.py``      the pull-up activity.
+``squat.py``       the squat activity.
+``session.py``     orchestration; ``ACTIVITIES`` is the registry, and adding a
+                   movement means adding an entry there plus a module beside
+                   pullup.py -- not editing ``analyse()``.
+``pose.py``        MediaPipe extraction, kept behind a thin interface.
+``dynamics.py``    sagittal inverse dynamics; GRF derived, not assumed.
+``forces.py``      pluggable force model (the bundled surrogate is NOT valid
+                   for these activities -- see models/MODEL_CARD.md).
+
+No activity owns the generic names. That is deliberate: this arrived as
+"pullupkit", where the pull-up held ``build_features``/``find_reps``/
+``DRIVEN_COORDS`` in the shared module and the squat had to qualify all of its
+own, so "the pipeline" silently meant "the pull-up pipeline" and a third
+movement had nowhere obvious to go.
 
 Relationship to the rest of ``movement_detector``
 -------------------------------------------------
@@ -21,6 +34,15 @@ There is an overlap to resolve: ``movement_detector/pullup.py`` on the
 ``features``/``detector``. It is unmerged and does not do kinematics export or
 dynamics. Two rep counters should not both survive -- pick one before either
 ships.
+
+Relationship to BioScout Web
+----------------------------
+This is the desktop source of truth for the browser app
+(https://github.com/basgoncalves/bioscout-web), whose ported JavaScript is a
+line-by-line translation of these modules. The two are held together by a
+fixture, ``reference.json``, checked from both sides in that repository's CI.
+Change anything numerical here and that check fails until the fixture and the
+port are updated with it.
 
 Usage
 -----

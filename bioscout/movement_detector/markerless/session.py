@@ -12,28 +12,28 @@ import os
 import numpy as np
 
 from . import forces as force_mod
+from . import pullup as pullup_mod
 from . import squat as squat_mod
-from .kinematics import (
-    DRIVEN_COORDS, PullupConfig, build_features, compute_px_per_m, find_reps,
-    reference_positions, rep_coordinates, view_quality, write_mot,
-)
+from .kinematics import compute_px_per_m, view_quality, write_mot
 
-DEFAULT_CFG = PullupConfig(top_rise_frac=0.50, min_rep_frames=12,
-                           min_elbow_flexion_deg=40, smooth_win=5)
+DEFAULT_CFG = pullup_mod.PullupConfig(top_rise_frac=0.50, min_rep_frames=12,
+                                      min_elbow_flexion_deg=40, smooth_win=5)
 
 # Each activity supplies its own feature builder, rep detector, coordinate
 # mapper and export column set. Adding a movement means adding an entry here,
-# not editing analyse().
+# not editing analyse(). Both activities qualify their names by module, so
+# neither is the implicit default -- see pullup.py's docstring for why that
+# matters.
 ACTIVITIES = {
     "pullup": {
         "label": "a pull-up",
-        "config": PullupConfig,
+        "config": pullup_mod.PullupConfig,
         "default_cfg": DEFAULT_CFG,
-        "features": build_features,
-        "find_reps": find_reps,
-        "coords": rep_coordinates,
-        "reference": reference_positions,
-        "columns": DRIVEN_COORDS,
+        "features": pullup_mod.build_pullup_features,
+        "find_reps": pullup_mod.find_pullup_reps,
+        "coords": pullup_mod.pullup_rep_coordinates,
+        "reference": pullup_mod.reference_positions,
+        "columns": pullup_mod.PULLUP_DRIVEN_COORDS,
         "phase_names": ("concentric_s", "eccentric_s"),
     },
     "squat": {

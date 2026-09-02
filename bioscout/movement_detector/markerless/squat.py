@@ -4,7 +4,9 @@ squat.py -- rep detection and joint angles for squats.
 A squat is not a pull-up upside down; it needs its own detector. The pull-up
 code tracks the body RISING from a dead hang and gates on the hands being
 overhead. A squat starts standing, descends, and returns, with the hands
-nowhere near the head -- run through find_reps() it yields nothing at all.
+nowhere near the head -- run through find_pullup_reps() it yields nothing at
+all. This module and pullup.py are peers; what they share lives in
+kinematics.py.
 
 Sign conventions here are Rajagopal's, because that is what the FAIS force
 model was trained on. Confirmed empirically from the model's own
@@ -20,7 +22,7 @@ from dataclasses import dataclass, asdict
 
 import numpy as np
 
-from .kinematics import _angle3, _mid, interp_nan, smooth
+from .kinematics import _angle3, _local_maxima, _mid, interp_nan, smooth
 
 #: Ankle joint centre height above the floor, in metres. Used to turn a
 #: measured hip-above-ankle distance into an absolute pelvis height.
@@ -143,19 +145,6 @@ def build_squat_features(poses):
         np.isfinite(F["toe_cy"])) or np.any(np.isfinite(F["ankle_cy"])) else 0.0
     F["_coverage"] = len(poses) / n
     return F
-
-
-def _local_maxima(arr, min_distance, min_height):
-    n = len(arr)
-    cand = [i for i in range(1, n - 1)
-            if arr[i] >= min_height and arr[i] >= arr[i - 1] and arr[i] > arr[i + 1]]
-    cand.sort(key=lambda i: arr[i], reverse=True)
-    chosen = []
-    for i in cand:
-        if all(abs(i - j) >= min_distance for j in chosen):
-            chosen.append(i)
-    chosen.sort()
-    return chosen
 
 
 def find_squat_reps(F, cfg: SquatConfig):
