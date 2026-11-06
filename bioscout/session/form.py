@@ -60,6 +60,7 @@ ITERATION_FIELDS = (
     ("label", "label", "text", ""),
     ("color", "colour", "text", ""),
     ("group", "group", "text", ""),
+    ("engine", "engine (opensim | pyosim)", "text", ""),
     ("model_generic", "generic model", "text", ""),
     ("model_scaled", "scaled model", "text", ""),
     ("markerset", "markerset", "text", ""),

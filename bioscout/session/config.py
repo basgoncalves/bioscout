@@ -62,6 +62,7 @@ class Model:
     markerset: Optional[str] = None        # marker set .xml this model is scaled with
     so_actuators: Optional[str] = None     # SO actuator .xml (replaces the model ones)
     so_residuals_from_id: bool = False     # raise pelvis residual optimal_force to the peak ID residual
+    engine: str = "opensim"                # opensim | pyosim: what runs scaling, IK, ID, MA, SO and JRA
     label: Optional[str] = None
     color: str = "black"
     group: Optional[str] = None
@@ -602,6 +603,8 @@ class IterationKeys:
     scale_tool: Optional[str] = None         # ScaleTool setup TEMPLATE .xml (MeasurementSet, scaling order,
                                              # preserve_mass_distribution); bioscout fills its paths/mass/time
     so_residuals_from_id: bool = False       # before SO: pelvis FX..MZ optimal_force >= peak |ID residual|
+    engine: str = "opensim"                  # opensim | pyosim: OpenSim's tools, or bioscout.pyosim (pure
+                                             # numpy/scipy, same files and layout) for scale/IK/ID/MA/SO/JRA
     # scaling recipe
     static_trial: Optional[str] = None       # default: the session's static_trial
     linear_scaling: bool = True              # ScaleTool: scale the segments
@@ -1538,6 +1541,7 @@ def read_session_yaml(path) -> SessionSpec:
             markerset=m.get("markerset"),
             so_actuators=m.get("so_actuators") or None,
             so_residuals_from_id=yaml_bool(m.get("so_residuals_from_id", False)),
+            engine=str(m.get("engine") or "opensim").strip().lower(),
             label=m.get("label"),
             color=m.get("color", "black"),
             group=m.get("group"),
@@ -1649,6 +1653,7 @@ def _spec_to_dict(spec: SessionSpec) -> dict:
             if not m.muscle_opt:     it["muscle_opt"] = False
             if m.so_actuators: it["so_actuators"] = m.so_actuators
             if m.so_residuals_from_id: it["so_residuals_from_id"] = True
+            it["engine"] = m.engine or "opensim"   # always written: which engine ran is part of the result
             if m.opt_neval is not None:   it["opt_neval"] = m.opt_neval
             if m.mvic_factor is not None: it["mvic_factor"] = m.mvic_factor
             if m.fmax_scaling: it["fmax_scaling"] = m.fmax_scaling
