@@ -363,6 +363,73 @@ def _console_owned():
             and not in_notebook())
 
 
+def _pid_alive(pid):
+    """Is process ``pid`` still running? (Windows: OpenProcess/GetExitCodeProcess,
+    never os.kill, which TERMINATES there.)"""
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)          # QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            code = ctypes.c_ulong()
+            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+            k.CloseHandle(h)
+            return bool(ok) and code.value == 259          # STILL_ACTIVE
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+_LIVE_SLOT = None          # k of the run log's live_<k>.log, when it has one
+
+
+def _live_log_alias(path, max_slots=8):
+    """Hard-link the run log as ``<log dir>/live_<k>.log`` in the first slot no
+    RUNNING process owns, and return that alias (or None).
+
+    The editor is pointed at the alias, so successive runs reuse the same tab
+    (VS Code reloads the file when the link is re-pointed) and the open tabs
+    never outnumber the runs going at once. The timestamped bioscout_<time>.log
+    stays the record; the alias is the same file under a second name."""
+    d = os.path.dirname(os.path.abspath(path))
+    for k in range(1, max_slots + 1):
+        alias = os.path.join(d, f"live_{k}.log")
+        owner = alias + ".pid"
+        try:
+            with open(owner, encoding="utf-8") as fh:
+                pid = fh.read().strip()
+        except Exception:
+            pid = ""
+        if pid and pid != str(os.getpid()) and _pid_alive(pid):
+            continue                                        # slot busy: another live run
+        try:
+            if os.path.lexists(alias):
+                os.remove(alias)
+            os.link(path, alias)
+            with open(owner, "w", encoding="utf-8") as fh:
+                fh.write(str(os.getpid()))
+            global _LIVE_SLOT
+            _LIVE_SLOT = k
+            return alias
+        except Exception:
+            return None                                     # no hard links here: per-run tab
+    return None
+
+
 def _open_log_viewer(path):
     """Open the run log in the user's text editor as soon as it exists.
 
@@ -374,8 +441,9 @@ def _open_log_viewer(path):
          so the tab follows the run as bioscout writes it.
       3. The system default app for ``.log`` files.
 
-    Every ``Session(...)`` starts a new ``bioscout_<time>.log``, and each one
-    is opened, so a multi-session run gives one tab per session.
+    Every ``Session(...)`` starts a new ``bioscout_<time>.log``; the editor is
+    pointed at a reusable hard link ``live_<k>.log`` to it (see _live_log_alias),
+    so finished runs do not pile up tabs (BIOSCOUT_LOG_TABS=per-run: one tab per log).
     Off with ``BIOSCOUT_OPEN_LOG=0``. Never in a notebook, a test run or a
     child process (multiprocessing workers start logs of their own).
     """
@@ -388,6 +456,22 @@ def _open_log_viewer(path):
         import multiprocessing as _mp
         if _mp.parent_process() is not None:
             return
+        import shlex
+        import shutil
+        import subprocess
+        # one reusable tab per concurrently running bioscout, not one per run
+        # (VS Code cannot close a tab from its CLI). BIOSCOUT_LOG_TABS=per-run
+        # restores a new tab for every log.
+        if os.environ.get("BIOSCOUT_LOG_TABS", "reuse").strip().lower() != "per-run":
+            path = _live_log_alias(path) or path
+        _open_in_editor(path)
+    except Exception:
+        pass
+
+
+def _open_in_editor(path):
+    """Open ``path`` in BIOSCOUT_LOG_VIEWER, else VS Code (``code -r``), else the system app."""
+    try:
         import shlex
         import shutil
         import subprocess
@@ -467,6 +551,11 @@ def start_logging(name="run", log_dir=None, filename=None, append=False,
         # No subject/session in the name (2026-08-17) — the heading inside
         # the file says what was run.
         filename = f"bioscout_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+        # 2026-11-04: + the command (bioscout_<time>_simulate_so_gpkv4.log), so runs a
+        # few seconds apart can be told apart without opening them
+        _tag = _command_tag()
+        if _tag:
+            filename = filename[:-4] + "_" + _tag + ".log"
     path = os.path.join(log_dir, filename)
     # Two runs in the same second must not overwrite each other's log.
     if not append and os.path.exists(path):
@@ -883,3 +972,116 @@ def fig_size(nrows, ncols):
     fs = float(getattr(ps, "fig_scale", 1.0) or 1.0)
     return (max(1, int(ncols)) * col_mult * fs,
             max(1, int(nrows)) * row_mult * fs)
+
+
+# --- per-step logs (2026-11-04) ----------------------------------------------
+#: The run log (logs/bioscout_<time>_<command>.log) keeps the stage banners and ONE
+#: line per trial and step (ok / FAILED, time, warnings, where the details are).
+#: Everything a step prints goes to its own log beside its results, e.g.
+#: <trial>/static_optimisation/so.log. BIOSCOUT_STEP_LOGS=0 puts it all back in the
+#: run log.
+_STEP_DEPTH = 0
+
+
+def step_logs_on():
+    return (_SAVED_STREAMS is not None and _LOG_STARTED
+            and os.environ.get("BIOSCOUT_STEP_LOGS", "1").lower() not in ("0", "false", "off"))
+
+
+@_contextlib.contextmanager
+def step_log(path, label=""):
+    """Send everything printed inside the block to ``path`` (and to the terminal with
+    --verbose) instead of the run log. Yields a dict filled on exit with
+    ``warnings`` (lines with WARNING/Warning) and ``path`` (None when not redirected:
+    library use, a nested step, or BIOSCOUT_STEP_LOGS=0)."""
+    global _STEP_DEPTH
+    info = {"path": None, "warnings": 0, "skipped": False}
+    if _STEP_DEPTH or not step_logs_on():
+        yield info
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    # appended, one block per run: a step that only finds its results already there
+    # (e.g. IK reused by SO) must not wipe the details of the run that made them
+    fh = open(path, "a", encoding="utf-8", errors="replace")
+    _start = fh.tell()
+    fh.write(f"\n=== {label}   {datetime.datetime.now():%Y-%m-%d %H:%M:%S}   (run log: {_LOG_PATH})\n")
+    old = (sys.stdout, sys.stderr)
+    try:
+        old[0].flush()
+    except Exception:
+        pass
+    fh.flush()
+    # say where the details go BEFORE the step runs, in the run log, and show the step
+    # log live: logs/live_<k>_step.log is re-pointed at each step's log (one editor tab
+    # that follows the run step by step; opened with the first step)
+    try:
+        _who, _, _what = label.partition(": ")
+        _head = f"  [{_who}] {_what:<27}" if _what else f"  {label:<38}"
+        print(f"{_head} running ...    -> {os.path.abspath(path)}", file=old[0], flush=True)
+    except Exception:
+        pass
+    _live_step_alias(path)
+    streams = (fh,) if QUIET_CONSOLE else (console_stream(), fh)
+    sys.stdout = _Tee(*streams, raw=True)
+    sys.stderr = _Tee(*streams, raw=True)
+    _STEP_DEPTH += 1
+    info["path"] = os.path.abspath(path)
+    try:
+        yield info
+    finally:
+        _STEP_DEPTH -= 1
+        try:
+            sys.stdout.flush(); sys.stderr.flush()
+        except Exception:
+            pass
+        sys.stdout, sys.stderr = old
+        fh.close()
+        try:
+            with open(path, encoding="utf-8", errors="replace") as _f:
+                _f.seek(_start)                                  # this run's block only
+                _blk = _f.read().splitlines()[2:]
+            info["warnings"] = sum(1 for l in _blk if re.search(r"warning", l, re.IGNORECASE))
+            # a step that only found its results: "kept" / "already exists" / "[skip]"
+            _txt = [l for l in _blk if l.strip()]
+            info["skipped"] = (not _txt) or (len(_txt) <= 3 and any(
+                re.search(r"\bkept\b|already exists|\[skip\]|skipped", l, re.IGNORECASE) for l in _txt))
+        except Exception:
+            pass
+
+
+_STEP_ALIAS_OPENED = False
+
+
+def _live_step_alias(path):
+    global _STEP_ALIAS_OPENED
+    if _LOG_PATH is None or os.environ.get("BIOSCOUT_OPEN_LOG", "1").strip().lower() in ("0", "false", "off", "no"):
+        return
+    try:
+        alias = os.path.join(os.path.dirname(_LOG_PATH), f"live_{_LIVE_SLOT or 1}_step.log")
+        if os.path.lexists(alias):
+            os.remove(alias)
+        os.link(os.path.abspath(path), alias)
+    except Exception:
+        return
+    if not _STEP_ALIAS_OPENED:
+        _STEP_ALIAS_OPENED = True
+        try:
+            import multiprocessing as _mp
+            if _mp.parent_process() is None and not in_notebook() and "pytest" not in sys.modules:
+                _open_in_editor(alias)
+        except Exception:
+            pass
+
+
+def _command_tag():
+    """'simulate_cmc_gpkv4' from `bioscout simulate cmc <session> --iteration gpkv4 ...`, so
+    the run log says which command it is; '' when not run from the bioscout CLI."""
+    a = list(sys.argv[1:])
+    if not a or not os.path.basename(sys.argv[0]).lower().startswith("bioscout"):
+        return ""
+    words = [w for w in a[:2] if re.fullmatch(r"[A-Za-z][\w-]*", w)]
+    for flag in ("--iteration", "--trial"):
+        if flag in a and a.index(flag) + 1 < len(a):
+            words.append(a[a.index(flag) + 1].replace(",", "+")[:40])
+    tag = "_".join(words)
+    return re.sub(r"[^\w+-]", "", tag)[:80]

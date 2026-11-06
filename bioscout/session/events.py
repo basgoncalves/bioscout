@@ -26,6 +26,9 @@ from pathlib import Path
 
 import numpy as np
 
+#: [events] warnings already printed (each is printed once per process)
+_EVENT_WARNED: set = set()
+
 __all__ = ["Event", "load_definitions", "resolve_events", "trial_signals",
            "trial_phases", "events_for_trial", "DEFAULT_FILE"]
 
@@ -240,7 +243,10 @@ def resolve_events(defs: dict, side: str, phases: dict, signals: dict,
             if strict:
                 raise ValueError(f"{name}: {exc}") from None
             import sys
-            print(f"  [events] {name}: {exc}", file=sys.stderr)
+            _msg = f"  [events] {name}: {exc}"
+            if _msg not in _EVENT_WARNED:       # once per process (2026-10-19)
+                _EVENT_WARNED.add(_msg)
+                print(_msg, file=sys.stderr)
             continue
         if e is not None:
             out.append(e)

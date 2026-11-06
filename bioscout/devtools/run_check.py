@@ -36,6 +36,7 @@ STAGE_OUTPUTS = {
     "muscle_analysis": (os.path.join("muscle_analysis",
                                      "_MuscleAnalysis_Length.sto"),),
     "so": (os.path.join("static_optimisation", "*force.sto"),),
+    "cmc": (os.path.join("joint_contact_forces", "output_cmc.sto"),),
     "mew": (os.path.join("mew", "MuscleForces.sto"),),
     "ceinms": (os.path.join("ceinms", "Execution_*", "MuscleForces.sto"),),
 }
