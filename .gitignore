@@ -100,3 +100,13 @@ ziLDWRaE
 # the artifact-deletion helper: local convenience, not shipped
 cleanup.sh
 deploy/hosted_engine/space/
+
+# generated docs (sphinx build + autosummary stubs) -- rebuild, don't commit
+docs/site/
+docs/_autosummary/
+# editor/agent backups and scratch patches
+*.bak_*
+*.pre_*
+*.patch
+# local CEINMS copy (the shipped binaries live in bioscout/simulate/ceinms/bin)
+bioscout/utils/ceinms/
