@@ -67,6 +67,8 @@ setup(
     ],
     extras_require={
         "recording": ["opencv-python", "mediapipe", "imageio-ffmpeg"],
+        # bioscout.model.mri2msk (personalised models from MRI segmentations)
+        "mri2msk": ["trimesh", "fast-simplification", "openpyxl", "customtkinter"],
     },
     # Duplicate keys here are silently dropped by Python (the last one wins),
     # so this stays a single de-duplicated block.
@@ -80,6 +82,7 @@ setup(
         'bioscout.session': ['*.yaml'],
         'bioscout.models': ['*.osim', '*.txt'],
         'bioscout.setup_files': ['*.xml', '*.txt'],
+        'bioscout.model.mri2msk': ['templates/*.xml', 'assets/*.png', 'assets/*.ico', '*.md'],
         'bioscout.tests': ['*.xml'],
         # The bone-landmark template is the source side of every TPS warp;
         # without it a wheel install fails at the first personalise call.
