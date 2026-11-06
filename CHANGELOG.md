@@ -14,6 +14,34 @@ All notable changes to BioScout are documented here.
 
 
 
+
+## Unreleased
+
+### Added
+- `bioscout.results` package: load simulation results straight into Python.
+  `session.results(...)`, `iteration.results(...)` and `project.results(...)` are
+  the same call: `sess.results("so_forces", trial="Gehen*", iteration="gpkv4",
+  var="*_r", window="cycle")` returns a `ResultSet` (DataFrame + helpers);
+  `sess.results()` lists what exists without reading any file. Aliases (`ik`,
+  `id`, `so_forces`, `jcf_so`, `ceinms_forces`, ...), groups (`moment_arms`) and
+  globs work for files, trials, iterations and channels.
+- `ResultSet` actions: `plot` (inline, saves only with `save=`), `mean`,
+  `to_bw`, `peak`, `at`, `stats`; add your own with `@bioscout.results.action`,
+  new file kinds with `bioscout.results.register_file`.
+- `Project.session(subject, session)`.
+- `Project.init(path)`: create a project from Python, same as `bioscout init`
+  (both call `bioscout.core.scaffold.scaffold_project`), then open it.
+
+### Changed (breaking)
+- `bioscout.session.results` is gone; the CSV export is
+  `bioscout.results.export_results` (same output, byte-identical; the
+  `bioscout project results` command is unchanged).
+- `bioscout.init_project()` removed: use `bs.Project(path)` to open a project
+  and `bs.Project.init(path)` to create one.
+- `bioscout.init.project_config` moved to `bioscout.project_config` (the
+  `bioscout/init/` folder is gone, so `bs.init` no longer shows up next to
+  `Project.init`).
+
 ## 3.1.1 — 2026-10-15
 
 - README / PyPI page: the version under the logo said v2.0.0; setup.py now fills it in from `__version__` at build time.

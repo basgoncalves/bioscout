@@ -15,6 +15,9 @@ import time
 import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:                       # editor types only, no runtime import
+    from bioscout.results import Results
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
@@ -66,6 +69,62 @@ CEINMS_AUTOPREP = False
 # It is the runnable unit: scale_model / run / plot_summary all live here. Get
 # one from a Session:  Session(path).iteration("gpk_mri").
 # ===========================================================================
+def _so_force_columns(trial):
+    """Column names of a trial's StaticOptimization_force.sto (for contrib_groups callables)."""
+    f = os.path.join(trial.path, "static_optimisation", "StaticOptimization_force.sto")
+    with open(f, encoding="utf-8", errors="replace") as fh:
+        for ln in fh:
+            if ln.strip().lower() == "endheader":
+                return set(next(fh).split())
+    return set()
+
+
+
+# --- per-step logs (2026-11-04) -------------------------------------------------
+#: where each per-trial step writes its details, relative to the trial folder
+STEP_LOGS = {
+    "ik": ("IK", "external_biomechanics/out.log"),
+    "id": ("ID", "external_biomechanics/out.log"),
+    "ma": ("MA", "muscle_analysis/out.log"),
+    "so": ("SO + muscle moments", "static_optimisation/out.log"),
+    "jra": ("JRA (SO)", "joint_contact_forces/out.log"),
+    "jra_contributions": ("JRA contributions (SO)", "joint_contact_forces/out.log"),
+    "ceinms_execution": ("CEINMS + muscle moments", "ceinms/out.log"),
+    "ceinms_jra": ("JRA (CEINMS)", "joint_contact_forces/out.log"),
+    "ceinms_jra_contributions": ("JRA contributions (CEINMS)", "joint_contact_forces/out.log"),
+    "cmc": ("CMC + JRA", "forward_simulation/cmc/out.log"),
+    "forward": ("forward simulation", "forward_simulation/out.log"),
+    "rra": ("RRA", "residual_reduction/out.log"),
+}
+
+
+def _in_step_log(t, step, fn, **kw):
+    """Run one per-trial step with its output in its own log (STEP_LOGS) and one line
+    in the run log: trial, step, ok / FAILED, time, warnings, the log's path."""
+    import time as _time
+    from bioscout.utils import shared as _sh
+    label, rel = STEP_LOGS.get(step, (step, f"{step}.log"))
+    trial = os.path.basename(os.path.normpath(t.path))
+    path = os.path.join(t.path, rel)
+    t0 = _time.perf_counter()
+    err = None
+    with _sh.step_log(path, f"{trial}: {label}") as info:
+        try:
+            out = fn(**kw)
+        except Exception as e:                                   # noqa: BLE001
+            import traceback
+            traceback.print_exc()                                # -> the step log
+            err = e
+    if info["path"]:
+        dt = _time.perf_counter() - t0
+        w = f"  {info['warnings']} warning(s)" if info["warnings"] else ""
+        state = ("kept" if info.get("skipped") else "ok") if err is None else f"FAILED ({type(err).__name__}: {str(err).splitlines()[0][:120] if str(err) else ''})"
+        print(f"  [{trial}] {label:<27} {state:<6} {dt:7.1f} s{w}")
+    if err is not None:
+        raise err
+    return out
+
+
 class Iteration(IterationKeys):
     """One (model-iteration, recording-session) on disk — the RUNNABLE unit.
 
@@ -182,6 +241,25 @@ class Iteration(IterationKeys):
     @property
     def path(self):
         return _layout.iteration_path(self.session_dir, self.iteration)
+
+    @property
+    def results(self) -> "Results":
+        """This iteration's results (plus the session's experimental data)::
+
+            it.results("ik", trial="Gehen_01").plot()
+
+        Same call as :attr:`bioscout.Session.results`, iteration fixed."""
+        from bioscout.results import for_session
+        return for_session(self.session_dir, iteration=self.iteration)
+
+    @property
+    def engine(self):
+        """``opensim`` (default) or ``pyosim``: what runs this iteration's scaling, IK,
+        ID, MA, SO and JRA (session.yaml ``iterations.<name>.engine``)."""
+        e = str((_iteration_blocks(self._cfg).get(self.iteration) or {}).get("engine") or "opensim").strip().lower()
+        if e not in ("opensim", "pyosim"):
+            raise ValueError(f"{self.tag}: engine {e!r} unknown (opensim | pyosim)")
+        return e
 
     @property
     def tag(self):
@@ -321,7 +399,10 @@ class Iteration(IterationKeys):
                     f.lower().endswith(".trc") for f in os.listdir(_exp))
             except Exception:
                 pass
-        t._scaffold_output_dirs = not _norm_only
+        # Never scaffold stage output folders up front: each stage creates its
+        # own folder when it first runs (analysis._install_stage_dirs), so
+        # exbiomec-only runs no longer leave empty ceinms/mrs/jcf/... trees.
+        t._scaffold_output_dirs = False
         t._apply_inputs_layout()
         self._apply_session_config(t, name, force_type)     # session.yaml is the source of truth
         if _norm_only:
@@ -513,6 +594,7 @@ class Iteration(IterationKeys):
         _ikw.update((_iteration_blocks(self._cfg).get(self.iteration) or {}).get("ik_weights") or {})
         if _ikw:
             cfg["ik_weights"] = {str(k): float(v) for k, v in _ikw.items()}
+        cfg["engine"] = self.engine
         # Channel -> muscles for THIS session's electrode set. Sessions captured
         # months apart label and place channels differently, so the session file
         # outranks the project-wide settings.BatchSettings.emg_muscle_mapping.
@@ -1274,9 +1356,6 @@ class Iteration(IterationKeys):
             and the line to add is printed. A different ``mvic_factor`` is a
             different iteration (session.add_iteration)."""
         import shutil
-        from bioscout.model.edit.osim_ops import increase_isometric_force
-        from bioscout.model.muscle_optimize import muscle_optimimizer_Modenese2015
-        from bioscout.model.scale.osim_scale import scale_model
         # session.yaml owns the static trial's NAME (see the parameter docs).
         if not static_trial:
             static_trial = str(self.static_trial or "Static_01")
@@ -1423,11 +1502,32 @@ class Iteration(IterationKeys):
             _spec = spec_from_config(self.scale_measurements)
             print(f"[Session] {self.tag}: MeasurementSet from session.yaml: "
                   + ", ".join(n for n, _p, _b in _spec))
-        scale_model(generic, trc, scaled, scale_setup_output_dir=_mdir,
+        if self.engine == "pyosim":
+            # a pyosim iteration never uses OpenSim: refuse the OpenSim-only extras up front
+            _no = [k for k, on in (("muscle_opt (Modenese2015)", muscle_opt),
+                                   ("fmax_scaling", (it.get("fmax_scaling") or ""))) if on]
+            if _no:
+                raise NotImplementedError(
+                    f"{self.tag}: engine pyosim does not implement {', '.join(_no)} and never falls "
+                    f"back to OpenSim. Nothing was scaled. Remove them or use engine: opensim.")
+            from bioscout.model.scale.pyosim_scale import scale_model as _scale_fn
+            print(f"[Session] {self.tag}: engine pyosim -- scaling with bioscout.pyosim")
+        else:
+            from bioscout.model.scale.osim_scale import scale_model as _scale_fn
+        import time as _time, json as _json
+        _t0 = _time.perf_counter()
+        _scale_fn(generic, trc, scaled, scale_setup_output_dir=_mdir,
                     mass=(float(mass) if mass else None), marker_set_file=markerset,
                     linear_scaling=linear, marker_placer=mplace,
                     marker_aliases=_aliases or None, measurement_spec=_spec,
                     scale_tool=_tool)
+        try:                                       # wall time -> <iteration>/timing_scale.json
+            os.makedirs(self.path, exist_ok=True)
+            _json.dump({"engine": self.engine, "seconds": {"scale": round(_time.perf_counter() - _t0, 3)},
+                        "finished": _time.strftime("%Y-%m-%d %H:%M:%S")},
+                       open(os.path.join(self.path, "timing_scale.json"), "w"), indent=1)
+        except Exception:                                        # noqa: BLE001
+            pass
 
         # Name the model after what it IS. OpenSim's ScaleTool names its output
         # after the tool, and openSim.scale_model calls the tool "ModelScaling",
@@ -1471,6 +1571,7 @@ class Iteration(IterationKeys):
         #    already carries personalised muscle-tendon parameters (validated MRI
         #    model), so its OFL/TSL are kept instead of being re-fit to a reference.
         if muscle_opt:
+            from bioscout.model.muscle_optimize import muscle_optimimizer_Modenese2015
             print(f"[Session] {self.tag}: muscle optimisation (Modenese2015, N={n_eval}) — slow ...")
             base = os.path.join(
                 _mdir, f"{self.subject_name}_scaled_opt_N{n_eval}.osim")
@@ -1512,6 +1613,10 @@ class Iteration(IterationKeys):
         # 4) SO model = model_scaled with isometric force x mvic_factor, beside it.
         #    increase_isometric_force writes <target>_increased_X.osim.
         if mvic_factor != 1.0:
+            if self.engine == "pyosim":
+                from bioscout.model.scale.pyosim_scale import increase_isometric_force
+            else:
+                from bioscout.model.edit.osim_ops import increase_isometric_force
             increase_isometric_force(target, muscleList="all", factor=mvic_factor)
             produced = target.replace(".osim", f"_increased_{mvic_factor:.2f}.osim")
             if os.path.exists(produced) and os.path.abspath(produced) != os.path.abspath(so_path):
@@ -1647,6 +1752,94 @@ class Iteration(IterationKeys):
                     f"{type(e).__name__}: {e}")
         return done
 
+    def _ceinms_pyosim(self, names, calibrate, calibration_trials, ce, replace, log,
+                       do_contrib, contrib_groups, contrib_jobs, res, timed):
+        """CEINMS for an iteration with engine: pyosim -- bioscout.pyosim.ceinms, NOT CEINMS.exe
+        (a Python stand-in: rigid tendon, its own calibration). Same folders as the CEINMS
+        route: calibration in <iteration>/ceinms_calibration (calibration.json + calibrated
+        .osim), execution in <trial>/ceinms/Execution*_a_b_g/ (MuscleForces.sto,
+        Activations.sto, Torques.sto), then muscle moments, JRA and contributions."""
+        import json as _json
+        import shutil as _sh
+        import time as _time
+        from bioscout.pyosim import ceinms as _pc
+        from bioscout.session.config import resolve_emg_map
+        a, b, g = (float(ce.get(k, d)) for k, d in (("alpha", 1), ("beta", 1), ("gamma", 30)))
+        try:
+            emg_map = resolve_emg_map(self._cfg, self.iteration)
+        except Exception:                                            # noqa: BLE001
+            emg_map = None
+        cal_dir = os.path.join(self.path, "ceinms_calibration")
+        cal_json = os.path.join(cal_dir, "calibration.json")
+
+        def _inputs(t):
+            ab = lambda p: os.path.abspath(os.path.join(t.path, p))
+            return ab(t.model_dir), ab(t.ik), ab(t.id), ab(t.ceinms_excitations)
+
+        if calibrate or not os.path.exists(cal_json):
+            cal = list(calibration_trials) if calibration_trials else (self._resolve_calibration_trials() or [])
+            if not cal:
+                log("  [CEINMS pyosim ERROR] no calibration trial (session.yaml trials.<name>.calibration: true)")
+                return
+            if len(cal) > 1:
+                log(f"  [CEINMS pyosim] calibrates on ONE trial: {cal[0]} (asked: {cal})")
+            ct = self.trial(cal[0], force_type="CEINMS")
+            m, ik, idf, emg = _inputs(ct)
+            log(f"  [CEINMS pyosim] calibration on {cal[0]} (alpha {a:g}, beta {b:g}, gamma {g:g}) ...")
+            _t0 = _time.perf_counter()
+            if os.path.isdir(cal_dir):
+                _sh.rmtree(cal_dir)
+            from bioscout.utils import shared as _shl
+            _clog = os.path.join(self.path, "ceinms_calibration.log")
+            with _shl.step_log(_clog, f"{self.tag}: CEINMS calibration (pyosim)") as _ci:
+                _pc.calibrate(m, ik, idf, emg if os.path.exists(emg) else None, cal_dir, alpha=a, beta=b, gamma=g,
+                              log=lambda x: print("    " + x), emg_map=emg_map)
+            if _ci["path"]:
+                log(f"  CEINMS calibration (pyosim, {cal[0]})  {_time.perf_counter() - _t0:7.1f} s  -> {_ci['path']}")
+            try:
+                _f = os.path.join(self.path, "timing_ceinms_calibration.json")
+                _json.dump({"engine": self.engine, "seconds": {"ceinms_calibration": round(_time.perf_counter() - _t0, 3)},
+                            "trial": cal[0], "finished": _time.strftime("%Y-%m-%d %H:%M:%S")}, open(_f, "w"), indent=1)
+            except Exception:                                        # noqa: BLE001
+                pass
+        cal_info = _json.load(open(cal_json))
+        cal_model = os.path.join(cal_dir, cal_info["model"])
+        for tn in names:
+            try:
+                t = self.trial(tn, force_type="CEINMS")
+                t.alpha, t.beta, t.gamma = (f"{x:g}" for x in (a, b, g))
+                m, ik, idf, emg = _inputs(t)
+                rel = t.ceinms_exe_out_rel()
+                out = os.path.join(t.path, rel)
+                log(f"  [CEINMS pyosim] {tn}: execution -> {rel}")
+
+                def _exe():
+                    os.makedirs(out, exist_ok=True)
+                    _pc.execute(cal_model, ik, idf, out, emg_mot=emg if os.path.exists(emg) else None,
+                                alpha=a, beta=b, gamma=g, calibration=cal_json, log=lambda x: log("    " + x),
+                                emg_map=emg_map)
+                    for src, dst in (("CEINMS_forces.sto", "MuscleForces.sto"), ("CEINMS_activations.sto", "Activations.sto"),
+                                     ("CEINMS_moments.sto", "Torques.sto")):
+                        _sh.copyfile(os.path.join(out, src), os.path.join(out, dst))
+                def _exe_all(**_):
+                    _exe()
+                    t.update_trial_attribute('jra_forces_ceinms', os.path.join(rel, 'MuscleForces.sto'))
+                    t.add_so_columns_to_ceinms_results()
+                    t.calculate_muscle_moments(forces_type="ceinms")
+                timed(t, "ceinms_execution", _exe_all)
+                timed(t, "ceinms_jra", t.run_jra_ceinms, replace=True)
+                _dc = do_contrib if do_contrib is not None else bool((self.config or {}).get("jra_contributions", True))
+                if _dc:
+                    try:
+                        timed(t, "ceinms_jra_contributions", t.run_jra_contributions, forces_type="ceinms",
+                              plot=True, replace=replace, groups=contrib_groups, n_jobs=contrib_jobs)
+                    except Exception as _e:                          # noqa: BLE001
+                        log(f"  [contrib WARNING] {tn} (CEINMS pyosim): {type(_e).__name__}: {_e}")
+                res["ceinms"].append(tn)
+                log(f"  [CEINMS pyosim ok] {tn}")
+            except Exception as e:                                   # noqa: BLE001
+                log(f"  [CEINMS pyosim ERROR] {tn}: {type(e).__name__}: {e}")
+
     def run(self, trials=None,
             export=False, export_src=None, *,
             detect=True,
@@ -1656,11 +1849,14 @@ class Iteration(IterationKeys):
             do_so=False,
             do_rra=False,
             do_forward=False,
+            do_cmc=False,
+            cmc_duration=None,
             do_mew=False,
             do_ceinms=False,
             calibrate=False, calibration_trials=None,
             replace=False,
             mew_opts=None,
+            do_contrib=None, contrib_groups=None, contrib_jobs=None,
             log=print, **_ignored):
         """Run the pipeline for THIS iteration.
 
@@ -1696,6 +1892,13 @@ class Iteration(IterationKeys):
                         :func:`bioscout.simulate.mew.analyse_trial` (``tier``,
                         ``smoothing``, ``filter_hz``, ``jcf``, ``plot``).
           do_ceinms   : CEINMS calibration (once) + per-trial execution -> JRA.
+          do_contrib  : after each trial's SO JRA, also the muscle-group
+                        contributions to the JCF (run_jra_contributions ->
+                        joint_contact_forces/contributions_so.*). Default: the
+                        iteration's ``jra_contributions`` in session.yaml, else True.
+                        ``contrib_groups`` = dict, or callable(SO force columns,
+                        trial) -> dict; ``contrib_jobs`` caps the parallel JRA runs.
+                        A failure here is logged and never fails the trial.
 
         ``replace`` overwrites existing outputs. ``trials`` defaults to all trials.
         ``calibrate`` (default True) — when do_ceinms is on, calibrate once first;
@@ -1750,10 +1953,13 @@ class Iteration(IterationKeys):
         names = ([trials] if isinstance(trials, str)
                  else list(trials)) if trials else self._trial_names()
         res = {"export": [], "exbiomec": [], "muscle_analysis": [], "so": [],
-               "rra": [], "forward": [], "mew": [], "ceinms": [], "skipped": []}
-        log(f"=== {self.tag}  trials={names}  export={export} exbiomec={do_exbiomec} "
-            f"ma={do_muscle_analysis} so={do_so} rra={do_rra} forward={do_forward} mew={do_mew} ceinms={do_ceinms} "
-            f"replace={replace} ===")
+               "rra": [], "cmc": [], "forward": [], "mew": [], "ceinms": [], "skipped": []}
+        # only the stages that will run (2026-10-19: was every flag, mostly False)
+        _on = [k for k, v in (("export", export), ("ID", do_exbiomec), ("MA", do_muscle_analysis),
+                              ("SO", do_so), ("RRA", do_rra), ("CMC", do_cmc), ("forward", do_forward),
+                              ("MEW", do_mew), ("CEINMS", do_ceinms)) if v]
+        log(f"=== {self.tag}  trials: {', '.join(names)}  stages: {' + '.join(_on) or 'none'}"
+            f"{'  (replace)' if replace else ''} ===")
 
         # -- Preflight: drop "ghost" trials with no raw experimental inputs. The
         # marker TRC is the fundamental input every stage (IK/ID/MA/SO/CEINMS)
@@ -1876,6 +2082,35 @@ class Iteration(IterationKeys):
             except Exception:
                 pass
 
+        def _timed(t, step, fn, **kw):
+            # wall time of each step -> <trial>/timing.json (engine, seconds per step, last run)
+            import time as _time, json as _json
+            _t0, _w0 = _time.perf_counter(), _time.time()
+            out = _in_step_log(t, step, fn, **kw)
+            try:
+                # only a step whose own result was (re)written is timed: a step skipped because
+                # its result exists takes ~0 s and must not overwrite the real time
+                _out = {"ik": [t.ik], "id": [t.id], "so": [t.so_forces], "jra": [t.jra],
+                        "ma": [os.path.join(t.ma, "_MuscleAnalysis_Length.sto")],
+                        "jra_contributions": [os.path.join(os.path.dirname(t.jra), "contributions_so.sto")],
+                        "ceinms_execution": [os.path.join(t.ceinms_exe_out_rel(), "MuscleForces.sto")],
+                        "ceinms_jra": [t.jra_ceinms],
+                        "ceinms_jra_contributions": [os.path.join(os.path.dirname(t.jra), "contributions_ceinms.sto")]
+                        }.get(step, [])
+                _ran = any(os.path.exists(os.path.join(t.path, _p)) and
+                           os.path.getmtime(os.path.join(t.path, _p)) >= _w0 - 1 for _p in _out)
+                if not _ran:
+                    return out
+                _f = os.path.join(t.path, "timing.json")
+                _d = _json.load(open(_f)) if os.path.exists(_f) else {}
+                _d["engine"] = self.engine
+                _d.setdefault("seconds", {})[step] = round(_time.perf_counter() - _t0, 3)
+                _d.setdefault("finished", {})[step] = _time.strftime("%Y-%m-%d %H:%M:%S")
+                _json.dump(_d, open(_f, "w"), indent=1)
+            except Exception:                                    # noqa: BLE001
+                pass
+            return out
+
         def _exbio(t, force=None):
             # ``force`` overrides ``replace``: prerequisite runs (before SO/CEINMS)
             # pass force=False so IK/ID are only computed when MISSING and are
@@ -1886,9 +2121,9 @@ class Iteration(IterationKeys):
                 print(f"[Session] {self.tag}: _exbio expects an Analyse, got {type(t)}")
                 return
                 
-            t.run_ik(replace=_r)
+            _timed(t, "ik", t.run_ik, replace=_r)
             _warn_frozen_ik(t)
-            t.run_id(replace=_r)
+            _timed(t, "id", t.run_id, replace=_r)
 
         def _warn_frozen_ik(t):
             """Loud warning if IK produced near-static kinematics (broken marker
@@ -1960,7 +2195,7 @@ class Iteration(IterationKeys):
                     log(f"[MA] {tn} — running (Muscle Analysis)")
                     t = self.trial(tn)
                     _log_inputs(tn, t, "MA")
-                    t.run_ma(replace=replace)
+                    _timed(t, "ma", t.run_ma, replace=replace)
                     res["muscle_analysis"].append(tn)
                     # Say WHERE, per trial. The old line was just "[MA ok] <trial>",
                     # so a stage that wrote eight folders named none of them.
@@ -1987,10 +2222,25 @@ class Iteration(IterationKeys):
                     if not do_muscle_analysis:
                         # SO's muscle moments need moment arms, and exbiomec no
                         # longer produces them — fill the gap without overwriting.
-                        t.run_ma(replace=False)
-                    t.run_so(replace=replace)
-                    t.calculate_muscle_moments(forces_type="so")
-                    t.run_jra(replace=replace)
+                        _timed(t, "ma", t.run_ma, replace=False)
+                    def _so_and_moments(**kw):
+                        out = t.run_so(**kw)
+                        t.calculate_muscle_moments(forces_type="so")    # part of SO: same out.log
+                        return out
+                    _timed(t, "so", _so_and_moments, replace=replace)
+                    _timed(t, "jra", t.run_jra, replace=replace)
+                    _dc = do_contrib
+                    if _dc is None:                 # session.yaml iterations.<it>.jra_contributions
+                        _dc = bool((self.config or {}).get("jra_contributions", True))
+                    if _dc:
+                        try:
+                            _g = contrib_groups
+                            if callable(_g):
+                                _g = _g(_so_force_columns(t), tn)
+                            _timed(t, "jra_contributions", t.run_jra_contributions, forces_type="so",
+                                   plot=True, replace=replace, groups=_g, n_jobs=contrib_jobs)
+                        except Exception as _e:                     # noqa: BLE001
+                            log(f"  [contrib WARNING] {tn}: {type(_e).__name__}: {_e}")
                     res["so"].append(tn)
                     log(f"  [SO ok] {tn}")
                     _close_figs()
@@ -2009,13 +2259,35 @@ class Iteration(IterationKeys):
                     log(f"[RRA] {tn} -> {os.path.abspath(os.path.join(t.path, t.rra_dir))}")
                     if not do_exbiomec:
                         _exbio(t, force=False)      # reuse existing IK/ID; only fill gaps
-                    _r = t.run_rra(replace=replace)
+                    _r = _timed(t, "rra", t.run_rra, replace=replace)
                     res["rra"].append(tn)
                     _d = os.path.abspath(os.path.join(t.path, t.rra_dir))
                     log(f"  [RRA ok] {tn} -> {_d}")
                     _close_figs()
                 except Exception as e:
                     log(f"  [RRA ERROR] {tn}: {e}")
+
+        if do_cmc:
+            # CMC alone (no open-loop forward replay): muscle-driven tracking ->
+            # JRA on the CMC forces in <trial>/joint_contact_forces/ (output_cmc.sto,
+            # jrf_so_vs_cmc.png, coverage, contributions_cmc), like SO.
+            _stage("CMC (computed muscle control -> joint reaction)", trials=names,
+                   model=_model_disp("SO"),
+                   output=os.path.join(os.path.abspath(self.path), "<trial>",
+                                       "forward_simulation", "cmc"),
+                   banner="CMC")
+            for tn in names:
+                try:
+                    log("")
+                    t = self.trial(tn)
+                    if not do_exbiomec:
+                        _exbio(t, force=False)      # reuse existing IK/ID; only fill gaps
+                    _timed(t, "cmc", t.run_forward, replace=replace, replay=False, duration=cmc_duration)
+                    res["cmc"].append(tn)
+                    log(f"  [CMC ok] {tn} -> {os.path.abspath(os.path.join(t.path, 'joint_contact_forces', 'output_cmc.sto'))}")
+                    _close_figs()
+                except Exception as e:
+                    log(f"  [CMC ERROR] {tn}: {e}")
 
         if do_forward:
             _stage("Forward simulation (CMC -> open-loop forward)", trials=names,
@@ -2028,7 +2300,7 @@ class Iteration(IterationKeys):
                     t = self.trial(tn)
                     if not do_exbiomec:
                         _exbio(t, force=False)      # reuse existing IK/ID; only fill gaps
-                    t.run_forward(replace=replace)
+                    _timed(t, "forward", t.run_forward, replace=replace)
                     res["forward"].append(tn)
                     log(f"  [FORWARD ok] {tn} -> {os.path.abspath(os.path.join(t.path, 'forward_simulation'))}")
                     _close_figs()
@@ -2054,7 +2326,7 @@ class Iteration(IterationKeys):
                     if not (do_exbiomec or do_so):
                         _exbio(t, force=False)          # reuse IK/ID; only fill gaps
                     if not (do_muscle_analysis or do_so):
-                        t.run_ma(replace=False)         # moment arms + lengths
+                        _timed(t, "ma", t.run_ma, replace=False)         # moment arms + lengths
                     from bioscout.simulate.so_files import pick as _pick, FORCE as _FORCE
                     _so_f = _pick(os.path.join(t.path, "static_optimisation", _FORCE))
                     if not os.path.exists(_so_f):
@@ -2074,7 +2346,11 @@ class Iteration(IterationKeys):
                 except Exception as e:
                     log(f"  [mew ERROR] {tn}: {e}")
 
-        if do_ceinms:
+        if do_ceinms and self.engine == "pyosim":
+            # pyosim iteration: bioscout.pyosim.ceinms (Python, rigid tendon), never CEINMS.exe
+            self._ceinms_pyosim(names, calibrate, calibration_trials, _ce, replace, log,
+                                do_contrib, contrib_groups, contrib_jobs, res, _timed)
+        elif do_ceinms:
             try:
                 # An UNCALIBRATED iteration has nothing to calibrate. `calibrate`
                 # is forced off HERE rather than left to the caller because
@@ -2157,7 +2433,20 @@ class Iteration(IterationKeys):
                             + " lack usable IK/ID/MA. Run that stage first, or set "
                               "CEINMS_AUTOPREP = True.")
                     log(f"  [CEINMS] calibrating (trials={calibration_trials or cal}) — slow ...")
-                    self.prepare_ceinms(replace=replace, calibration_trials=calibration_trials)
+                    import time as _tm, json as _js
+                    _c0 = _tm.perf_counter()
+                    from bioscout.utils import shared as _shl
+                    _clog = os.path.join(self.path, "ceinms_calibration.log")   # beside: the folder is archived/moved
+                    with _shl.step_log(_clog, f"{self.tag}: CEINMS calibration") as _ci:
+                        self.prepare_ceinms(replace=replace, calibration_trials=calibration_trials)
+                    if _ci["path"]:
+                        log(f"  CEINMS calibration ({', '.join(cal)})  {_tm.perf_counter() - _c0:7.1f} s  -> {_ci['path']}")
+                    try:
+                        _js.dump({"engine": self.engine, "seconds": {"ceinms_calibration": round(_tm.perf_counter() - _c0, 3)},
+                                  "trial": ",".join(cal), "finished": _tm.strftime("%Y-%m-%d %H:%M:%S")},
+                                 open(os.path.join(self.path, "timing_ceinms_calibration.json"), "w"), indent=1)
+                    except Exception:                                # noqa: BLE001
+                        pass
                 elif _uncal:
                     _unc_subj = os.path.join(self.path, "ceinms_calibration",
                                              "subjectUncalibrated.xml")
@@ -2184,9 +2473,28 @@ class Iteration(IterationKeys):
                     try:
                         log(f"  [CEINMS 6/6] {tn} — execution -> muscle moments -> JRA ...")
                         t = self.trial(tn, force_type="CEINMS")
-                        t.run_ceinms_exe()
-                        t.calculate_muscle_moments(forces_type="ceinms")
-                        t.run_jra_ceinms(replace=replace)
+                        def _ceinms_and_moments():
+                            out = t.run_ceinms_exe()
+                            t.calculate_muscle_moments(forces_type="ceinms")
+                            return out
+                        _timed(t, "ceinms_execution", _ceinms_and_moments)
+                        _timed(t, "ceinms_jra", t.run_jra_ceinms, replace=replace)
+                        # 2026-10-21: per-group JCF contributions for CEINMS too
+                        # (joint_contact_forces/contributions_ceinms.sto), same
+                        # switch and groups as the SO stage
+                        _dc = do_contrib
+                        if _dc is None:
+                            _dc = bool((self.config or {}).get("jra_contributions", True))
+                        if _dc:
+                            try:
+                                _g = contrib_groups
+                                if callable(_g):
+                                    _g = _g(_so_force_columns(t), tn)
+                                _timed(t, "ceinms_jra_contributions", t.run_jra_contributions,
+                                       forces_type="ceinms", plot=True, replace=replace,
+                                       groups=_g, n_jobs=contrib_jobs)
+                            except Exception as _e:                 # noqa: BLE001
+                                log(f"  [contrib WARNING] {tn} (CEINMS): {type(_e).__name__}: {_e}")
                         res["ceinms"].append(tn)
                         log(f"  [CEINMS ok] {tn}")
                         _close_figs()
@@ -2206,7 +2514,7 @@ class Iteration(IterationKeys):
             _req = [st for st, on in (("export", export),
                                       ("exbiomec", do_exbiomec),
                                       ("muscle_analysis", do_muscle_analysis),
-                                      ("so", do_so), ("mew", do_mew),
+                                      ("so", do_so), ("cmc", do_cmc), ("mew", do_mew),
                                       ("ceinms", do_ceinms))
                     if on]
             if _req and names:

@@ -3,7 +3,7 @@ __version__ = "3.1.1"
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
     from .core.analysis import (
-        Project, Subject, init_project,
+        Project, Subject,
         build_model_config, discover_subjects,
         check_settings_version, migrate_settings,
     )
@@ -11,13 +11,14 @@ if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
     from .session.iteration import Iteration         # one model iteration (runnable)
     from . import plot                              # comparison figures
     from .simulate import mew                       # Python muscle solver
+    from . import results                           # load / plot / export results
 
 # Public API. Everything except `test` lives in bioscout.utils and is loaded
 # lazily by __getattr__ below, so a bare `import bioscout` stays light — it does
 # NOT import OpenSim/CEINMS until you actually use one of these names.
 __all__ = (
     "__version__", "test",
-    "Project", "Subject", "Session", "Iteration", "init_project",
+    "Project", "Subject", "Session", "Iteration",
     "build_model_config", "discover_subjects",
     "check_settings_version", "migrate_settings",
     "summarize_results",
@@ -26,6 +27,7 @@ __all__ = (
     "plot",                     # bioscout.plot — figures from a tidy table
     "pipeline",                 # bioscout.pipeline — run_project (batch settings runs)
     "mew",                      # bioscout.simulate.mew — Python muscle solver + its readers
+    "results",                  # bioscout.results — load / plot / export simulation results
 )
 
 #: Names __getattr__ resolves to a SUBMODULE rather than to something in
@@ -36,7 +38,7 @@ __all__ = (
 #: once something has IMPORTED it. `from bioscout.utils import x` does that
 #: import; a bare `bs.utils.x` right after `import bioscout as bs` did not, so
 #: it raised AttributeError until some earlier call happened to load utils.
-_SUBMODULES = ("utils", "plot", "pipeline", "mew")
+_SUBMODULES = ("utils", "plot", "pipeline", "mew", "results")
 #: submodules that do not live directly under bioscout/
 _SUBMODULE_PATHS = {"mew": "simulate.mew"}
 

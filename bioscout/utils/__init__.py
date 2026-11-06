@@ -113,7 +113,7 @@ except Exception as e:
 # settings.py is carrying the load). Never fatal: configuration loading must
 # not be the thing that stops a run.
 try:
-    from bioscout.init.project_config import overlay as _pyaml_overlay
+    from bioscout.project_config import overlay as _pyaml_overlay
     settings = _pyaml_overlay(settings)
 except Exception as _pc_err:                                   # noqa: BLE001
     print(f"[project.yaml] overlay skipped: {_pc_err}")
@@ -405,7 +405,7 @@ except ImportError:
 try:
     from bioscout.core.analysis import (
         Subject, Session, Iteration, Project,
-        build_model_config, discover_subjects, init_project,
+        build_model_config, discover_subjects,
         check_settings_version, migrate_settings, ensure_editor_paths,
         select_subjects, subjects_in_simulations, resolve_subject_selection,
         sessions_from_subjects, subjects_from_subjects,

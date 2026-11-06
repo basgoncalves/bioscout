@@ -133,7 +133,7 @@ exists on disk.
 
 | file | role |
 |---|---|
-| `bioscout/bioscout/settings.py` | the **bundled template**. `init_project()` copies it; `Project()` falls back to it. |
+| `bioscout/bioscout/settings.py` | the **bundled template**. `Project(path, scaffold_settings=True)` copies it; `Project()` falls back to it. |
 | `<project>/settings.py` | the project's own copy — config above `if __name__ == "__main__"`, the runner below. |
 
 The template is exec'd by bioscout *during its own import*, so its

@@ -46,7 +46,7 @@ NON_SUBJECT_DIRS = {"_to_delete", "_rmtest", "backups", "_export"}
 
 def _facts(project_dir):
     try:
-        from bioscout.init.project_config import project_facts
+        from bioscout.project_config import project_facts
         return project_facts(project_dir) or {}
     except Exception:                                          # noqa: BLE001
         return {}

@@ -4,15 +4,15 @@
                              use BioScout Web, https://basgoncalves.github.io/bioscout-web/)
     bioscout help [VERB]     this, or one verb's detail
     bioscout init            start a project (folders, models, project.yaml)
-    bioscout gui             points to BioScout Web (the GUI was removed)
-    bioscout model           check / edit / compare / tune-ma / scale / tps
+    bioscout web             open BioScout Web in the browser (--local: a local checkout)
+    bioscout settings        this computer's settings (~/.bioscout/settings.yaml); also -settings
+    bioscout model           check / edit / compare / tune-ma / scale / tps / mri2msk
     bioscout simulate        run an OpenSim/CEINMS stage on a session (or mrs)
     bioscout session         new / export / classify / check-grf / ingest /
                              reset -- reads
                              the results `simulate` writes, so it comes after it
     bioscout plot            figures, summaries, Collings ranking
     bioscout utils           env / install / md2pdf / qr_code / pylance
-    bioscout lab             EXPERIMENTAL 3.0: shots, load reports
 
 Why this module exists
 ----------------------
@@ -53,8 +53,8 @@ from typing import List, Optional, Sequence, Tuple
 __all__ = ["VERBS", "build_parser", "route", "main", "legacy_hint"]
 
 #: Root verbs. ``__main__`` checks this before it builds the legacy parser.
-VERBS = ("help", "init", "gui", "model", "simulate", "session", "project",
-         "plot", "utils", "lab")
+VERBS = ("help", "init", "web", "settings", "model", "simulate", "session", "project",
+         "plot", "utils")
 
 #: Subcommand -> the verb it lives under. These are the words people reach for
 #: at the top level because that is where the old flags were (`bioscout --env`),
@@ -119,8 +119,16 @@ def build_parser() -> argparse.ArgumentParser:
                         "models/, setup_files/ ... already exist and are not "
                         "empty (existing files are never overwritten)")
 
-    # -- gui ----------------------------------------------------------------- #
-    sub.add_parser("gui", help="launch the GUI (also the default with no verb)")
+    # -- web / settings ------------------------------------------------------ #
+    w = sub.add_parser("web", help="open BioScout Web (the app, in your browser)")
+    w.add_argument("--local", nargs="?", const="", metavar="BIOSCOUT_WEB_DIR",
+                   help="serve a local bioscout_web checkout instead of the hosted app "
+                        "(default folder: BIOSCOUT_WEB_DIR, else C:/Git/bioscout_web)")
+    w.add_argument("--port", type=int, default=8765, help="with --local (default 8765)")
+    st = sub.add_parser("settings", help="this computer's bioscout settings "
+                                          "(~/.bioscout/settings.yaml): logs, terminal output, MA method ...")
+    st.add_argument("--show", action="store_true", help="print the values in effect")
+    st.add_argument("--reset", action="store_true", help="rewrite the file with the defaults")
 
     # -- model --------------------------------------------------------------- #
     m = sub.add_parser("model", help="check, edit, compare and validate .osim models")
@@ -154,6 +162,9 @@ def build_parser() -> argparse.ArgumentParser:
     mv.add_argument("--out", metavar="DIR")
     mv.add_argument("--side", default="_r", choices=["_r", "_l"])
 
+    ms.add_parser("mri2msk", help="personalised model from MRI bone segmentations (MRI2MSK: STAPLE, "
+                                  "TPS warp, torsion, knee axis); `bioscout model mri2msk -h`",
+                  add_help=False)
     mme = ms.add_parser("measure", help="measure bones from STLs, e.g. acetabular coverage",
                         add_help=False)
     mme.add_argument("measure_args", nargs=argparse.REMAINDER)
@@ -252,6 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
     _simulate_action("so", "static optimisation -> muscle moments -> joint reaction")
     _simulate_action("rra", "residual reduction algorithm (RRATool) -> <trial>/residual_reduction/ "
                             "(diagnostic: adjusted kinematics, residuals, COM-adjusted model)")
+    _simulate_action("cmc", "computed muscle control (CMCTool) -> JRA on the CMC forces "
+                            "-> <trial>/joint_contact_forces/output_cmc.sto (+ SO comparison, "
+                            "contributions), like SO; no open-loop replay").add_argument(
+        "--duration", type=float, metavar="S",
+        help="simulate only the first S seconds of the trial window (quick test, e.g. 0.1)")
     _simulate_action("forward", "forward simulation: CMC tracking -> open-loop ForwardTool "
                                 "replay + JRA on CMC forces -> <trial>/forward_simulation/ "
                                 "(uses the RRA result when present)")
@@ -450,6 +466,14 @@ def build_parser() -> argparse.ArgumentParser:
     prst.add_argument("--iteration", metavar="NAME")
     prst.add_argument("-v", "--verbose", action="store_true", help="one row per trial")
 
+    prre = prs.add_parser(
+        "results", help="every time-varying result -> analysis-ready CSVs in <project>/results",
+        description="One CSV per variable (EMG, joint angles/moments, muscle forces, "
+                    "activations, lengths, moment arms, JCF ...), time-normalised per "
+                    "cycle from movement_detection/cycles.csv. Opens in Excel, JASP, pandas.")
+    from bioscout.results.export import add_arguments as _res_args
+    _res_args(prre)
+
     # -- plot ---------------------------------------------------------------- #
     pl = sub.add_parser(
         "plot", help="figures from the results on disk",
@@ -524,38 +548,6 @@ def build_parser() -> argparse.ArgumentParser:
     up = us.add_parser("pylance", help="write .vscode/settings.json so 'import bioscout' resolves")
     up.add_argument("path", nargs="?", metavar="PROJECT_DIR")
 
-    # -- lab ----------------------------------------------------------------- #
-    lab = sub.add_parser(
-        "lab", help="EXPERIMENTAL (3.0): video and wearable tracking",
-        description="Not part of the OpenSim pipeline and not ready. Kept here so "
-                    "the MSK verbs above stay legible.")
-    ls_ = lab.add_subparsers(dest="action", metavar="ACTION")
-
-    lsh = ls_.add_parser("shots", help="basketball shot analysis from video")
-    lsh.add_argument("video", metavar="VIDEO")
-    lsh.add_argument("--shooting-hand", default="right", choices=["right", "left"])
-    lsh.add_argument("--poses", metavar="POSES_JSON")
-    lsh.add_argument("--fps", type=float)
-    lsh.add_argument("--min-gap", type=float, default=1.5)
-    lsh.add_argument("--n-points", type=int, default=1000)
-    lsh.add_argument("--hoop-side", default="auto", choices=["auto", "right", "left"])
-    lsh.add_argument("--yolo-model", metavar="WEIGHTS.pt")
-    lsh.add_argument("--hoop", metavar="CX,CY,W,H")
-
-    llr = ls_.add_parser("load-report", help="training-load & fatigue PDF from tracker exports")
-    llr.add_argument("inputs", nargs="?", metavar="FILES_OR_FOLDER")
-    llr.add_argument("--out", metavar="PDF")
-    llr.add_argument("--hr-max", type=float)
-    llr.add_argument("--hr-rest", type=float)
-    llr.add_argument("--age", type=int)
-    llr.add_argument("--sex", default="M", choices=["M", "F"])
-    llr.add_argument("--zepp-pull", action="store_true")
-    llr.add_argument("--strava-pull", action="store_true")
-    llr.add_argument("--creds", metavar="JSON")
-
-    la = ls_.add_parser("add-subject", help="add a player-tracking subject to subjects.json")
-    la.add_argument("path", nargs="?", metavar="PROJECT_PATH")
-
     return p
 
 
@@ -563,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
 # legacy flags -> the verb that replaced them
 # --------------------------------------------------------------------------- #
 _LEGACY = {
-    "--init": "bioscout init", "--gui": "bioscout gui", "-g": "bioscout gui",
+    "--init": "bioscout init", "--gui": "bioscout web", "-g": "bioscout web",
     "--new-session": "bioscout session new", "--c3d-export": "bioscout session export",
     "--export-session": "bioscout session export",
     "--classifier": "bioscout session classify", "--classify": "bioscout session classify",
@@ -616,8 +608,6 @@ def _to_legacy(ns: argparse.Namespace) -> List[str]:      # noqa: C901 — a fla
 
     if v == "init":
         return ["--init", ns.path] + (["--init-force"] if getattr(ns, "force", False) else [])
-    if v == "gui":
-        return ["--gui"]
 
     if v == "session":
         if a == "scale":
@@ -765,11 +755,40 @@ GUI_MOVED = ("The bioscout desktop GUI was removed in 3.1. For an interface use 
              "in the browser. `bioscout help` lists the command-line verbs.")
 
 
+WEB_URL = "https://basgoncalves.github.io/bioscout-web/"
+
+
+def _web(ns):
+    """`bioscout web`: open BioScout Web in the browser (hosted), or with --local serve a
+    bioscout_web checkout on http://localhost:<port>/ and open that."""
+    import webbrowser
+    if getattr(ns, "local", None) is None:
+        print(f"[bioscout] opening BioScout Web: {WEB_URL}")
+        webbrowser.open(WEB_URL)
+        return 0
+    import functools
+    import http.server
+    d = ns.local or os.environ.get("BIOSCOUT_WEB_DIR") or "C:/Git/bioscout_web"
+    if not os.path.isfile(os.path.join(d, "index.html")):
+        print(f"[bioscout] no index.html in {d} -- pass the bioscout_web folder: bioscout web --local PATH")
+        return 1
+    url = f"http://localhost:{ns.port}/"
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=d)
+    with http.server.ThreadingHTTPServer(("127.0.0.1", ns.port), handler) as srv:
+        print(f"[bioscout] serving {d} at {url}  (Ctrl+C stops it)")
+        webbrowser.open(url)
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
 def _project_yaml_path(path=None):
     """The project.yaml to show/edit: a file, a project folder, or the nearest one
     above the current folder. Returns a Path that may not exist yet."""
     from pathlib import Path
-    from bioscout.init.project_config import find_project_yaml
+    from bioscout.project_config import find_project_yaml
     if path:
         p = Path(path)
         if p.is_file() or p.suffix.lower() in (".yaml", ".yml"):
@@ -822,7 +841,7 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
     if v == "init" and getattr(ns, "from_settings", False):
         # Imports the project's settings.py, which needs the full stack — but
         # the extraction itself is one call and prints its own verdict.
-        from bioscout.init.project_config import init_project_yaml
+        from bioscout.project_config import init_project_yaml
         return init_project_yaml(ns.path, force=ns.force)
 
     if v == "utils" and a in ("qr_code", "qr"):
@@ -834,9 +853,8 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
         st = ensure(create=bool(ns.create))
         return 0 if (st["match"] or st["env_exists"]) else 1
 
-    if v == "gui":
-        print(GUI_MOVED)
-        return 0
+    if v == "web":
+        return _web(ns)
 
     if v == "session" and a in ("stage", "windows", "sides"):
         if a == "stage":
@@ -864,6 +882,9 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
                     for row in part:
                         print(row)
             return 0
+        if a == "results":
+            from bioscout.results.export import run as _results
+            return _results(ns)
         ypath = resolve_path(getattr(ns, "path", None))
         if a == "show" or (a == "edit" and getattr(ns, "no_gui", False)):
             if not ypath.is_file():
@@ -962,7 +983,7 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
                 print(f"    {f}")
             return 0
         stage_kwarg = {"exbiomec": "do_exbiomec", "ma": "do_muscle_analysis",
-                       "so": "do_so", "rra": "do_rra", "forward": "do_forward", "mew": "do_mew", "ceinms": "do_ceinms"}[a]
+                       "so": "do_so", "rra": "do_rra", "cmc": "do_cmc", "forward": "do_forward", "mew": "do_mew", "ceinms": "do_ceinms"}[a]
         if a == "ceinms":
             import os
             results = {}
@@ -973,8 +994,10 @@ def _direct(ns: argparse.Namespace) -> Optional[int]:
                 results.update(s.run(iterations=[it], trials=trials, calibrate=cal,
                                      replace=bool(ns.replace), do_ceinms=True))
         else:
+            _extra = ({"cmc_duration": ns.duration}
+                      if a == "cmc" and getattr(ns, "duration", None) else {})
             results = s.run(iterations=iterations, trials=trials,
-                            replace=bool(ns.replace), **{stage_kwarg: True})
+                            replace=bool(ns.replace), **{stage_kwarg: True}, **_extra)
         # one line per iteration: what ran, what was skipped, ok or not --
         # the raw dict repeated every stage's empty lists and the report twice
         for _it, _r in (results or {}).items():
@@ -1020,6 +1043,11 @@ def route(argv: Sequence[str]) -> Tuple[str, object]:
         return ("exit", _run(argv[1:]) or 0)
 
     # `model measure` forwards its whole tail to bioscout.model.measure.
+    # `model mri2msk` forwards its whole tail to bioscout.model.mri2msk.cli.
+    if argv[:2] == ["model", "mri2msk"]:
+        from bioscout.model.mri2msk.cli import main as _mri
+        return ("exit", _mri(argv[2:]) or 0)
+
     if argv[:2] == ["model", "measure"]:
         from bioscout.model.measure import main as _measure
         return ("exit", _measure(argv[2:]) or 0)
@@ -1077,7 +1105,7 @@ def route(argv: Sequence[str]) -> Tuple[str, object]:
 
     # A verb with subcommands, given none: show that verb's help rather than
     # silently doing nothing.
-    if ns.verb in ("session", "model", "utils", "lab", "plot", "simulate",
+    if ns.verb in ("session", "model", "utils", "plot", "simulate",
                    "project") and not getattr(ns, "action", None):
         parser.parse_args([ns.verb, "--help"])          # exits
 
@@ -1102,7 +1130,12 @@ def _is_quiet_verb(argv) -> bool:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Standalone entry: ``python -m bioscout.cli <verb> ...``."""
     argv_in = list(sys.argv[1:] if argv is None else argv)
-    verbose = "--verbose" in argv_in or "-v" in argv_in
+    # `bioscout -settings`: this computer's bioscout settings (~/.bioscout/settings.yaml)
+    from bioscout import user_settings as _us
+    if argv_in and argv_in[0] in ("-settings", "--settings", "settings"):
+        return _us.command(argv_in[1:])
+    _uset = _us.apply()                       # file -> environment (a shell variable wins)
+    verbose = "--verbose" in argv_in or "-v" in argv_in or bool(_uset.get("log_terminal"))
     argv_in = [a for a in argv_in if a not in ("--verbose", "-v")]
     if verbose:
         os.environ["BIOSCOUT_VERBOSE"] = "1"     # verbs with a short default report read this

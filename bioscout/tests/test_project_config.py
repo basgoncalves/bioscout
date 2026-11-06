@@ -19,7 +19,7 @@ import types
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_MOD = os.path.join(_HERE, "..", "init", "project_config.py")
+_MOD = os.path.join(_HERE, "..", "project_config.py")
 
 try:
     _spec = importlib.util.spec_from_file_location("project_config", _MOD)

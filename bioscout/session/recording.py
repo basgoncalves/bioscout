@@ -14,6 +14,9 @@ import time
 import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:                       # editor types only, no runtime import
+    from bioscout.results import Results
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
@@ -47,8 +50,12 @@ def _bootstrap_project(session_dir, run_name, project_dir=None, verbose=False):
         try:
             sd = os.path.abspath(str(session_dir))
             root = project_dir or os.path.dirname(os.path.dirname(os.path.dirname(sd)))
-            utils.shared.start_logging(name=run_name,
-                                       log_dir=os.path.join(str(root), "logs"))
+            # ONE log per process (2026-11-04): a command that opens the session
+            # again (one Session per iteration, a re-scan ...) keeps writing to
+            # the same file instead of starting bioscout_<time>_2.log, _3.log ...
+            if not getattr(utils.shared, "_LOG_STARTED", False):
+                utils.shared.start_logging(name=run_name,
+                                           log_dir=os.path.join(str(root), "logs"))
         except Exception:
             pass
     bioscout.Project(project_dir, verbose=verbose)
@@ -549,6 +556,18 @@ class Session(SessionKeys):
         for name in (iterations or self.iterations):
             out[name] = self.iteration(name).scale_model(**kw)
         return out
+
+    @property
+    def results(self) -> "Results":
+        """This session's results -- call it to load, nothing is read before::
+
+            sess.results()                                        # what exists
+            sess.results("so_forces", trial="Gehen_01", iteration="gpkv4", var="*_r")
+            sess.results(["ik", "id"], trial="Gehen*", window="cycle").mean().plot()
+
+        See :mod:`bioscout.results`."""
+        from bioscout.results import for_session
+        return for_session(self.session_dir)
 
     @property
     def results_dir(self):

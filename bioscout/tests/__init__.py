@@ -30,7 +30,7 @@ class TestPackageWiring(unittest.TestCase):
     def test_package_level_names(self):
         import bioscout
         for name in ("Project", "Subject", "Session", "build_model_config",
-                     "discover_subjects", "init_project", "__version__"):
+                     "discover_subjects", "__version__"):
             self.assertTrue(hasattr(bioscout, name), f"bioscout.{name} missing")
 
     def test_utils_reexports(self):

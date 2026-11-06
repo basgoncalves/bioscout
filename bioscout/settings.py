@@ -1,7 +1,7 @@
 """Project settings — BUNDLED TEMPLATE (powerlifting squat study).
 
 This is the default settings module shipped inside bioscout.
-``init_project()`` copies it into a new project and ``bioscout.Project()``
+``Project(..., scaffold_settings=True)`` copies it into a project and ``bioscout.Project()``
 falls back to it when a project has no settings.py of its own. A real
 project edits its OWN copy — KEEP THIS FILE.
 

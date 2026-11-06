@@ -24,7 +24,7 @@ Quick start::
     model_config = build_model_config(proj.subjects)
 
 Paths resolve against ``bioscout.utils`` (MODELS_DIR / SIMULATIONS_DIR /
-SETUP_DIR), which ``bioscout.Project`` / ``init_project()`` point at the
+SETUP_DIR), which ``bioscout.Project`` points at the
 project folder.
 """
 import os
@@ -36,7 +36,10 @@ import importlib.util
 import traceback
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+if TYPE_CHECKING:                       # editor types only, no runtime import
+    from bioscout.session.recording import Session
+    from bioscout.results import Results
 
 # --- imports for the Analyse class (moved from utils/analyse.py) ---
 import os
@@ -176,6 +179,10 @@ def _default_layout_paths():
 # export can drop them and the solve steps can skip cleanly.
 _EXPORT_ARTIFACTS = ("marker_experimental.trc", "grf.mot", "GRF.xml", "grf_events.png")
 
+
+
+class _SkipSplit(Exception):
+    """Internal: skip the reserve split of the JCF contributions (CEINMS)."""
 
 class _quiet_prints:
     """Swallow print() for a block (the low-level run_id/run_so banners when a
@@ -1045,7 +1052,7 @@ def ensure_editor_paths(project_dir, verbose=True):
             if verbose:
                 print(f"[bioscout] editor paths configured: {f}")
     except Exception:
-        pass  # never break init_project over editor config
+        pass  # never break Project() over editor config
 
 
 class Project:
@@ -1065,6 +1072,27 @@ class Project:
                       bioscout's bundled template, with project.yaml
                       overlaid on top either way)
     """
+
+    @classmethod
+    def init(cls, project_dir, force=False, verbose=True, **kw) -> "Project":
+        """Create a project folder (same as ``bioscout init <path>``) and open it::
+
+            PROJECT = bs.Project.init(r"C:/.../test_project")
+
+        Makes simulations/, models/, setup_files/, logs/, results/ and a starter
+        project.yaml; copies the bundled templates. Never overwrites a file, so
+        it is safe on an existing project. ``force=True`` also scaffolds when
+        non-bioscout models/ or setup_files/ already exist (nothing overwritten).
+        """
+        from bioscout.core.scaffold import scaffold_project
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf if not verbose else sys.stdout):
+            rc = scaffold_project(project_dir, force=force)
+        if rc != 0:
+            raise RuntimeError(f"bioscout init failed for {project_dir}:\n{buf.getvalue()}"
+                               if not verbose else f"bioscout init failed for {project_dir} (see above)")
+        return cls(project_dir, verbose=verbose, **kw)
 
     def __init__(self, project_dir=None, verbose=True, setup_editor=True,
                  scaffold_settings=False):
@@ -1164,7 +1192,7 @@ class Project:
             # all-in-one template here on every construction is exactly the
             # per-project-settings.py sprawl §2.9 retires, so it no longer
             # happens by default — pass scaffold_settings=True to Project()/
-            # init_project() if you explicitly want a legacy copy to edit.
+            # Project(..., scaffold_settings=True) if you explicitly want a legacy copy to edit.
             try:
                 import bioscout.settings as _pkg
                 shutil.copy2(Path(_pkg.__file__), sp)
@@ -1243,7 +1271,7 @@ class Project:
         return None
 
     # ---- every recording session in the project --------------------------
-    def sessions(self, subjects=None, sessions=None):
+    def sessions(self, subjects=None, sessions=None) -> "list[Session]":
         """Every ``simulations/<subject>/<session>/`` holding a session.yaml, as
         :class:`bioscout.Session`, sorted. ``subjects`` / ``sessions`` filter by
         folder name (a name or a list; None = all)::
@@ -1269,6 +1297,30 @@ class Project:
                 continue
             out.append(Session(d, project_dir=self.dir, bootstrap=False))
         return out
+
+    def session(self, subject, session) -> "Session":
+        """One recording session by folder names::
+
+            sess = PROJECT.session("K2L", "11_03_24")
+        """
+        hit = self.sessions(subjects=subject, sessions=session)
+        if not hit:
+            have = [f"{os.path.basename(os.path.dirname(s.session_dir))}/{s.name}"
+                    for s in self.sessions()]
+            raise KeyError(f"no session {subject}/{session}. Have: {', '.join(have) or 'none'}")
+        return hit[0]
+
+    @property
+    def results(self) -> "Results":
+        """Results of every session -- same call as :attr:`bioscout.Session.results`,
+        plus ``subject=`` / ``session=``::
+
+            PROJECT.results("jcf_so", subject="K2L", trial="Gehen*", window="stance")
+        """
+        from bioscout.results import for_project
+        from bioscout import utils as _u
+        sim = getattr(_u, "SIMULATIONS_DIR", None)
+        return for_project(str(sim) if sim else str(self.dir))
 
     def run(self, subjects=None, sessions=None, *, verbose=True, **run_kw):
         """Run the pipeline over :meth:`sessions`. ``run_kw`` goes to
@@ -1337,27 +1389,6 @@ class Project:
         return f"<bioscout.Project {self.dir.name!r} openSim={ok}>"
 
 
-def init_project(project_dir=None, verbose=True, setup_editor=True,
-                  scaffold_settings=False):
-    """Bootstrap BioScout for a project folder. Returns ``(utils, settings)``.
-
-    Thin wrapper around :class:`Project` for the common "just give me utils and
-    settings" case. ``setup_editor`` (default True) drops a relative
-    ``.vscode/settings.json`` so Pylance resolves the project's own modules.
-
-    A folder with no ``settings.py`` of its own just runs on bioscout's
-    bundled defaults (plus ``project.yaml``, if present) — nothing is written
-    to disk. Pass ``scaffold_settings=True`` to get the old behaviour back
-    (a starter ``settings.py`` copied in for you to edit); for a genuinely
-    new project, ``python -m bioscout --init <path>`` scaffolds the folder
-    layout and a starter ``project.yaml`` instead (docs/IMPLEMENTATIONS.md
-    §2.9).
-    """
-    p = Project(project_dir, verbose=verbose, setup_editor=setup_editor,
-                scaffold_settings=scaffold_settings)
-    return p.utils, p.settings
-
-
 # Plot still lives in utils/plot.py and is re-exported here lazily; Analyse is
 # defined at the bottom of THIS module (moved from utils/analyse.py).
 _REEXPORT = {"Plot"}
@@ -1380,7 +1411,7 @@ def __getattr__(name):
 __all__ = [
     "Subject", "Session", "Project",
     "Analyse", "Plot",
-    "build_model_config", "discover_subjects", "init_project",
+    "build_model_config", "discover_subjects",
     "sessions_from_subjects", "subjects_from_subjects",
     "check_settings_version", "migrate_settings", "ensure_editor_paths",
 ]
@@ -1561,6 +1592,21 @@ def subject_session_for_trial(trial_path):
 #: model path + mtime -> total mass (kg); see Analyse.get_body_mass
 _BODY_MASS_CACHE = {}
 
+
+
+def _engine_from_session(trial_path):
+    """engine: of <session>/3_iterations/<iteration>/<trial> from session.yaml, or None."""
+    try:
+        it_dir = os.path.dirname(os.path.abspath(trial_path))
+        ses = os.path.dirname(os.path.dirname(it_dir))
+        y = os.path.join(ses, "session.yaml")
+        if not os.path.isfile(y):
+            return None
+        import yaml as _y
+        its = (_y.safe_load(open(y)) or {}).get("iterations") or {}
+        return (its.get(os.path.basename(it_dir)) or {}).get("engine")
+    except Exception:                                        # noqa: BLE001
+        return None
 
 class Analyse:
     '''
@@ -3125,6 +3171,11 @@ class Analyse:
         _mp = os.path.abspath(str(self.model_dir))
         _key = (_mp, os.path.getmtime(_mp))
         body_mass = _BODY_MASS_CACHE.get(_key)
+        if body_mass is None and self._is_pyosim():          # no OpenSim: sum the bodies' <mass>
+            import xml.etree.ElementTree as _ET
+            body_mass = float(sum(float(b.findtext("mass") or 0) for b in
+                                  _ET.parse(_mp).getroot().iterfind("./Model/BodySet/objects/Body")))
+            _BODY_MASS_CACHE[_key] = body_mass
         if body_mass is None:
             model = self.load_model()
             state = model.initSystem()
@@ -3172,6 +3223,9 @@ class Analyse:
             print(f"Model not found: {self.model_dir}")
             return None
 
+        if self._is_pyosim():
+            from bioscout.pyosim.muscles import muscle_names
+            return muscle_names(self.model_dir)
         # Load the model
         osim.Logger.setLevelString("error")
         model = self.load_model()
@@ -3374,9 +3428,26 @@ class Analyse:
         except Exception:
             pass
 
-    @staticmethod
-    def _get_openSim():
-        """Return the openSim module, attempting a late import if it is still None."""
+    def _is_pyosim(self):
+        e = getattr(self, "engine", None)
+        if not e:                       # before the iteration's cfg is applied (e.g. in __init__):
+            e = _engine_from_session(getattr(self, "path", None))
+        return str(e or "opensim").lower() == "pyosim"
+
+    def _opensim_only(self, step):
+        """A step that only exists in OpenSim: refuse it, before anything is written, in an
+        iteration with engine: pyosim (pyosim never falls back to OpenSim)."""
+        if self._is_pyosim():
+            from bioscout.simulate.pyosim_backend import not_implemented
+            not_implemented(step)
+
+    def _get_openSim(self=None):
+        """Return the module that runs this trial's OpenSim-type steps: the openSim
+        module, or bioscout.simulate.pyosim_backend when the iteration's session.yaml
+        says ``engine: pyosim`` (same functions, same output files)."""
+        if self is not None and self._is_pyosim():
+            from bioscout.simulate import pyosim_backend as _pb
+            return _pb
         if _u.openSim is not None:
             return _u.openSim
         try:
@@ -3411,6 +3482,7 @@ class Analyse:
         adjust_moment_arms() mutate the model they are handed, so handing back a
         shared instance would let one stage's edits leak into another's.
         """
+        self._opensim_only("load_model")
         mp = path or self.model_dir
         warn_if_geometry_unresolved(mp)
         _os = self._get_openSim()
@@ -3750,6 +3822,12 @@ class Analyse:
                 else:
                     self._log(f'[SO] pelvis residual actuators are all >= '
                               f'{_margin:g}x their peak ID residual', terminal=True)
+                _bd = _soa.bound_controls(actuators_abs, _id, _t0, _t1, margin=_margin)
+                if _bd:
+                    self._log('[SO] actuator controls bounded to -1..1 (an unbounded '
+                              'actuator can blow up where the optimiser fails): '
+                              + ', '.join(f'{k} [{a[0]},{a[1]}]' + (f' F {f0:g}->{f1:g}' if f1 != f0 else '')
+                                          for k, (a, f0, f1) in _bd.items()), terminal=True)
 
         try:
             # SO outputs belong in the static_optimisation/ subfolder (dir of
@@ -3838,6 +3916,7 @@ class Analyse:
 
         Output: energetics_ProbeReporter_probes.sto in the trial folder.
         """
+        self._opensim_only("run_energetics")
         os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _os = self._get_openSim()
 
@@ -3894,7 +3973,7 @@ class Analyse:
             setup=os.path.join(o, "setup_RRA.xml"),
             kinematics=os.path.join(o, "RRA_Kinematics_q.sto"),
             actuation=os.path.join(o, "RRA_Actuation_force.sto"),
-            out_log=os.path.join(o, "out.log"),
+            out_log=os.path.join(o, "opensim.log"),
             model=os.path.join(o, f"{_mb}_rra_adjusted.osim"),
             ik=os.path.join(e, "joint_angles.mot"),
             setup_id=os.path.join(e, "setup_ID.xml"),
@@ -3995,6 +4074,7 @@ class Analyse:
         ``model_scaled`` at the adjusted model and copy the RRA kinematics
         over joint_angles.mot yourself.
         """
+        self._opensim_only("run_rra")
         self._set_replace(replace)
         os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _os = self._get_openSim()
@@ -4048,7 +4128,7 @@ class Analyse:
             _lp = f'{lowpass_cutoff:g} Hz' if lowpass_cutoff else 'none'
             self._log(f'[RRA] {_tn}: model {os.path.basename(self.model_dir)}, {_tr}, '
                       f'kinematics filter {_lp} -- running RRATool '
-                      f'(OpenSim output -> outputs/out.log) ...', terminal=True)
+                      f'(OpenSim output -> outputs/opensim.log) ...', terminal=True)
             if _win_note:
                 _line(_win_note)
             try:
@@ -4070,7 +4150,7 @@ class Analyse:
                 _mc = res.get('mass_change')
                 _line(f"{adjusted_com_body} COM adjusted -> outputs/{os.path.basename(P['model'])}"
                       + (f"; recommended total mass change {_mc:+.2f} kg" if _mc is not None else '')
-                      + ' (details in outputs/out.log)')
+                      + ' (details in outputs/opensim.log)')
 
         # ---- 2. re-run ID / SO on the RRA kinematics + adjusted model ------
         _model_rra = P["model"] if os.path.isfile(P["model"]) else self.model_dir
@@ -4546,7 +4626,10 @@ class Analyse:
         """Absolute paths of everything the forward-simulation stage reads/writes."""
         r = os.path.join(self.path, LAYOUT_DIRS["forward"])
         c = os.path.join(r, "cmc"); f = os.path.join(r, "forward")
-        jc = os.path.join(r, "joint_contact_forces")
+        # 2026-11-04: the CMC JRA lives next to SO's, in the trial's
+        # joint_contact_forces/ (output_cmc.sto), so contributions/coverage/plots
+        # treat CMC exactly like SO and CEINMS.
+        jc = os.path.join(self.path, "joint_contact_forces")
         return dict(
             root=r, cmc=c, forward=f, jcf=jc,
             setup_cmc=os.path.join(c, "setup_CMC.xml"),
@@ -4554,18 +4637,29 @@ class Analyse:
             cmc_kinematics=os.path.join(c, "CMC_Kinematics_q.sto"),
             cmc_states=os.path.join(c, "CMC_states.sto"),
             cmc_controls=os.path.join(c, "CMC_controls.xml"),
+            # CMC writes every integrator step (~5000 rows per gait cycle); the JRA
+            # and the contributions run on these copies, resampled to the IK grid
+            cmc_force_rs=os.path.join(c, "CMC_Actuation_force_resampled.sto"),
+            cmc_kinematics_rs=os.path.join(c, "CMC_Kinematics_q_resampled.sto"),
             forward_states=os.path.join(f, "forward_states.sto"),
             setup_jra=os.path.join(jc, "setup_JRA_CMC.xml"),
-            jra=os.path.join(jc, "Analyse_JRA_ReactionLoads_CMC.sto"),
-            tracking_csv=os.path.join(r, "forward_tracking.csv"),
-            fig_kinematics=os.path.join(r, "forward_kinematics.png"),
-            fig_forces=os.path.join(r, "forward_muscle_forces.png"),
+            jra=os.path.join(jc, "output_cmc.sto"),
+            fig_jcf_cmc=os.path.join(jc, "jrf_so_vs_cmc.png"),
+            # `simulate cmc` (no replay): CMC QC lives in cmc/ as cmc_*; the SO vs
+            # CMC contact forces only in joint_contact_forces/jrf_so_vs_cmc.png
+            tracking_csv=os.path.join(*((c, "cmc_tracking.csv") if getattr(self, "_cmc_only", False)
+                                        else (r, "forward_tracking.csv"))),
+            fig_kinematics=os.path.join(*((c, "cmc_kinematics.png") if getattr(self, "_cmc_only", False)
+                                          else (r, "forward_kinematics.png"))),
+            fig_forces=os.path.join(*((c, "cmc_muscle_forces.png") if getattr(self, "_cmc_only", False)
+                                      else (r, "forward_muscle_forces.png"))),
             fig_jcf=os.path.join(r, "forward_jcf.png"),
         )
 
     def run_forward(self, replace=None, kinematics="rra", model="rra", actuators=None,
                     tasks=None, time_range=None, window="grf", lowpass_cutoff=6.0,
-                    cmc_time_window=0.01, replay=True, jra=True, plots=True):
+                    cmc_time_window=0.01, replay=True, jra=True, plots=True,
+                    duration=None):
         """Muscle-driven forward simulation of this trial::
 
             <trial>/forward_simulation/
@@ -4591,12 +4685,16 @@ class Analyse:
         else tasks_RRA.xml. Window as run_rra (``window="grf"``).
         Nothing outside forward_simulation/ is touched.
         """
+        # pyosim has its own CMC (bioscout.pyosim.cmc); only the open-loop replay is OpenSim-only
+        if self._is_pyosim() and replay:
+            self._opensim_only("open-loop forward replay (simulate forward; use simulate cmc)")
         self._set_replace(replace)
         os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
         _os = self._get_openSim()
         from bioscout.simulate import so_actuators as _soa
+        self._cmc_only = not replay
         P = self.forward_paths(); R = self.rra_paths()
-        for _d in (P["cmc"], P["forward"], P["jcf"]):
+        for _d in (P["cmc"], P["jcf"]) + (() if self._cmc_only else (P["forward"],)):
             os.makedirs(_d, exist_ok=True)
         _tn = os.path.basename(self.path)
         _line = lambda m: self._log('      ' + m, terminal=True)
@@ -4656,14 +4754,20 @@ class Analyse:
             except Exception:
                 pass
 
+        if duration and time_range:
+            # quick test: only the first `duration` s of the window
+            time_range = (time_range[0], min(time_range[1], time_range[0] + float(duration)))
+            self._log(f'[FORWARD] {_tn}: --duration {duration} s -> '
+                      f'{time_range[0]:.3f}-{time_range[1]:.3f} s', terminal=True)
         res = None
         if os.path.exists(P["cmc_force"]) and not self.replace:
             self._log(f'[FORWARD] {_tn}: kept cmc/ (pass replace to redo)', terminal=True)
         else:
             self._log(f'[FORWARD] {_tn}: model {os.path.basename(model)}, kinematics '
                       f'{os.path.relpath(kinematics, self.path)}, '
-                      f'{time_range[0]:.3f}-{time_range[1]:.3f} s -- running CMC + '
-                      f'open-loop forward (OpenSim output -> cmc/out.log, forward/out.log) ...',
+                      f'{time_range[0]:.3f}-{time_range[1]:.3f} s -- running CMC'
+                      + (' + open-loop forward (OpenSim output -> cmc/opensim.log, forward/opensim.log) ...'
+                         if replay else ' (OpenSim output -> cmc/opensim.log) ...'),
                       terminal=True)
             res = _os.run_forward(osim_modelPath=_model_run, kinematics=kinematics,
                                   grf_xml=grf_abs, actuators=_fs, tasks=tasks,
@@ -4676,9 +4780,16 @@ class Analyse:
                 _line(f"tasks dropped (not in model / locked): {res['dropped_tasks']}")
             if replay:
                 _line("open-loop forward: " + ("ok" if res['ok_forward'] else
-                      "FAILED (see forward/out.log)"))
+                      "FAILED (see forward/opensim.log)"))
 
         if jra and os.path.isfile(P["cmc_force"]):
+            try:
+                self._resample_cmc(P, ik_abs)
+            except Exception as e:
+                self._log(f'      [FORWARD] resampling CMC output failed ({e}); '
+                          f'JRA on the full-rate files', terminal=True)
+            _cf = P["cmc_force_rs"] if os.path.isfile(P["cmc_force_rs"]) else P["cmc_force"]
+            _ck = P["cmc_kinematics_rs"] if os.path.isfile(P["cmc_kinematics_rs"]) else P["cmc_kinematics"]
             if os.path.exists(P["jra"]) and not self.replace and \
                os.path.getmtime(P["jra"]) >= os.path.getmtime(P["cmc_force"]):
                 _line('JRA on CMC: kept')
@@ -4687,18 +4798,35 @@ class Analyse:
                     if not os.path.exists(P["setup_jra"]):
                         shutil.copyfile(os.path.join(sd, "setup_JRA.xml"), P["setup_jra"])
                     with _quiet_prints():
-                        _os.run_jra(osim_modelPath=_model_run, ik_output=P["cmc_kinematics"],
+                        _os.run_jra(osim_modelPath=_model_run, ik_output=_ck,
                                     grf_xml=grf_abs, setup_xml=P["setup_jra"],
                                     actuators=[os.path.abspath(_fs)] if _fs else None,
-                                    muscle_force_path=P["cmc_force"], saveFileName=P["jra"])
+                                    muscle_force_path=_cf, saveFileName=P["jra"])
                     _line(f"JRA on CMC -> {os.path.relpath(P['jra'], P['root'])}")
                 except Exception as e:
                     self._log(f'      [FORWARD] JRA on CMC failed: {e}', terminal=True)
+            if os.path.isfile(P["jra"]):
+                try:
+                    self.plot_jra_comparison(compare=P["jra"], labels=("SO", "CMC"),
+                                             save_path=P["fig_jcf_cmc"],
+                                             title="Joint contact forces: SO vs CMC")
+                except Exception as e:
+                    self._log(f'      [FORWARD] jrf_so_vs_cmc.png failed: {e}', terminal=True)
+                try:
+                    self.plot_jcf_coverage(labels=("CMC",))
+                except Exception as e:
+                    self._log(f'      [FORWARD] CMC contact coverage failed: {e}', terminal=True)
+                try:
+                    self.run_jra_contributions(forces_type="cmc")
+                except Exception as e:
+                    self._log(f'      [FORWARD] CMC contributions failed: {e}', terminal=True)
 
         if plots:
-            for _name, _fn in (("kinematics", lambda: self.plot_forward_kinematics(kinematics)),
-                               ("muscle_forces", self.plot_forward_muscle_forces),
-                               ("jcf", self.plot_forward_jcf)):
+            _figs = [("kinematics", lambda: self.plot_forward_kinematics(kinematics)),
+                     ("muscle_forces", self.plot_forward_muscle_forces)]
+            if replay:                      # cmc stage: already jrf_so_vs_cmc.png
+                _figs.append(("jcf", self.plot_forward_jcf))
+            for _name, _fn in _figs:
                 try:
                     _r = _fn()
                     if isinstance(_r, dict) and _r.get("note"):
@@ -4708,6 +4836,53 @@ class Analyse:
                               f'{type(e).__name__}: {e}', terminal=True)
         _line(f"-> {P['root']}")
         return res
+
+    def _resample_cmc(self, P, ik_path):
+        """CMC_Actuation_force / CMC_Kinematics_q -> *_resampled.sto on the IK
+        time stamps inside the CMC window (linear interpolation). Rewritten
+        whenever the CMC output is newer. Headers keep OpenSim's inDegrees."""
+        def _rd(p):
+            with open(p) as fh:
+                L = fh.read().splitlines()
+            i = next(k for k, l in enumerate(L) if l.strip().lower() == "endheader")
+            head = L[:i]
+            cols = L[i + 1].split("\t")
+            d = np.loadtxt(L[i + 2:], ndmin=2)
+            deg = any("indegrees=yes" in h.replace(" ", "").lower() for h in head)
+            return cols, d, deg
+
+        def _wr(p, cols, d, deg, name):
+            with open(p, "w", newline="\n") as fh:
+                fh.write(f"{name}\nversion=1\nnRows={len(d)}\nnColumns={len(cols)}\n"
+                         f"inDegrees={'yes' if deg else 'no'}\nendheader\n")
+                fh.write("\t".join(cols) + "\n")
+                np.savetxt(fh, d, fmt="%.8f", delimiter="\t")
+
+        src = P["cmc_force"]
+        if os.path.isfile(P["cmc_force_rs"]) and os.path.isfile(P["cmc_kinematics_rs"]) and \
+                os.path.getmtime(P["cmc_force_rs"]) >= os.path.getmtime(src):
+            return
+        kc, kd, kdeg = _rd(P["cmc_kinematics"])
+        tk = kd[:, kc.index("time")]
+        try:
+            ic, idd, _ = _rd(ik_path)
+            ti = idd[:, ic.index("time")]
+            tg = ti[(ti >= tk[0] - 1e-9) & (ti <= tk[-1] + 1e-9)]
+        except Exception:
+            tg = np.array([])
+        if len(tg) < 5:
+            tg = np.arange(tk[0], tk[-1] + 1e-9, 0.005)
+        for (inp, out, name) in ((P["cmc_kinematics"], P["cmc_kinematics_rs"], "Coordinates"),
+                                 (src, P["cmc_force_rs"], "Actuation_force")):
+            cols, d, deg = _rd(inp)
+            t = d[:, cols.index("time")]
+            _, keep = np.unique(t, return_index=True)     # CMC can repeat a time stamp
+            d, t = d[keep], t[keep]
+            outd = np.column_stack([np.interp(tg, t, d[:, k]) if c != "time" else tg
+                                    for k, c in enumerate(cols)])
+            _wr(out, cols, outd, deg, name)
+        self._log(f'      CMC output resampled to the IK grid: {len(tk)} -> {len(tg)} frames '
+                  f'({os.path.basename(P["cmc_force_rs"])})', terminal=True)
 
     @staticmethod
     def _coords_deg(path):
@@ -5009,12 +5184,24 @@ class Analyse:
                       'really want the unbalanced number.', terminal=True)
             return
 
+        # 2026-10-22: the SAME actuator set as SO's JRA (reserves now in the forces
+        # file as ID - CEINMS muscle moment), so SO and CEINMS JCF are comparable
+        _jra_model, _jra_act = self.model_dir, None
         try:
-            _u.openSim.run_jra(osim_modelPath=self.model_dir,
+            _act = os.path.join(self.path, self.actuators_so)
+            if os.path.isfile(_act):
+                from bioscout.simulate import so_actuators as _soa
+                _jra_model, _fs, _ = _soa.plan(self.model_dir, _act)
+                _jra_act = [os.path.abspath(_fs)] if _fs else None
+        except Exception as e:                                   # noqa: BLE001
+            self._log(f'[JRA CEINMS] [WARNING] actuator set not resolved ({e}); no reserves')
+            _jra_model, _jra_act = self.model_dir, None
+        try:
+            self._get_openSim().run_jra(osim_modelPath=_jra_model,     # engine of this iteration
                      ik_output=self.ik,
                      grf_xml=self.setup_grf,
                      setup_xml=self.setup_jra_ceinms,
-                     actuators=None,
+                     actuators=_jra_act,
                      muscle_force_path=self.jra_forces_ceinms,
                      saveFileName=self.jra_ceinms)
             
@@ -5107,13 +5294,14 @@ class Analyse:
         + reserves) plus one term per muscle group. See
         ``bioscout.core.jcf_contributions`` and docs/JCF_CONTRIBUTIONS.md.
 
-        forces_type: 'so' | 'ceinms' | 'both'.
+        forces_type: 'so' | 'ceinms' | 'cmc' | 'both' (= so + ceinms).
         groups: {source name: [muscle columns]} to decompose by; default
         settings.BatchSettings.MUSCLE_GROUPS (+ jcf_contributions.EXTRA_GROUPS).
         Writes joint_contact_forces/contributions_<type>.sto (closure check
         and body weight in its header) and contributions_<type>.png (stacked
         |JCF| figure) -- no folder. keep_sto is ignored. Returns {type: DataFrame}.
         """
+        os.environ["BIOSCOUT_JRA_ENGINE"] = "pyosim" if self._is_pyosim() else "opensim"
         from . import jcf_contributions as _jc
         self._set_replace(replace)
         os.makedirs(self.path, exist_ok=True); os.chdir(self.path)
@@ -5149,6 +5337,9 @@ class Analyse:
                               'not balanced (no residual/reserve/GRF columns).', terminal=True)
                     continue
                 forces = self.jra_forces_ceinms
+            elif t == "cmc":
+                _fp = self.forward_paths()
+                forces = _fp["cmc_force_rs"] if os.path.isfile(_fp["cmc_force_rs"]) else _fp["cmc_force"]
             else:
                 forces = self.jra_forces
             if not forces or not os.path.exists(forces):
@@ -5173,39 +5364,52 @@ class Analyse:
                 work = os.path.join(jcf_dir, f"_contrib_work_{t}")
                 shutil.rmtree(work, ignore_errors=True)
                 try:
+                    # CMC: its own kinematics (what its forces balance), not IK
+                    _fp = self.forward_paths()
+                    _ik = ((_fp["cmc_kinematics_rs"] if os.path.isfile(_fp["cmc_kinematics_rs"])
+                            else _fp["cmc_kinematics"]) if t == "cmc" else self.ik)
                     df = _jc.decompose(
-                        model_path=self.model_dir, ik_file=self.ik, grf_xml=self.setup_grf,
+                        model_path=self.model_dir, ik_file=_ik, grf_xml=self.setup_grf,
                         forces_file=forces, out_dir=work, jra_columns=jcols,
                         per_muscle=per_muscle, keep_sto=False, replace=True,
                         groups=groups,          # {source: [muscle columns]}; None = settings
                         n_jobs=n_jobs,
                         setup_template=os.path.join(self.setup_dir, "setup_JRA.xml"),
-                        log=lambda m: self._log(m, terminal=True))
+                        log=lambda m: self._log(m, terminal=True),
+                        # CEINMS JRA runs with actuators=None (run_jra_ceinms):
+                        # decompose it the same way (2026-10-21)
+                        force_set="auto")      # SO's actuator set for CEINMS too (2026-10-22)
                     closure = df.attrs.get("closure")
                     # Reserves out of the non-muscle baseline (one extra JRA).
+                    # Not for CEINMS: its JRA carries no reserve actuators.
                     try:
+                        pass                   # CEINMS has reserves now (2026-10-22)
                         _df = _jc.split_reserves(
-                            model_path=self.model_dir, ik_file=self.ik, grf_xml=self.setup_grf,
+                            model_path=self.model_dir, ik_file=_ik, grf_xml=self.setup_grf,
                             forces_file=forces, out_dir=work, jra_columns=jcols,
                             setup_template=os.path.join(self.setup_dir, "setup_JRA.xml"),
                             replace=True, log=lambda m: self._log(m, terminal=True))
                         if _df is not None:
                             df = _df
+                    except _SkipSplit:
+                        pass
                     except Exception as e:
                         self._log(f'[Warning] reserve split of the JCF contributions ({t}) failed: {e}',
                                   terminal=True)
                     _jc.write_contributions_sto(df, sto_out, body_weight=bw, closure=closure)
                 except Exception as e:
-                    self._log(f'[Error] during JCF contributions ({t}): {e}', terminal=True)
+                    self._log(f'[Error] during JCF contributions ({t}): {e} '
+                              f'(work folder kept: {work})', terminal=True)
                     continue
-                finally:
+                else:
                     shutil.rmtree(work, ignore_errors=True)
             out[t] = df
             if plot:
                 try:
                     _jc.plot_contribution_stack(
                         df, save=png_out, body_weight=bw,
-                        title=f"{self.trial} - {t.upper()} contributions to the joint contact force")
+                        title=f"{self.trial} - {t.upper()} contributions to the joint contact force",
+                        measured=self._invivo_jcf())
                 except Exception as e:
                     self._log(f'[Warning] contributions stack figure failed: {e}')
             self._log(f'JCF contributions ({t}) written to {sto_out}')
@@ -5405,11 +5609,18 @@ class Analyse:
             if so is not None and ce is not None and len(so) and len(ce):
                 _ts, _tc = so['time'].values, ce['time'].values
                 _d0, _d1 = abs(_ts[0] - _tc[0]), abs(_ts[-1] - _tc[-1])
-                if max(_d0, _d1) > 1e-6 or len(_ts) != len(_tc):
-                    _stale = (f"SO {_ts[0]:.3f}-{_ts[-1]:.3f}s ({len(_ts)} frames)  "
-                              f"vs  CEINMS {_tc[0]:.3f}-{_tc[-1]:.3f}s "
+                _l0, _l1 = labels[0], labels[1]
+                if compare is not None:
+                    # CMC / RRA run on their own grid and (GRF) window: only a
+                    # range reaching OUTSIDE the SO one means the two are stale
+                    _bad = _tc[0] < _ts[0] - 1e-6 or _tc[-1] > _ts[-1] + 1e-6
+                else:
+                    _bad = max(_d0, _d1) > 1e-6 or len(_ts) != len(_tc)
+                if _bad:
+                    _stale = (f"{_l0} {_ts[0]:.3f}-{_ts[-1]:.3f}s ({len(_ts)} frames)  "
+                              f"vs  {_l1} {_tc[0]:.3f}-{_tc[-1]:.3f}s "
                               f"({len(_tc)} frames)")
-                    self._log(f"[JRA] WARNING: SO and CEINMS were solved over "
+                    self._log(f"[JRA] WARNING: {_l0} and {_l1} were solved over "
                               f"DIFFERENT windows — {_stale}. One of them is "
                               f"stale; re-run the other stage before comparing.",
                               terminal=True)
@@ -5820,6 +6031,7 @@ class Analyse:
         check.  Stops when no qualifying discontinuities remain or `max_iter` is reached.
         The modified model is saved in place; a .bak copy is created on the first iteration.
         """
+        self._opensim_only("adjust_moment_arms")
         import shutil
         import opensim as osim
 
@@ -7773,7 +7985,14 @@ class Analyse:
         _u.ET.SubElement(root, 'inputDataFile').text = _rel(self.ceinms_input_data)
         _u.ET.SubElement(root, 'executionFile').text = _rel(self.ceinms_exe_cfg)
         _u.ET.SubElement(root, 'excitationGeneratorFile').text = _rel(self.ceinms_excitation_generator)
-        _u.ET.SubElement(root, 'outputDirectory').text = _rel(self.ceinms_exe_dir)
+        # The tagged folder (Execution<tag>_a<..>_b<..>_g<..>) from the start
+        # (2026-10-21): an untagged "Execution" here used to be solved into as a
+        # stray folder whenever the run-time rename was skipped.
+        try:
+            _outdir = self.ceinms_exe_out_rel()
+        except Exception:
+            _outdir = self.ceinms_exe_dir
+        _u.ET.SubElement(root, 'outputDirectory').text = _rel(_outdir)
         # Create tree and write to file
         tree = _u.ET.ElementTree(root)
         _u.save_pretty_xml(tree, self.ceinms_exe_setup)
@@ -8265,37 +8484,92 @@ class Analyse:
             self._log(f'Saved best CEINMS parameters to {best_params_csv}')
 
     def add_so_columns_to_ceinms_results(self):
-        """Append the SO force file's NON-muscle columns (pelvis residuals
-        FX..MZ, coordinate reserves, GRF) to the CEINMS MuscleForces file, so the
-        JointReaction `forces_file` has the FULL actuator set. Without the
-        residual/reserve actuators the JRA can't balance the dynamics and dumps the
-        imbalance into the hip (blowing the contact force up ~100x). Reads the SO
-        force file explicitly (self.so_forces) — NOT self.jra_forces, which on a
-        CEINMS-loaded trial resolves to the CEINMS forces (=> nothing to add)."""
+        """Give the CEINMS force file the SAME actuator columns SO's has, so the
+        CEINMS JointReaction is set up exactly like SO's (2026-10-22).
+
+        * every ``<coord>_reserve`` / coordinate actuator of the trial's
+          ``static_optimisation/actuators_so.xml``: ID moment of that coordinate
+          MINUS the CEINMS muscle moment (sum F x moment arm). So muscles +
+          reserves = ID, as in SO, also for coordinates CEINMS did not track
+          (they get the whole ID moment).
+        * every other non-muscle SO column (pelvis residuals FX..MZ, GRF ...):
+          SO's value interpolated by TIME onto the CEINMS time grid (until
+          2026-10-22 these were pasted by ROW, ~0.4 s out of step, and SO's
+          reserves were copied as if they balanced CEINMS's muscles).
+
+        Rewrites jra_forces_ceinms in place; earlier added columns are replaced.
+        Returns True when the file now carries the SO actuator set."""
+        import numpy as _np
+        import xml.etree.ElementTree as _ET
+
         def _abs(p):
             return p if os.path.isabs(p) else os.path.join(self.path, p)
         try:
             so_forces = _u.load_any_data_file(_abs(self.so_forces))
-            ceinms_forces = _u.load_any_data_file(_abs(self.jra_forces_ceinms))
+            ce = _u.load_any_data_file(_abs(self.jra_forces_ceinms))
+            idm = _u.load_any_data_file(_abs(self.id))
         except Exception as e:
-            self._log(f'[Error] loading SO or CEINMS forces for adding columns: {e}', terminal=True)
+            self._log(f'[Error] loading SO / CEINMS forces or ID for the CEINMS actuator columns: {e}', terminal=True)
             return False
-        if so_forces is None or ceinms_forces is None:
-            self._log(f'[Error] SO ({_abs(self.so_forces)}) or CEINMS forces not readable; '
-                      f'JRA residual/reserve columns NOT added (JCF will be wrong).', terminal=True)
+        if so_forces is None or ce is None or idm is None:
+            self._log('[Error] SO forces, CEINMS forces or ID not readable; '
+                      'CEINMS JRA actuator columns NOT added.', terminal=True)
             return False
+        # actuators SO ran with: every actuator name; coordinate actuators -> coordinate
+        coord_of, act_names = {}, set()
+        act = _abs(self.actuators_so)
+        if os.path.isfile(act):
+            for e in _ET.parse(act).getroot().iter():
+                if e.tag.endswith("Actuator") and e.get("name"):
+                    act_names.add(e.get("name"))
+                    c = e.findtext("coordinate")
+                    if c:
+                        coord_of[e.get("name")] = c.strip()
+        so_cols = [c for c in so_forces.columns if c != "time"]
+        # non-muscle = SO actuators + any SO column CEINMS never had (GRF ...);
+        # a re-run finds them already in the CEINMS file and replaces them
+        try:                                   # the model's muscles
+            _mus = set(self.get_muscle_list())
+        except Exception:
+            _mus = None
+        muscles = [c for c in ce.columns if c != "time" and c not in act_names
+                   and (c in _mus if _mus else not any(c.endswith(x) for x in
+                        ("_Fx", "_Fy", "_Fz", "_px", "_py", "_pz", "_Tx", "_Ty", "_Tz")))]
+        out = ce[["time"] + muscles].copy()
+        t = out["time"].to_numpy(float)
+        ts = so_forces["time"].to_numpy(float)
+        ti = idm["time"].to_numpy(float)
+        _ma_cache = {}
 
-        # Non-muscle SO columns missing from the CEINMS forces (residuals/reserves/GRF).
-        missing_columns = [c for c in so_forces.columns
-                           if c != 'time' and c not in ceinms_forces.columns]
-        n = min(len(so_forces), len(ceinms_forces))
-        updated_forces = ceinms_forces.iloc[:n].copy()
-        for col in missing_columns:
-            updated_forces[col] = so_forces[col].to_numpy()[:n]
+        def _ma(coord):
+            if coord not in _ma_cache:
+                f = os.path.join(self.path, self.ma, f"_MuscleAnalysis_MomentArm_{coord}.sto")
+                _ma_cache[coord] = _u.load_any_data_file(f) if os.path.exists(f) else None
+            return _ma_cache[coord]
 
-        _u.write_sto_file(updated_forces, _abs(self.jra_forces_ceinms))
-        self._log(f'[Success] added {len(missing_columns)} SO reserve/residual/GRF columns '
-                  f'to CEINMS forces (for balanced JRA)', terminal=True)
+        n_res, n_other, no_ma = 0, 0, []
+        for col in [c for c in so_cols if c not in muscles]:
+            coord = coord_of.get(col)
+            if coord is not None and f"{coord}_moment" in idm.columns:
+                tau = _np.interp(t, ti, idm[f"{coord}_moment"].to_numpy(float))
+                ma = _ma(coord)
+                if ma is not None:
+                    tm = ma["time"].to_numpy(float)
+                    for m in muscles:
+                        if m in ma.columns:
+                            tau = tau - out[m].to_numpy(float) * _np.interp(t, tm, ma[m].to_numpy(float))
+                else:
+                    no_ma.append(coord)
+                out[col] = tau
+                n_res += 1
+            else:
+                out[col] = _np.interp(t, ts, so_forces[col].to_numpy(float))
+                n_other += 1
+        _u.write_sto_file(out, _abs(self.jra_forces_ceinms))
+        if no_ma:
+            self._log(f'[Warning] no moment arms for {no_ma}: their reserve = full ID moment', terminal=True)
+        self._log(f'[Success] CEINMS forces: {n_res} reserves (ID - CEINMS muscle moment) + '
+                  f'{n_other} SO residual/other columns (time-interpolated)', terminal=True)
         return True
 
     def plot_ceinms_execution_comparison(self):
@@ -8458,3 +8732,54 @@ class Analyse:
 from bioscout.lab.subject_profile import (  # noqa: E402,F401
     SubjectProfile, SubjectStore, ProjectSubjectStore, DEFAULT_SEGMENT_FRACTIONS,
 )
+
+
+# ---------------------------------------------------------------------------
+# On-demand stage folders
+# ---------------------------------------------------------------------------
+# Trial folders are no longer scaffolded with every stage subfolder up front
+# (see Iteration.trial / _ensure_out_dir). Each stage entry point below creates
+# its own output folder the first time it is actually called, so a folder on
+# disk means that stage was run (reported 2026-10-15, KinematicToolsReliability:
+# exbiomec-only runs left empty ceinms/mrs/jcf/so/ma folders).
+def _with_stage_dir(fn, key):
+    import functools
+
+    @functools.wraps(fn)
+    def _wrapped(self, *a, **kw):
+        try:
+            os.makedirs(self.path, exist_ok=True)
+            self._ensure_out_dir(LAYOUT_DIRS[key])
+        except Exception:
+            pass
+        return fn(self, *a, **kw)
+    return _wrapped
+
+
+def _install_stage_dirs(cls):
+    for _name in list(vars(cls)):
+        if not callable(getattr(cls, _name, None)) or _name.startswith("_"):
+            continue
+        if _name in ("run_ik", "run_id"):
+            key = "extbio"
+        elif _name == "run_ma":
+            key = "muscle_analysis"
+        elif _name == "run_so":
+            key = "static_optimisation"
+        elif _name == "run_mrs":
+            key = "mrs"
+        elif _name == "run_rra":
+            key = "rra"
+        elif _name == "run_forward":
+            key = "forward"
+        elif _name.startswith("run_jra"):
+            key = "joint_contact_forces"
+        elif (_name.startswith(("create_ceinms", "run_ceinms"))
+              and "calibration" not in _name):
+            key = "ceinms"
+        else:
+            continue
+        setattr(cls, _name, _with_stage_dir(getattr(cls, _name), key))
+
+
+_install_stage_dirs(Analyse)
