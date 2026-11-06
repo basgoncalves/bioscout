@@ -94,8 +94,7 @@ def plan(model_path, actuators_path=None):
     msg = (f"[SO WARNING] no reserve/residual actuators in the model "
            f"({model_path}) nor in an so_actuators file ({actuators_path}). "
            f"SO will push the muscles to absorb every residual.")
-    print(msg)
-    warnings.warn(msg)
+    print(msg)   # once; warnings.warn duplicated it in the log with a traceback line
     return model_path, None, "NONE"
 
 
@@ -223,5 +222,59 @@ def scale_residuals(actuators_xml, id_sto, t0=None, t1=None, margin=1.0,
             for t in tags:
                 t.text = f"{need:g}"
             changed[name] = (old, need)
+    tree.write(out_xml or actuators_xml, encoding="UTF-8", xml_declaration=True)
+    return changed
+
+
+def bound_controls(actuators_xml, id_sto, t0=None, t1=None, margin=1.1, out_xml=None):
+    """Every non-muscle actuator to control -1..1 (2026-11-03).
+
+    OpenSim SO with -Inf..Inf controls can diverge at a frame where the optimiser
+    does not converge (K2L Gehen_01, 6.43 s: MX 712 kN*m, control 891). With every
+    control in -1..1 an actuator can never exceed its optimal_force. An actuator that
+    was unbounded (pelvis residuals, lumbar, ...) has its optimal_force raised to
+    margin x the peak |ID| of what it actuates if smaller, so it can still carry the
+    whole load; actuators that already had finite limits (reserves) keep their
+    optimal_force. Returns {name: (old_limits, old_force, new_force)} for the changed."""
+    import math
+    import pandas as pd
+    from bioscout import utils as _u
+    d = _u.load_any_data_file(id_sto)
+    if t0 is not None and t1 is not None and "time" in d:
+        tt = pd.to_numeric(d["time"], errors="coerce")
+        d = d[(tt >= t0 - 1e-9) & (tt <= t1 + 1e-9)]
+    peak = {c: float(pd.to_numeric(d[c], errors="coerce").abs().max()) for c in d if c != "time"}
+    tree = ET.parse(actuators_xml)
+    objs = _objects(tree.getroot())
+    changed = {}
+    for e in (objs if objs is not None else []):
+        if e.tag not in ACTUATOR_TAGS:
+            continue
+        name = e.get("name")
+        lo, hi = e.find("min_control"), e.find("max_control")
+        old = (lo.text.strip() if lo is not None and lo.text else "-Inf",
+               hi.text.strip() if hi is not None and hi.text else "Inf")
+        unbounded = any(not math.isfinite(float(v)) for v in old)
+        for tag, val in (("min_control", "-1"), ("max_control", "1")):
+            x = e.find(tag)
+            if x is None:
+                x = ET.SubElement(e, tag)
+            x.text = val
+        tags = e.findall("optimal_force")
+        f_old = float(tags[0].text) if tags else None
+        f_new = f_old
+        if unbounded and tags:
+            col = RESIDUAL_ID_COLUMNS.get(name)
+            if col is None:
+                c = (e.findtext("coordinate") or "").strip()
+                col = next((k for k in (c + "_moment", c + "_force") if k in peak), None)
+            if col in peak and math.isfinite(peak[col]):
+                need = float(math.ceil(peak[col] * margin))
+                if need > f_old:
+                    f_new = need
+                    for t in tags:
+                        t.text = f"{need:g}"
+        if old != ("-1", "1") or f_new != f_old:
+            changed[name] = (old, f_old, f_new)
     tree.write(out_xml or actuators_xml, encoding="UTF-8", xml_declaration=True)
     return changed

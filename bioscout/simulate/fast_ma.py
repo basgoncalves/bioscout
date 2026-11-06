@@ -123,8 +123,6 @@ def run(model_path, ik_path, out, coords=None, h=1e-4, lowpass=6.0, min_wraps=2)
                 for k in exact:
                     if abs(R[c][i, k]) > 1e-6:
                         R[c][i, k] = mus[k].getGeometryPath().computeMomentArm(s, co)
-        if i % 50 == 0:
-            print(f"  frame {i+1}/{len(T)}  {time.time()-t0:.0f} s", flush=True)
 
     os.makedirs(out, exist_ok=True)
     write_sto(os.path.join(out, "_MuscleAnalysis_Length.sto"), T, mnames, L, "Length")

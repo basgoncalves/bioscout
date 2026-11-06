@@ -731,3 +731,211 @@ def plot_calibration_parameters(uncalibratedModelPath, calibratedModelPath, out_
     u.add_suffix("_uncal").join(c.add_suffix("_cal")).to_csv(out_png.replace(".png", ".csv"))
     print(f"Calibration parameters plot saved to: {out_png}")
     return out_png
+
+
+#: muscle -> stack-group colour, the same colours as the JCF stack figures
+#: (Charite tests/actuators_so/plot.py STACK_COLORS) -- 2026-10-21
+_SUMMARY_GROUPS = [("Adductors", ("addbrev", "addlong", "addmag"), "#2bb5c0"),
+                   ("Gluteus maximus", ("glmax",), "#a266b1"),
+                   ("Gluteus med+min", ("glmed", "glmin"), "#5d8cb3"),
+                   ("Hamstrings", ("bflh", "bfsh", "semimem", "semiten"), "#6b2f73"),
+                   ("Iliopsoas", ("iliacus", "psoas"), "#dd7036"),
+                   ("Rectus femoris", ("recfem",), "#2f6b43"),
+                   ("Gastrocnemius", ("gaslat", "gasmed"), "#a41e23"),
+                   ("Soleus", ("soleus",), "#e8787b"),
+                   ("Vasti", ("vasint", "vaslat", "vasmed"), "#6cc070")]
+
+
+def _muscle_colour(m, default="0.45"):
+    m = str(m).lower()
+    for _, pres, col in _SUMMARY_GROUPS:
+        if m.startswith(pres):
+            return col
+    return default
+
+
+def plot_ceinms_summary(outputDirectory, setupXML_path, save_name="summary.png", n_major=6):
+    """<outputDirectory>/summary.png (2026-10-21), one ROW PER DOF (CEINMS dofSet
+    + subtalar when its moment arms exist), four columns:
+
+      1  ID moment (black), CEINMS torque (red) and the muscle moments
+         (force x moment arm) stacked by muscle group underneath
+      2  CEINMS activation of the major muscles crossing that DOF (solid) and
+         their measured EMG where a channel drives them (dotted, same colour)
+      3  normalised fibre length of the same muscles
+      4  their moment arm about that DOF (cm)
+
+    "Major" = the `n_major` muscles with the largest peak |F*r| at the DOF,
+    among those crossing it (|r| > 1 mm). Colours = muscle group (as the JCF
+    stacks); line style separates muscles of one group. x = % CEINMS window."""
+    import numpy as _np
+    setupXML_path = os.path.abspath(setupXML_path)
+    base = os.path.dirname(setupXML_path)
+    _a = lambda p: p if os.path.isabs(p) else os.path.normpath(os.path.join(base, p))
+    out = _a(outputDirectory)
+    setup = ET.parse(setupXML_path).getroot()
+    inp_path = _a(setup.find("inputDataFile").text)
+    inp = ET.parse(inp_path).getroot()
+    _ai = lambda p: p if os.path.isabs(p) else os.path.normpath(os.path.join(os.path.dirname(inp_path), p))
+
+    def _load(p):
+        return utils.load_any_data_file(p) if p and os.path.exists(p) else None
+
+    tor = _load(os.path.join(out, "Torques.sto"))
+    frc = _load(os.path.join(out, "MuscleForces.sto"))
+    if tor is None or frc is None:
+        print(f"[summary] skipped: no Torques/MuscleForces in {out}")
+        return None
+    t0, t1 = float(tor["time"].iloc[0]), float(tor["time"].iloc[-1])
+
+    def _norm(df):
+        if df is None:
+            return None
+        d = df[(df["time"] >= t0 - 1e-9) & (df["time"] <= t1 + 1e-9)]
+        return utils.time_normalise_df(d) if len(d) > 1 else None
+
+    tor, frc = _norm(tor), _norm(frc)
+    act = _norm(_load(os.path.join(out, "Activations.sto")))
+    nfl = _norm(_load(os.path.join(out, "NormFibreLengths.sto")))
+    emg = _norm(_load(_ai(inp.find("excitationsFile").text)))
+    idm = _norm(_load(_ai(inp.find("externalTorquesFile").text)))
+    x = _np.linspace(0, 100, 101)
+
+    # muscle -> EMG channel (excitation generator)
+    eg = ET.parse(_a(setup.find("excitationGeneratorFile").text)).getroot().find("mapping")
+    m2ch = {}
+    for e in eg.findall("excitation"):
+        ins = [i_.text for i_ in e.findall("input")]
+        if ins and emg is not None and ins[0] in emg.columns:
+            m2ch[e.get("id")] = ins[0]
+    # moment arms per DOF (+ subtalar from the same muscle_analysis folder)
+    ma_files = {}
+    maf = inp.find("momentArmsFiles")
+    for f in (maf.findall("momentArmsFile") if maf is not None else []):
+        ma_files[f.get("dofName")] = _ai(f.text)
+    if ma_files:
+        _d = os.path.dirname(next(iter(ma_files.values())))
+        for sd in ("r", "l"):
+            p = os.path.join(_d, f"_MuscleAnalysis_MomentArm_subtalar_angle_{sd}.sto")
+            if os.path.exists(p):
+                ma_files.setdefault(f"subtalar_angle_{sd}", p)
+    # rows = the DOFs this run TRACKED (execution/optimise cfg dofSet), so a
+    # one-leg run shows one leg (2026-10-22); fall back to the torque columns
+    dofs = []
+    try:
+        _cfg = ET.parse(_a(setup.find("executionFile").text)).getroot()
+        _ds = _cfg.find(".//dofSet")
+        dofs = (_ds.text or "").split() if _ds is not None else []
+    except Exception:
+        dofs = []
+    if not dofs:
+        dofs = [c for c in tor.columns if c != "time"]
+        # + subtalar of the side(s) shown, when its moment arms exist
+        _sides = {d_[-1] for d_ in dofs}
+        dofs += [d for d in ma_files if d not in dofs and d.startswith("subtalar") and d[-1] in _sides]
+    mas = {d: _norm(_load(p)) for d, p in ma_files.items()}
+
+    groups = [g for g, _, _ in _SUMMARY_GROUPS] + ["Other muscles"]
+    gcol = {g: c for g, _, c in _SUMMARY_GROUPS}
+    gcol["Other muscles"] = "0.75"
+
+    def _grp(m):
+        m_ = str(m).lower()
+        for g, pres, _ in _SUMMARY_GROUPS:
+            if m_.startswith(pres):
+                return g
+        return "Other muscles"
+
+    ls = ["-", "--", "-.", ":"]
+    nr = len(dofs)
+    fig, ax = plt.subplots(nr, 4, figsize=(22, 2.2 * nr + 1.4), squeeze=False, sharex=True)
+    for c, ttl in enumerate(["moment (N·m): ID, CEINMS, muscle groups",
+                             "activation (solid) / EMG (dotted)",
+                             "normalised fibre length", "moment arm (cm)"]):
+        ax[0][c].set_title(ttl, fontsize=11, fontweight="bold")
+    used = set()
+    for r, dof in enumerate(dofs):
+        d = mas.get(dof)
+        mus = [m for m in frc.columns if m != "time" and d is not None and m in d.columns
+               and _np.nanmax(_np.abs(d[m].to_numpy(float))) > 1e-3]
+        mom = {m: frc[m].to_numpy(float) * d[m].to_numpy(float) for m in mus}
+        # (1) moments: group stack + ID + CEINMS
+        a = ax[r][0]
+        pos, neg = _np.zeros_like(x), _np.zeros_like(x)
+        for g in groups:
+            v = sum((mom[m] for m in mus if _grp(m) == g), _np.zeros_like(x))
+            if not _np.any(_np.abs(v) > 1e-6):
+                continue
+            used.add(g)
+            p_, n_ = _np.clip(v, 0, None), _np.clip(v, None, 0)
+            a.fill_between(x, pos, pos + p_, color=gcol[g], lw=0, alpha=0.85)
+            a.fill_between(x, neg, neg + n_, color=gcol[g], lw=0, alpha=0.85)
+            pos, neg = pos + p_, neg + n_
+        col = dof + "_moment"
+        # reserve (2026-10-22): the <dof>_reserve column bioscout adds to the CEINMS
+        # forces for the JRA (= ID - CEINMS muscle moment); else that gap itself
+        _rc = f"{dof}_reserve"
+        if _rc in frc.columns:
+            res = frc[_rc].to_numpy(float)
+        elif idm is not None and col in idm.columns:
+            res = idm[col].to_numpy(float) - sum(mom.values(), _np.zeros_like(x))
+        else:
+            res = None
+        if res is not None and _np.any(_np.abs(res) > 1e-6):
+            p_, n_ = _np.clip(res, 0, None), _np.clip(res, None, 0)
+            _kw = dict(facecolor="0.35", hatch="///", edgecolor="white", lw=0)
+            a.fill_between(x, pos, pos + p_, **_kw)
+            a.fill_between(x, neg, neg + n_, **_kw)
+            _tot = _np.abs(res).sum() + _np.abs(sum(mom.values(), _np.zeros_like(x))).sum()
+            a.text(0.02, 0.95, f"reserve {100 * _np.abs(res).sum() / max(_tot, 1e-12):.0f} %",
+                   transform=a.transAxes, ha="left", va="top", fontsize=7)
+            used.add("__reserve__")
+        if idm is not None and col in idm.columns:
+            a.plot(x, idm[col].to_numpy(float), color="k", lw=1.6, ls=(0, (4, 1.5)), label="ID")
+        if dof in tor.columns:
+            lab = "CEINMS"
+            if idm is not None and col in idm.columns:
+                lab += (f" R² {utils.rsquared(idm[col], tor[dof]):.2f}"
+                        f" RMSE {utils.rmse(idm[col], tor[dof]):.1f}")
+            a.plot(x, tor[dof].to_numpy(float), color="tab:red", lw=1.3, label=lab)
+        a.axhline(0, color="0.6", lw=0.6)
+        a.set_ylabel(dof, fontsize=9, fontweight="bold")
+        a.legend(fontsize=6.5, frameon=False, loc="upper right")
+        # major muscles at this DOF
+        major = sorted(mus, key=lambda m: -_np.nanmax(_np.abs(mom[m])))[:n_major]
+        k_in = {}
+        for m in major:
+            g = _grp(m)
+            j = k_in.get(g, 0); k_in[g] = j + 1
+            c_, l_ = gcol[g], ls[j % 4] if True else "-"
+            if act is not None and m in act.columns:
+                ax[r][1].plot(x, act[m].to_numpy(float), color=c_, ls=l_, lw=1.4, label=m)
+            ch = m2ch.get(m)
+            if ch:
+                ax[r][1].plot(x, emg[ch].to_numpy(float), color=c_, ls=":", lw=1.1, alpha=0.8,
+                              label=f"EMG {ch.replace('EMG_Channels_', '')}")
+            if nfl is not None and m in nfl.columns:
+                ax[r][2].plot(x, nfl[m].to_numpy(float), color=c_, ls=l_, lw=1.4, label=m)
+            ax[r][3].plot(x, 100 * d[m].to_numpy(float), color=c_, ls=l_, lw=1.4, label=m)
+        ax[r][2].axhspan(0.5, 1.5, color="0.95", zorder=0)
+        ax[r][2].axhline(1.0, color="0.6", lw=0.6)
+        ax[r][3].axhline(0, color="0.6", lw=0.6)
+        for c in (1, 2, 3):
+            ax[r][c].legend(fontsize=6, frameon=False, loc="upper right", ncol=2)
+    for c in range(4):
+        ax[nr - 1][c].set_xlabel("% CEINMS window")
+    for a in ax.flat:
+        a.tick_params(labelsize=7)
+        a.spines[["top", "right"]].set_visible(False)
+    from matplotlib.patches import Patch
+    h = [Patch(color=gcol[g], label=g) for g in groups if g in used]
+    if "__reserve__" in used:
+        h.append(Patch(facecolor="0.35", hatch="///", edgecolor="white", label="Reserve actuators"))
+    fig.legend(handles=h, loc="lower center", ncol=min(len(h), 10), frameon=False, fontsize=8)
+    fig.suptitle(f"CEINMS summary — {os.path.basename(out)} (one row per DOF)", fontweight="bold")
+    fig.tight_layout(rect=(0, 0.02, 1, 0.985))
+    p = os.path.join(out, save_name)
+    fig.savefig(p, dpi=120)
+    plt.close(fig)
+    print(f"[summary] -> {p}")
+    return p

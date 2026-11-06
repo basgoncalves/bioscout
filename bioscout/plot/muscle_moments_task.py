@@ -4,7 +4,8 @@
 vertical task layout of :mod:`bioscout.plot.task_figure` (poses and vGRF on
 top), then one row per reserved coordinate of that leg:
 
-    ID moment (black), muscles = ID - reserve (blue dashed), reserve (purple),
+    stacked muscle-group moments (force x moment arm, groups/colours as in
+    contributions_so.png) + reserve (hatched), summing to the ID moment (black),
     in N·m, left axis; joint angle (grey dotted, right axis)
     title: RMSE(muscles, ID) and peak |reserve|, both in % of the ID moment's
     RANGE (the numbers in muscle_moments.csv); green < 5 %, orange < 10 %, red
@@ -29,9 +30,53 @@ ORDER = ("hip_flexion", "hip_adduction", "hip_rotation", "knee_angle",
          "knee_adduction", "ankle_angle", "subtalar_angle", "mtp_angle")
 FIG = "muscle_moments_{side}.png"
 
+from bioscout.core.jcf_contributions import STACK_ORDER as _SO, _stack_colors
+STACK_ORDER = [g for g in _SO if g not in ("Intersegmental", "Other leg (lumped)",
+                                           "Reserve actuators")]
+COL = _stack_colors()
+HATCH = {"Reserve actuators": "///"}
+
+
+class _LazyLegend(list):
+    """Legend handles built when the figure asks for them (after the rows are
+    drawn), so only groups that actually appear are listed."""
+    def __init__(self, make):
+        super().__init__()
+        self._make = make
+
+    def __iter__(self):
+        if not len(self):
+            self.extend(self._make())
+        return super().__iter__()
+
+    def __len__(self):
+        return super().__len__() or len(self._make())
+
 
 def _rmse_color(p):
     return "tab:green" if p < 5 else "darkorange" if p < 10 else "tab:red"
+
+
+def _grouped_muscle_moments(trial, col, ts):
+    """{stack group: moment (N·m) on ``ts``} from
+    muscle_analysis/_MuscleMoments_<col>_so.sto (force x moment arm per muscle),
+    grouped with the same groups/colours as contributions_so.png. None if absent."""
+    from bioscout.core.jcf_contributions import stack_group
+    f = Path(trial) / "muscle_analysis" / f"_MuscleMoments_{col}_so.sto"
+    if not f.exists():
+        return None
+    mm, _ = read_sto(f)
+    tm = mm["time"].to_numpy(float)
+    out = {}
+    for m in mm.columns:
+        if m == "time":
+            continue
+        v = np.interp(ts, tm, mm[m].to_numpy(float))
+        if not np.any(np.abs(v) > 1e-9):
+            continue
+        g = stack_group(m)
+        out[g] = out.get(g, 0) + v
+    return out
 
 
 def muscle_moments(trial, sides=None, out_dir=None, log=print, strip=None):
@@ -58,6 +103,7 @@ def muscle_moments(trial, sides=None, out_dir=None, log=print, strip=None):
                              if c[:-len("_reserve")][-2:] in ("_r", "_l")})
     made = []
     for sd in sides:
+        used = set()
         dofs = [d for d in ORDER if f"{d}_{sd}_reserve" in so.columns
                 and f"{d}_{sd}_moment" in idm.columns]
         if not dofs:
@@ -75,11 +121,34 @@ def muscle_moments(trial, sides=None, out_dir=None, log=print, strip=None):
             if ang is not None and not deg:
                 ang = np.degrees(ang)
 
-            def draw(a, mom=mom, res=res, ang=ang):
-                a.plot(ts, mom, color="k", lw=1.7, zorder=3)
-                a.plot(ts, mom - res, color="tab:blue", lw=1.1, ls="--", zorder=4)
-                a.plot(ts, res, color="tab:purple", lw=1.2, zorder=5)
-                a.axhline(0, color="0.7", lw=0.5)
+            groups = _grouped_muscle_moments(trial, col, ts)
+            if groups:
+                used.update(groups)
+                used.add("Reserve actuators")
+            else:
+                used.add("__lines__")
+
+            def draw(a, mom=mom, res=res, ang=ang, groups=groups):
+                if groups:
+                    pos = np.zeros_like(ts)
+                    neg = np.zeros_like(ts)
+                    stack = [(g, groups[g]) for g in STACK_ORDER if g in groups]
+                    stack.append(("Reserve actuators", res))
+                    for g, v in stack:
+                        p, n = np.clip(v, 0, None), np.clip(v, None, 0)
+                        kw = dict(color=COL[g], lw=0, hatch=HATCH.get(g),
+                                  edgecolor="white" if g in HATCH else None, zorder=2)
+                        a.fill_between(ts, pos, pos + p, **kw)
+                        a.fill_between(ts, neg, neg + n, **kw)
+                        pos, neg = pos + p, neg + n
+                        used.add(g)
+                    a.plot(ts, mom, color="k", lw=1.7, zorder=3)
+                else:                                   # no per-muscle file: old look
+                    a.plot(ts, mom, color="k", lw=1.7, zorder=3)
+                    a.plot(ts, mom - res, color="tab:blue", lw=1.1, ls="--", zorder=4)
+                    a.plot(ts, res, color="tab:purple", lw=1.2, zorder=5)
+                    used.add("__lines__")
+                a.axhline(0, color="0.4", lw=0.5, zorder=3)
                 if ang is not None:
                     a2 = a.twinx()
                     a2.plot(ts, ang, color="0.55", lw=1.0, ls=":")
@@ -89,12 +158,20 @@ def muscle_moments(trial, sides=None, out_dir=None, log=print, strip=None):
             rows.append(dict(draw=draw, ylabel="N·m", title_color=_rmse_color(rmse_pct),
                              title=f"{col}   RMSE {rmse_pct:.1f} % · peak "
                                    f"{peak_pct:.0f} % of ID range"))
-        h = [plt.Line2D([], [], color="k", lw=1.7, label="ID moment"),
-             plt.Line2D([], [], color="tab:blue", lw=1.1, ls="--",
-                        label="muscles (ID - reserve)"),
-             plt.Line2D([], [], color="tab:purple", lw=1.2, label="reserve"),
-             plt.Line2D([], [], color="0.55", lw=1.0, ls=":",
-                        label="joint angle (right axis)")]
+        def legend():
+            from matplotlib.patches import Patch
+            h = [Patch(facecolor=COL[g], hatch=HATCH.get(g),
+                       edgecolor="white" if g in HATCH else COL[g], label=g)
+                 for g in STACK_ORDER + ["Reserve actuators"] if g in used]
+            h.append(plt.Line2D([], [], color="k", lw=1.7, label="ID moment"))
+            if "__lines__" in used:
+                h += [plt.Line2D([], [], color="tab:blue", lw=1.1, ls="--",
+                                 label="muscles (ID - reserve)"),
+                      plt.Line2D([], [], color="tab:purple", lw=1.2, label="reserve")]
+            h.append(plt.Line2D([], [], color="0.55", lw=1.0, ls=":",
+                                label="joint angle (right axis)"))
+            return h
+        h = legend()
         out = strip.figure(rows, out_dir / FIG.format(side=sd), legend=h)
         made.append(out)
         if log:

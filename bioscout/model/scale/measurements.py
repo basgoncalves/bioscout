@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import os
 import numpy as np
-from bioscout.model.opensim_base import _quiet_model
 
 # Virtual joint-centre markers: model-side names (markers_powerlifter.xml).
 JC_MARKERS = ("RHJCWK", "LHJCWK", "RKJCWK", "LKJCWK", "RAJCWK", "LAJCWK")
@@ -484,6 +483,7 @@ def build_measurement_set(model, trc_path, spec=None, verbose=True, model_marker
 # --------------------------------------------------------------------------
 def _segment_lengths(model_path):
     """Hip->knee->ankle joint distances, straight from the .osim joint frames."""
+    from bioscout.model.opensim_base import _quiet_model   # OpenSim only here
     import opensim as osim
     m = _quiet_model(model_path)
     s = m.initSystem()
@@ -509,6 +509,7 @@ def verify_scaled(generic_path, scaled_path, tol=1e-4, verbose=True):
     generic apart from mass, and that is precisely the failure mode that
     produced months of 'scaled' results built on generic geometry.
     """
+    from bioscout.model.opensim_base import _quiet_model   # OpenSim only here
     import opensim as osim
     g, sc = _quiet_model(generic_path), _quiet_model(scaled_path)
     gs, ss = g.initSystem(), sc.initSystem()
@@ -603,6 +604,7 @@ def set_total_mass(model_path, target_mass, out_path=None, verbose=True):
     one uniform factor on every body's mass and inertia, leaving every segment
     length, marker and muscle path exactly as the personalisation left them.
     """
+    from bioscout.model.opensim_base import _quiet_model   # OpenSim only here
     import opensim as osim
     m = _quiet_model(model_path)
     st = m.initSystem()

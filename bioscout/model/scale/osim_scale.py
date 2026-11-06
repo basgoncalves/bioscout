@@ -435,9 +435,10 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
         # from the marker set: they are regression estimates, not measurements, and
         # must never pull the model's real markers around during the IK pass.
         _ms_place = _sm.marker_placement_markerset(marker_set_for_scaling, _tmp)
+        _sf = os.path.join(_outdir, 'scale_factors.xml') if linear_scaling else None
         place_markers_via_ik(scaled_model_path, static_trc_path, scaled_model_path,
                              marker_set_file=_ms_place, time_range=(t0, t1),
-                             work_dir=_tmp, ik_weights=ik_weights)
+                             work_dir=_tmp, ik_weights=ik_weights, scale_set_file=_sf)
     # Prove the model actually changed size. Without this the empty-MeasurementSet
     # failure is invisible: the file exists, is named scaled.osim, and every
     # downstream stage runs happily on generic geometry.
@@ -612,9 +613,37 @@ def copy_geometry_beside(osim_path, source_model_path):
         return 0
 
 
+def _scale_markers_with_bodies(model, scale_set_file):
+    """Multiply each marker's location by the scale factors of the body it sits on
+    (its parent frame's base frame), read from a ScaleTool scale-set file."""
+    import xml.etree.ElementTree as _ET
+    sf = {}
+    for sc in _ET.parse(scale_set_file).getroot().iter("Scale"):
+        seg = (sc.findtext("segment") or "").strip()
+        if seg and (sc.findtext("apply") or "true").strip() != "false":
+            sf[seg] = [float(v) for v in (sc.findtext("scales") or "1 1 1").split()]
+    model.finalizeConnections()
+    ms = model.updMarkerSet()
+    n = 0
+    for i in range(ms.getSize()):
+        mk = ms.get(i)
+        try:
+            body = mk.getParentFrame().findBaseFrame().getName()
+        except Exception:
+            continue
+        f = sf.get(body)
+        if not f:
+            continue
+        loc = mk.get_location()
+        mk.set_location(osim.Vec3(loc.get(0) * f[0], loc.get(1) * f[1], loc.get(2) * f[2]))
+        n += 1
+    print(f"[scale] {n}/{ms.getSize()} marker-set locations scaled with their bodies "
+          f"({os.path.basename(scale_set_file)}) before registration")
+
+
 def place_markers_via_ik(model_path, static_trc, out_model_path,
                          marker_set_file=None, time_range=None, work_dir=None,
-                         ik_weights=None, max_ik_seconds=2.0):
+                         ik_weights=None, max_ik_seconds=2.0, scale_set_file=None):
     """Register a model's markers to the subject's STATIC pose WITHOUT ScaleTool's
     MarkerPlacer (which segfaults / throws bad_alloc on some complex models, e.g.
     the MRI/Lerner-knee model). Standard MarkerPlacer algorithm, done by hand:
@@ -657,6 +686,13 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
                 _own.remove(_i)
             model.updateMarkerSet(_ms)
             model.finalizeConnections()
+            # The marker set file holds GENERIC (unscaled) locations. ScaleTool's
+            # MarkerPlacer registers markers that were scaled with their bodies;
+            # without this the static-pose IK below runs on unscaled markers and
+            # biases the registered pose (seen as a constant ~4 deg pelvis-tilt /
+            # hip-flexion offset in every later IK). Scale them the same way.
+            if scale_set_file and os.path.exists(scale_set_file):
+                _scale_markers_with_bodies(model, scale_set_file)
             if model.getMarkerSet().getSize() != _ms.getSize():
                 print(f"[scale] [WARNING] marker set applied but the model now "
                       f"has {model.getMarkerSet().getSize()} markers for a "
@@ -731,6 +767,11 @@ def place_markers_via_ik(model_path, static_trc, out_model_path,
             print(f"[scale] [WARNING] could not apply marker weights to the "
                   f"registration IK ({e}); every marker weighted 1.0")
     ik.setModel(model)
+    # Converge fully: the registration pose is averaged and every later IK inherits it. At
+    # OpenSim's default accuracy (1e-5) the solver stops in the flat valley of this objective,
+    # ~0.2-0.4 deg from the minimum (K2L static: hip flexion 0.35 deg), which moves the registered
+    # markers by up to ~0.6 mm. A static trial is a few frames, so this costs nothing.
+    ik.set_accuracy(1e-9)
     ik.setMarkerDataFileName(static_trc)
     ik.setStartTime(t0)
     ik.setEndTime(t1)

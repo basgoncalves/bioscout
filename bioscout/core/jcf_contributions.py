@@ -40,6 +40,17 @@ import pandas as pd
 
 
 # ----------------------------------------------------------------- .sto io --
+
+def _jra_engine():
+    """OpenSim's run_jra, or pyosim's for iterations with ``engine: pyosim``. Read from
+    the environment (set by Analyse.run_jra_contributions) so worker processes see it."""
+    import os as _env_os
+    if _env_os.environ.get("BIOSCOUT_JRA_ENGINE", "opensim").lower() == "pyosim":
+        from bioscout.simulate import pyosim_backend as _m
+    else:
+        from bioscout.simulate import opensim as _m
+    return _m
+
 def read_sto(path):
     """(header lines, DataFrame). The header is kept verbatim so a rewritten
     forces file stays byte-compatible with what OpenSim already accepted."""
@@ -70,6 +81,9 @@ def write_sto(path, header, df):
 # ------------------------------------------------------------- muscle sets --
 def model_muscles(model_path):
     """Muscle names in the .osim (the ONLY columns that may be zeroed)."""
+    if os.environ.get("BIOSCOUT_JRA_ENGINE", "opensim").lower() == "pyosim":
+        from bioscout.pyosim.muscles import muscle_names       # a pyosim iteration never loads OpenSim
+        return muscle_names(model_path)
     from bioscout.model.opensim_base import _quiet_model
     m = _quiet_model(model_path)
     ms = m.getMuscles()
@@ -159,7 +173,7 @@ def _jra_task(args):
     parallel runs never share a setup/forces/log file). Module-level so it
     pickles for ProcessPoolExecutor on Windows (spawn)."""
     (tag, keep, model_path, ik_file, grf_xml, forces_file, out_dir,
-     setup_template, keep_sto, muscles) = args
+     setup_template, keep_sto, muscles, force_set) = args
     import os as _o, shutil as _sh
     header, forces = read_sto(forces_file)
     wdir = _o.path.join(out_dir, "_par", tag)
@@ -172,7 +186,7 @@ def _jra_task(args):
     write_sto(tmp_forces, header, f)
     if setup_template and _o.path.exists(setup_template):
         _sh.copyfile(setup_template, setup_xml)
-    from bioscout.simulate import opensim as _os
+    _os = _jra_engine()
     if _os is None:                       # circular-import fallback
         from bioscout import utils as _u
         _os = _u.get_openSim()
@@ -180,11 +194,14 @@ def _jra_task(args):
     try:
         _o.chdir(wdir)
         _os.run_jra(osim_modelPath=model_path, ik_output=ik_file, grf_xml=grf_xml,
-                    setup_xml=setup_xml, actuators=_so_force_set(forces_file, out_dir),
+                    setup_xml=setup_xml, actuators=force_set,
                     muscle_force_path=tmp_forces, saveFileName=sto)
     finally:
         _o.chdir(cwd)
-    _, d = read_sto(sto)
+    try:
+        _, d = read_sto(sto)
+    except Exception as e:                # keep the run folder: its .log says why
+        raise RuntimeError(f"JRA '{tag}' produced no data ({e}); see {wdir}") from None
     if not keep_sto:
         _o.remove(sto)
     _sh.rmtree(wdir, ignore_errors=True)
@@ -193,7 +210,7 @@ def _jra_task(args):
 
 def decompose(model_path, ik_file, grf_xml, forces_file, out_dir, jra_columns,
               groups=None, per_muscle=False, keep_sto=False, replace=False,
-              setup_template=None, log=print, n_jobs=None):
+              setup_template=None, log=print, n_jobs=None, force_set="auto"):
     """Run the superposition and write `contributions.csv` + `closure.txt`.
 
     jra_columns: {"hip": [fx, fy, fz], "knee": [...], "ankle": [...]}
@@ -222,7 +239,16 @@ def decompose(model_path, ik_file, grf_xml, forces_file, out_dir, jra_columns,
             f"(pass --replace / replace=True to redo it)")
         return pd.read_csv(csv_path)
 
-    header, forces = read_sto(forces_file)
+    import time as _time
+    for _try in range(10):                 # a just-written file on a synced folder
+        try:                               # can read empty for a moment
+            header, forces = read_sto(forces_file)
+            if len(forces.columns):
+                break
+        except Exception:
+            if _try == 9:
+                raise
+        _time.sleep(1.0)
     muscles = [m for m in model_muscles(model_path) if m in forces.columns]
     if not muscles:
         raise ValueError(f"no model muscle columns in {forces_file}")
@@ -243,24 +269,45 @@ def decompose(model_path, ik_file, grf_xml, forces_file, out_dir, jra_columns,
         write_sto(tmp_forces, header, f)
         if setup_template and os.path.exists(setup_template):
             shutil.copyfile(setup_template, setup_xml)
-        from bioscout.simulate import opensim as _os
+        _os = _jra_engine()
         _os.run_jra(osim_modelPath=model_path, ik_output=ik_file, grf_xml=grf_xml,
-                    setup_xml=setup_xml, actuators=_so_force_set(forces_file, out_dir),
+                    setup_xml=setup_xml, actuators=_fs,
                     muscle_force_path=tmp_forces, saveFileName=sto)
         _, d = read_sto(sto)
         if not keep_sto:
             os.remove(sto)
         return d
 
+    # force_set: "auto" = the trial's SO actuators_so.xml (reserves/residuals as
+    # actuators); None = no extra force set, as the CEINMS JRA itself runs
+    # (2026-10-21) -- the decomposition must mirror the JRA it decomposes.
+    _fs = _so_force_set(forces_file, out_dir) if force_set == "auto" else force_set
+    # Workers read a private copy of the forces (2026-10-21): the original may
+    # have JUST been rewritten (CEINMS: add_so_columns_to_ceinms_results), and on
+    # a synced folder (ucloud/OneDrive) parallel readers then saw it empty --
+    # "No columns to parse from file" with an empty work folder.
+    forces_file = os.path.join(out_dir, "_forces_src.sto")
+    write_sto(forces_file, header, forces)
     joints = {j: c for j, c in jra_columns.items()}
     if n_jobs is None:
         n_jobs = max(1, min((os.cpu_count() or 2) - 1,
                             int(os.environ.get("BIOSCOUT_JCF_JOBS", "8"))))
-    log(f"[contrib] {len(gmap)} groups + baseline + total = {len(gmap)+2} JRA runs"
-        f"  (n_jobs={n_jobs})")
+    _eng = _jra_engine()
+    one_pass = hasattr(_eng, "run_jra_subsets")          # pyosim: every muscle set from one pass
+    if one_pass:
+        log(f"[contrib] {len(gmap)} groups + baseline + total = {len(gmap)+2} muscle sets, "
+            f"one pyosim pass (the loads are linear in the muscle forces)")
+    else:
+        log(f"[contrib] {len(gmap)} groups + baseline + total = {len(gmap)+2} JRA runs"
+            f"  (n_jobs={n_jobs})")
 
     results = {}
-    if n_jobs > 1:
+    if one_pass:
+        sets = {"baseline": set(), "total": set(muscles)}
+        sets.update({_slug(n): set(m) for n, m in gmap.items()})
+        results = _eng.run_jra_subsets(model_path, ik_file, grf_xml, forces_file, sets)
+        base, total = results["baseline"], results["total"]
+    elif n_jobs > 1:
         # Every run is independent (superposition), so fan them ALL out at once.
         # Each worker gets its own working dir -- the shared-file hazard that
         # forbade two decompositions on one trial does not apply here.
@@ -268,7 +315,7 @@ def decompose(model_path, ik_file, grf_xml, forces_file, out_dir, jra_columns,
         tasks = [("baseline", set()), ("total", set(muscles))] + \
                 [(_slug(n), set(m)) for n, m in gmap.items()]
         args = [(t, k, model_path, ik_file, grf_xml, forces_file, out_dir,
-                 setup_template, keep_sto, muscles) for t, k in tasks]
+                 setup_template, keep_sto, muscles, _fs) for t, k in tasks]
         with ProcessPoolExecutor(max_workers=n_jobs) as ex:
             futs = {ex.submit(_jra_task, a): a[0] for a in args}
             done = 0
@@ -276,7 +323,10 @@ def decompose(model_path, ik_file, grf_xml, forces_file, out_dir, jra_columns,
                 tag, d = fu.result()
                 results[tag] = d
                 done += 1
-                log(f"[contrib] {done}/{len(tasks)} {tag}")
+                # progress every ~25 %, not one line per group/muscle
+                _step = max(1, len(tasks) // 4)
+                if done % _step == 0 or done == len(tasks):
+                    log(f"[contrib] {done}/{len(tasks)} JRA runs done")
         base, total = results["baseline"], results["total"]
     else:
         base = _jra("baseline", set())
@@ -382,7 +432,7 @@ def split_reserves(model_path, ik_file, grf_xml, forces_file, out_dir, jra_colum
     write_sto(tmp, header, f)
     if setup_template and os.path.exists(setup_template):
         shutil.copyfile(os.path.abspath(setup_template), setup_xml)
-    from bioscout.simulate import opensim as _os
+    _os = _jra_engine()
     cwd = os.getcwd()
     try:
         os.chdir(wdir)
@@ -672,14 +722,18 @@ def plot_contribution_curves(df, save=None, body_weight=None, title=None, top=6,
 def write_contributions_sto(df, path, body_weight=None, closure=None):
     names = list(dict.fromkeys(df.source))
     key = {n: re.sub(r"\s+", "_", str(n)) for n in names}
-    wide = None
+    # build all columns, then ONE concat (a join/insert per column fragmented the
+    # frame and flooded the log with PerformanceWarnings, 2026-10-16)
+    parts = []
     for (j, n), g in df.groupby(["joint", "source"], sort=False):
         g = g.sort_values("time").set_index("time")
-        part = pd.DataFrame({f"{j}/{key[n]}/{c}": g[c if c != "along" else "along_total"]
-                             for c in ("fx", "fy", "fz", "along")})
-        wide = part if wide is None else wide.join(part, how="outer")
+        parts.append(pd.DataFrame({f"{j}/{key[n]}/{c}": g[c if c != "along" else "along_total"]
+                                   for c in ("fx", "fy", "fz", "along")}))
     for j, g in df.groupby("joint", sort=False):
-        wide[f"{j}/total_mag"] = g.drop_duplicates("time").set_index("time").total_mag
+        parts.append(g.drop_duplicates("time").set_index("time").total_mag
+                     .rename(f"{j}/total_mag").to_frame())
+    wide = pd.concat(parts, axis=1).sort_index()
+    wide.index.name = "time"
     wide = wide.reset_index()
     header = [os.path.basename(path), "version=1", f"nRows={wide.shape[0]}",
               f"nColumns={wide.shape[1]}", "inDegrees=no", "units=N",
@@ -771,11 +825,14 @@ def _stack_colors():
              "Other muscles": "0.8", "Reserve actuators": "0.35", "Other leg (lumped)": "#c9d6c3"})
 
 
-def plot_contribution_stack(df, save=None, body_weight=None, title=None, n_points=101):
-    """Stacked contributions to |JCF| for ONE trial: rows = side (right/left),
-    columns = hip / knee / ankle; x = % trial, y = BW (N without body_weight).
+def plot_contribution_stack(df, save=None, body_weight=None, title=None, n_points=101,
+                            measured=None):
+    """Stacked contributions to |JCF| for ONE trial: rows = hip / knee / ankle,
+    columns = left | right (left on the left); x = % trial, y = BW (N without body_weight).
     Uses the along-|JCF| projection, which is additive, so the stack tops out
-    at |JCF| (black line); parts pulling against the resultant go below 0."""
+    at |JCF| (black line); parts pulling against the resultant go below 0.
+    ``measured`` = {"<joint>_<side>": (time, |F| N)} (load_measured_jcf): the in-vivo
+    JCF, drawn red dashed on its panel over the same time window (2026-10-15)."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
@@ -790,16 +847,19 @@ def plot_contribution_stack(df, save=None, body_weight=None, title=None, n_point
         return np.interp(xg, x, np.asarray(v, float))
 
     grid, col_titles = _grid(sorted(d.joint.unique()))
-    # transpose to side rows x joint columns (the fig9 layout)
-    rows = list(zip(*grid)) if col_titles else grid
-    side_names = col_titles or [""] * len(rows)
-    joint_names = [next((j for j in c if j), "").rsplit("_", 1)[0] for c in grid] if col_titles \
-        else [None] * (len(rows[0]) if rows else 0)
+    # joint rows x side columns, LEFT side in the left column (2026-10-16)
+    if col_titles:
+        _ix = sorted(range(len(col_titles)), key=lambda i: col_titles[i] != "left")
+        grid = [[r[i] for i in _ix] for r in grid]
+        col_titles = [col_titles[i] for i in _ix]
+    rows = grid
+    joint_names = [next((j for j in r if j), "").rsplit("_", 1)[0] for r in grid] \
+        if col_titles else [None] * len(rows)
     col = _stack_colors()
     hatch = {"Reserve actuators": "///"}
     nr, nc = len(rows), len(rows[0]) if rows else 1
-    fig, ax = plt.subplots(nr, nc, figsize=(4.2 * nc, 2.2 * nr + 1.6), squeeze=False,
-                           sharex=True, sharey="col")
+    fig, ax = plt.subplots(nr, nc, figsize=(4.6 * nc, 2.2 * nr + 1.6), squeeze=False,
+                           sharex=True, sharey="row")
     used = set()
     for r, row in enumerate(rows):
         for c, j in enumerate(row):
@@ -827,15 +887,25 @@ def plot_contribution_stack(df, save=None, body_weight=None, title=None, n_point
                 pos, neg = pos + p, neg + n
             tot = g.drop_duplicates("time").sort_values("time")
             a.plot(xg, _interp(tot.time, tot.total_mag) * s, color="k", lw=1.1)
+            if measured and j in measured:
+                mt, mv = (np.asarray(x, float) for x in measured[j])
+                tg = t0 + xg / 100.0 * (t1 - t0)
+                ok = (tg >= mt.min()) & (tg <= mt.max())
+                if ok.any():
+                    a.plot(xg[ok], np.interp(tg[ok], mt, mv) * s, color="#d62728",
+                           lw=1.6, ls="--", zorder=20)
+                    used.add("__invivo__")
             a.axhline(0, color="0.4", lw=0.5)
             a.spines[["top", "right"]].set_visible(False)
             a.set_xlim(0, 100)
             a.tick_params(labelsize=7)
-            if r == 0:
-                jn = joint_names[c] if col_titles else j
-                a.set_title(f"{jn} contact force ({unit})", fontweight="bold", fontsize=10)
-            if c == 0 and side_names[r]:
-                a.set_ylabel(side_names[r], fontsize=9, fontweight="bold")
+            if r == 0 and col_titles:
+                a.set_title(col_titles[c], fontweight="bold", fontsize=11)
+            if c == 0:
+                jn = joint_names[r] if col_titles else j
+                a.set_ylabel(f"{jn} ({unit})", fontsize=9, fontweight="bold")
+            elif not col_titles:
+                a.set_title(j, fontsize=9)
             if r == nr - 1:
                 a.set_xlabel("% trial")
     if title:
@@ -844,15 +914,47 @@ def plot_contribution_stack(df, save=None, body_weight=None, title=None, n_point
     h = [Patch(facecolor=col[grp], hatch=hatch.get(grp),
                edgecolor="white" if grp in hatch else col[grp], label=grp) for grp in order]
     h.append(Line2D([], [], color="k", lw=1.1, label="|JCF|"))
-    fig.legend(handles=h, loc="lower center", ncol=6, frameon=False, fontsize=8,
-               title_fontsize=8,
-               title="contribution = projection on the total JCF (sums to |JCF|); "
-                     "below 0 = pulls against it")
-    fig.tight_layout(rect=(0, 1.3 / (2.2 * nr + 1.6), 1, 0.97))
+    if "__invivo__" in used:
+        h.append(Line2D([], [], color="#d62728", lw=1.6, ls="--", label="in vivo |JCF|"))
+    # legend never wider than the figure (2026-10-15): columns from the figure
+    # width (~1.9 in each), title wrapped to the same width
+    import textwrap as _tw
+    _fw = fig.get_size_inches()[0]
+    _nc = max(2, min(len(h), int(_fw // 1.9)))
+    _nrow = -(-len(h) // _nc)
+    _ttl = "\n".join(_tw.wrap("contribution = projection on the total JCF (sums to |JCF|); "
+                              "below 0 = pulls against it", width=int(_fw * 11)))
+    fig.legend(handles=h, loc="lower center", ncol=_nc, frameon=False, fontsize=8,
+               title_fontsize=8, title=_ttl)
+    fig.tight_layout(rect=(0, (0.45 + 0.22 * _nrow + 0.15 * _ttl.count(chr(10))) / fig.get_size_inches()[1], 1, 0.97))
     if save:
         fig.savefig(save, dpi=170)
         plt.close(fig)
     return fig
+
+
+def _measured_for(sto):
+    """In-vivo JCF for a contributions_<t>.sto in the bioscout layout
+    <session>/3_iterations/<it>/<trial>/joint_contact_forces/: reads
+    <session>/2_experimental/<trial>/invivo_jcf.mot, side = session.yaml
+    measured_side. None when there is no implant data."""
+    try:
+        jcf = os.path.dirname(os.path.abspath(sto))
+        trial = os.path.basename(os.path.dirname(jcf))
+        ses = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(jcf))))
+        f = os.path.join(ses, "2_experimental", trial, "invivo_jcf.mot")
+        if not os.path.exists(f):
+            return None
+        side = "r"
+        y = os.path.join(ses, "session.yaml")
+        if os.path.exists(y):
+            import yaml
+            with open(y, encoding="utf-8") as fh:
+                c = yaml.safe_load(fh) or {}
+            side = str(c.get("measured_side") or c.get("implanted_side") or "r").lower()[:1]
+        return load_measured_jcf(f, side=side)
+    except Exception:                                    # noqa: BLE001
+        return None
 
 
 def plot_contribution_stacks(root, body_weight=None, replace=True, log=print):
@@ -879,7 +981,8 @@ def plot_contribution_stacks(root, body_weight=None, replace=True, log=print):
             trial = parts[-3] if len(parts) >= 3 else ""
             kind = os.path.splitext(parts[-1])[0].replace("contributions_", "").upper()
             plot_contribution_stack(df, save=out, body_weight=body_weight or bw,
-                                    title=f"{trial} - {kind} contributions to the joint contact force")
+                                    title=f"{trial} - {kind} contributions to the joint contact force",
+                                    measured=_measured_for(sto))
             done.append(out)
             log(f"[stack] {out}")
         except Exception as e:

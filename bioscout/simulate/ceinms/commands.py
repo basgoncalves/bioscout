@@ -8,7 +8,7 @@ proxy) comes from `.shared`.
 from .shared import *          # noqa: F401,F403 — the common header
 from .shared import abg_base_name, abg_from_name, check_input_times
 from .configs import replace_ceinms_cfg_parameter
-from .plot import plot_experimental_vs_ceinms, plot_loop_results, plot_optimisation_results
+from .plot import plot_experimental_vs_ceinms, plot_loop_results, plot_optimisation_results, plot_ceinms_summary
 
 
 def ceinms_terminal(executable_path=None, setupXML_path=None):
@@ -314,6 +314,10 @@ def executable(setupXML_path=None):
             print(f"Error plotting experimental vs CEINMS results: {e}")
     else:
         print(f"[Info] Skipping EMG vs CEINMS plot — output files not found in {outputDirectory}")
+    try:                                   # 2026-10-21: one-page summary
+        plot_ceinms_summary(outputDirectory, setupXML_path)
+    except Exception as e:
+        print(f"[Warning] CEINMS summary figure failed: {e}")
 
 
 def executable_loop(setupXML_path=None, cfgXML_path=None, 
@@ -460,5 +464,29 @@ def optimise(setupXML_path=None):
     
     print("Optimizing CEINMS model...")
     ceinms_terminal(executable_path=utils.CEINMS_OPTIMISE_EXE, setupXML_path=setupXML_path)
+
+    # 2026-10-21: the same result figures execution makes (one .png per .sto,
+    # EMG vs adjusted excitations, ID vs CEINMS torques) -- optimise made none.
+    os.chdir(parentDir)
+    try:
+        plot_optimisation_results(outputDirectory)
+    except Exception as e:
+        print(f"[Warning] CEINMS optimise result figures failed: {e}")
+    try:
+        inputData = ET.parse(root.find('inputDataFile').text).getroot()
+        adjusted_emg = os.path.abspath(os.path.join(outputDirectory, 'AdjustedEmgs.sto'))
+        torques_sto = os.path.abspath(os.path.join(outputDirectory, 'Torques.sto'))
+        if os.path.exists(adjusted_emg) and os.path.exists(torques_sto):
+            plot_experimental_vs_ceinms(emgFile=inputData.find('excitationsFile').text,
+                                        ceinmsExcitationsFile=adjusted_emg,
+                                        excitationGeneratorFile=root.find('excitationGeneratorFile').text,
+                                        externalMomentsFile=os.path.abspath(inputData.find('externalTorquesFile').text),
+                                        ceinmsTorquesFile=torques_sto)
+    except Exception as e:
+        print(f"[Warning] CEINMS optimise EMG/torque comparison figures failed: {e}")
+    try:                                   # 2026-10-21: one-page summary
+        plot_ceinms_summary(outputDirectory, setupXML_path)
+    except Exception as e:
+        print(f"[Warning] CEINMS summary figure failed: {e}")
 
 

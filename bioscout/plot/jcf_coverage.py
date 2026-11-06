@@ -404,6 +404,9 @@ def discover(trial, model=None, mass=None, mri_root=None, side=None) -> dict:
         for p in list(jcf_dir.glob(pat)) + list((trial / "ceinms").rglob(pat)):
             if "ReactionLoads" in p.name or "JRA" in p.name:
                 sources.setdefault("CEINMS", p)
+    cmc = Path(_jrf.pick(jcf_dir / _jrf.output("CMC")))     # forward stage (CMC)
+    if cmc.is_file():
+        sources["CMC"] = cmc
     ml = Path(_jrf.pick(jcf_dir / _jrf.output("ML")))      # machine_learning.predict
     if ml.is_file():
         sources["ML"] = ml
