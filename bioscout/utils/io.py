@@ -487,8 +487,9 @@ def write_mot(analog_df, labels, mot_file):
         
     """
     
-    # make sure labels include time
-    labels = ['time'] + labels
+    # time first, exactly once: labels taken from df.columns already hold
+    # 'time', and a duplicated column made row['time'] a Series (TypeError).
+    labels = ['time'] + [l for l in labels if l != 'time']
 
     # Crop dataframe to include only labels
     analog_df = analog_df[labels]
@@ -510,7 +511,7 @@ def write_mot(analog_df, labels, mot_file):
         # Data rows
         for i, row in analog_df.iterrows():
             # breakpoint()
-            writer.write(f"{row['time']:.6f}\t" + "\t".join([f"{val:.6f}" for val in row[1:]]) + "\n")
+            writer.write("\t".join(f"{float(val):.6f}" for val in row.values) + "\n")
 
 def write_sto_header(writer, dataFrame):
     """

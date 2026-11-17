@@ -9,6 +9,7 @@ if TYPE_CHECKING:  # editor autocomplete only — no runtime cost
     )
     from .session.recording import Session           # one recording-session folder
     from .session.iteration import Iteration         # one model iteration (runnable)
+    from . import utils                             # bs.utils.<name>: go-to-definition
     from . import plot                              # comparison figures
     from .simulate import mew                       # Python muscle solver
     from . import results                           # load / plot / export results
@@ -28,6 +29,7 @@ __all__ = (
     "pipeline",                 # bioscout.pipeline — run_project (batch settings runs)
     "mew",                      # bioscout.simulate.mew — Python muscle solver + its readers
     "results",                  # bioscout.results — load / plot / export simulation results
+    "model",                    # bioscout.model — bs.model("x.osim") opens a model to edit
 )
 
 #: Names __getattr__ resolves to a SUBMODULE rather than to something in
@@ -38,7 +40,7 @@ __all__ = (
 #: once something has IMPORTED it. `from bioscout.utils import x` does that
 #: import; a bare `bs.utils.x` right after `import bioscout as bs` did not, so
 #: it raised AttributeError until some earlier call happened to load utils.
-_SUBMODULES = ("utils", "plot", "pipeline", "mew", "results")
+_SUBMODULES = ("utils", "plot", "pipeline", "mew", "results", "model")
 #: submodules that do not live directly under bioscout/
 _SUBMODULE_PATHS = {"mew": "simulate.mew"}
 
