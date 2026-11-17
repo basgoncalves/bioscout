@@ -12,7 +12,8 @@
 Runs a full OpenSim + CEINMS pipeline from motion capture to muscle and joint contact forces,
 validates the results against the literature, and organises everything by subject / session / trial.<br>
 Successor to <a href="https://pypi.org/project/msk-modelling-python/">msk_modelling_python</a>.<br>
-see <a href="LICENSE">License</a>
+see <a href="https://github.com/basgoncalves/bioscout/blob/main/LICENSE">License</a><br>
+<a href="https://github.com/basgoncalves/bioscout/blob/main/docs/api/index.md">API reference</a>
 </p>
 
 ---
