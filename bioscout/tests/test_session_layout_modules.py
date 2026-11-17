@@ -39,8 +39,11 @@ class TestLegacyRemoved(unittest.TestCase):
         for mod in ("bioscout.session.session", "bioscout.session.legacy"):
             with self.assertRaises(ImportError):
                 importlib.import_module(mod)
-        self.assertFalse(hasattr(Session, "open"))
-        self.assertFalse(hasattr(Iteration, "open"))
+        # the legacy Session.open(name) is gone; .open() now only opens
+        # session.yaml in an editor (shared show/get/set/save/open API)
+        from bioscout.session.config import _YamlEdit
+        self.assertIs(Session.open, _YamlEdit.open)
+        self.assertIs(Iteration.open, _YamlEdit.open)
         self.assertFalse(hasattr(Session, "prune_legacy_inputs"))
         import bioscout.session as _s
         with self.assertRaises(AttributeError):

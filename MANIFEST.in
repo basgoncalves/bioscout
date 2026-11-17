@@ -9,5 +9,6 @@ recursive-include bioscout/simulate/mrs *.m
 recursive-include bioscout/config *.yaml *.xml
 recursive-include bioscout/session *.yaml
 recursive-include bioscout/setup_files *.xml *.txt
-recursive-include bioscout/models *.osim *.txt
+recursive-include bioscout/models *.osim *.txt *.json *.vtp *.stl *.obj
 recursive-include bioscout/model/tps *.xml *.yaml *.md
+recursive-include bioscout/templates *.yaml *.md *.trc *.mot *.xml

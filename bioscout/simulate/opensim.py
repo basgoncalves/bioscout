@@ -13,6 +13,7 @@ Split out of the old ``bioscout/utils/openSim.py`` (docs/RESTRUCTURE_PLAN.md,
 stage 6) -- the code is unchanged, only its address.
 """
 import os
+import re
 import sys
 import datetime
 from time import time
@@ -1525,89 +1526,6 @@ def create_analysis_tool(marker_trc, externalloadsfile, osim_modelPath,
     # Return the analysis tool
     return analyze_tool
 
-# --- Induced Acceleration Analysis ---
-def create_iaa_tool(osim_modelPath=None, ik_output=None, grf_xml=None, setup_file_path=None, so_controls_file=None, actuators=None):
-    """
-    Create and configure an OpenSim Induced Acceleration Tool object.
-
-    Args:
-        osim_modelPath (str): Path to the OpenSim model file (.osim).
-        ik_output (str): Path to the Inverse Kinematics output file (.mot).
-        grf_xml (str): Path to the Ground Reaction Forces XML file (.xml).
-        setup_file_path (str): Path to the Induced Acceleration setup XML file (.xml).
-        so_controls_file (str, optional): Path to the Static Optimization controls file (.sto).
-
-    Returns:
-        OpenSim InducedAccelerationTool object.
-    """
-
-    if not osim_modelPath:
-        osim_modelPath = input("Enter the path to the OpenSim model file (.osim): ").strip('"')
-
-    if not ik_output:
-        ik_output = input("Enter the path to the Inverse Kinematics output file (.mot): ").strip('"')
-
-    if not grf_xml:
-        grf_xml = input("Enter the path to the Ground Reaction Forces XML file (.xml): ").strip('"')
-
-    if not setup_file_path:
-        setup_file_path = os.path.join(os.path.dirname(os.path.abspath(ik_output)), 'setup_IAA.xml')
-
-    if not so_controls_file:
-        so_controls_file = input("Enter the path to the Static Optimization controls file (.sto): ").strip('"')
-
-        activation_file = input("Enter the path to the Static Optimization activations file (.sto) (or press Enter to skip): ").strip('"')
-
-    # Create and set model
-    model = _quiet_model(osim_modelPath)
-    tool = osim.AnalyzeTool(model)
-    tool.setName("InducedAccelerations_Tool")
-    tool.setModelFilename(osim_modelPath)
-
-    # Load motion to get start/end times
-    motion = osim.Storage(ik_output)
-    initial_time = motion.getFirstTime()
-    final_time = motion.getLastTime()
-
-    # Set Tool Parameters
-    tool.setInitialTime(initial_time)
-    tool.setFinalTime(final_time)
-    tool.setCoordinatesFileName(ik_output)
-    tool.setExternalLoadsFileName(grf_xml)
-    tool.setControlsFileName(so_controls_file)
-    tool.setSolveForEquilibrium(True)
-    tool.setLowpassCutoffFrequency(6.0) # Filter coordinates
-
-    tool.setStatesFileName(activation_file)
-    tool.setSolveForEquilibrium(False)
-    
-    # Set results directory relative to where the setup file will be, or absolute
-    results_dir = os.path.join(os.path.dirname(setup_file_path), "IAA_Results")
-    tool.setResultsDir(results_dir)
-
-    # Set actuator force files (if provided)
-    if actuators:
-        force_set = osim.ArrayStr()
-        for file in actuators:
-            force_set.append(os.path.abspath(file))
-        tool.setForceSetFiles(force_set)
-        tool.setReplaceForceSet(False)
-
-    # 3. Configure the InducedAccelerations Analysis
-    iaa_analysis = osim.InducedAccelerations()
-    iaa_analysis.setName("InducedAccelerations")
-    iaa_analysis.setStartTime(initial_time)
-    iaa_analysis.setEndTime(final_time)
-    
-    # Add the Analysis to the Tool
-    tool.getAnalysisSet().adoptAndAppend(iaa_analysis)
-
-    # Save the setup file for reference
-    tool.printToXML(setup_file_path)
-    print(f"IAA Tool configured. Setup file saved to: {setup_file_path}")
-    tool.run()
-    return tool
-
 # --- Main OSIM Analysis ---
 def create_setup_ID(osim_modelPath=None, ik_output=None, grf_xml=None,
                    id_output=None, taskSetPath=None, saveXMLPath=None):
@@ -2403,29 +2321,134 @@ def run_emg_normalise(target_emg_path=None, normalise_emg_list=None):
 
     utils.print_to_log(f"Normalised EMG data saved to: {savePath}")
 
-def run_iaa(osim_modelPath=None, ik_output=None, grf_xml=None, setup_file_path=None, so_controls_file=None, actuators=None, setup_xml=None):
-    """
-    Run an Induced Acceleration Analysis (IAA) using OpenSim.
-    """
+# --- Induced Acceleration Analysis (IAA) ---
+_IAA_CONSTRAINT_XML = {
+    # OpenSim 4.x reads these 3.x-style tags (rolling_body/surface_body) and turns them into its
+    # sockets; written as <socket_rolling_body> straight away they come back EMPTY (tested 4.5.2).
+    "rolling": ('<RollingOnSurfaceConstraint name="{name}"><isEnforced>false</isEnforced>'
+                '<rolling_body>{body}</rolling_body><surface_body>ground</surface_body>'
+                '<surface_normal>0 1 0</surface_normal><surface_height>0</surface_height>'
+                '<friction_coefficient>0.75</friction_coefficient><contact_radius>0.01</contact_radius>'
+                '</RollingOnSurfaceConstraint>'),
+    "point": ('<PointConstraint name="{name}"><isEnforced>false</isEnforced>'
+              '<body_1>ground</body_1><body_2>{body}</body_2>'
+              '<location_body_1>0 0 0</location_body_1><location_body_2>0 0 0</location_body_2>'
+              '</PointConstraint>'),
+    "weld": ('<WeldConstraint name="{name}"><isEnforced>false</isEnforced>'
+             '<body_1>ground</body_1><body_2>{body}</body_2>'
+             '<location_body_1>0 0 0</location_body_1><orientation_body_1>0 0 0</orientation_body_1>'
+             '<location_body_2>0 0 0</location_body_2><orientation_body_2>0 0 0</orientation_body_2>'
+             '</WeldConstraint>'),
+}
 
-    if os.path.exists(setup_xml):
-        try:
-            tool = osim.AnalyzeTool(setup_xml)
-            tool.run()
-            utils.print_to_log(f"IAA run successfully with existing setup XML: {setup_xml}")
-            return
-        except Exception as e:
-            print(f"Error running IAA with existing setup XML: {e}")
-            print("Falling back to creating a new IAA tool.")
-            utils.print_to_log(f"Error running IAA with existing setup XML: {e}. Falling back to creating a new IAA tool.")
-    
+
+def run_iaa(osim_modelPath=None, ik_output=None, grf_xml=None, actuators=None,
+            muscle_force_path=None, results_dir=None, constraint="rolling",
+            force_threshold=20.0, coordinates="all", time_range=None, log=print, **_old):
+    """Induced Acceleration Analysis with OpenSim's InducedAccelerations (AnalyzeTool).
+
+    The SO route of the OpenSim docs: the analysis runs in POTENTIALS mode
+    (``compute_potentials_only``: the acceleration each muscle / actuator would
+    cause per 1 N or 1 N*m) and each potential is multiplied by that actuator's
+    SO force; gravity and velocity come out as they are. Every ExternalForce of
+    ``grf_xml`` is replaced, in order, by a contact constraint between its body
+    and the ground (``constraint``: rolling | point | weld), switched on while
+    the force exceeds ``force_threshold`` N.
+
+    Writes OpenSim's own output to ``results_dir/raw/`` (+ setup_IAA.xml) and
+    the common layout (bioscout.simulate.iaa_files) to ``results_dir``.
+    """
+    from bioscout.simulate import iaa_files as _iaf
+    from bioscout.pyosim import iaa as _piaa
+    from bioscout.pyosim.muscles import muscle_names as _mnames
+    if constraint not in _IAA_CONSTRAINT_XML:
+        raise ValueError(f"constraint must be one of {sorted(_IAA_CONSTRAINT_XML)}, not {constraint!r}")
+    results_dir = os.path.abspath(results_dir)
+    raw = os.path.join(results_dir, "raw")
+    os.makedirs(raw, exist_ok=True)
+    setup_xml = os.path.join(results_dir, "setup_IAA.xml")
+    _old = {k: v for k, v in _old.items() if v is not None}
+    if _old:
+        log(f"[IAA] ignored (old signature): {sorted(_old)}")
+
+    # time window: where both the joint angles and the SO forces exist
+    st_ik, st_f = osim.Storage(ik_output), osim.Storage(muscle_force_path)
+    t0 = max(st_ik.getFirstTime(), st_f.getFirstTime())
+    t1 = min(st_ik.getLastTime(), st_f.getLastTime())
+    if time_range:
+        t0, t1 = max(t0, time_range[0]), min(t1, time_range[1])
+
+    # one constraint per ExternalForce, same order (the analysis pairs them by position)
+    ext = ET.parse(grf_xml).getroot().find("ExternalLoads")
+    forces = [(ef.get("name"), (ef.findtext("applied_to_body") or "").strip()) for ef in ext.iter("ExternalForce")]
+    if not forces:
+        raise ValueError(f"no ExternalForce in {grf_xml}: nothing to replace by a contact constraint")
+    cons = {f"{n}_contact": b for n, b in forces}
+
+    tool = create_analysis_tool(ik_output, grf_xml, osim_modelPath, raw, actuators=actuators)
+    tool.setName("IAA")
+    tool.setInitialTime(t0); tool.setFinalTime(t1)
+    iaa = osim.InducedAccelerations()
+    iaa.setName("IAA"); iaa.setStartTime(t0); iaa.setEndTime(t1)
+    tool.getAnalysisSet().cloneAndAppend(iaa)
+    tool.printToXML(setup_xml)
+
+    # the properties the Python bindings do not reach: patch the XML
+    x = open(setup_xml, encoding="utf-8").read()
+    body = "".join(_IAA_CONSTRAINT_XML[constraint].format(name=n, body=b) for n, b in cons.items())
+    x, k = re.subn(r"<ConstraintSet>\s*<objects\s*/>", f"<ConstraintSet><objects>{body}</objects>", x, count=1)
+    if not k:
+        raise RuntimeError("could not place the contact constraints in setup_IAA.xml")
+    coords = coordinates if isinstance(coordinates, str) else " ".join(coordinates)
+    x = re.sub(r"<coordinate_names\s*/>|<coordinate_names>.*?</coordinate_names>",
+               f"<coordinate_names>{coords}</coordinate_names>", x, count=1)
+    for tag, val in (("in_degrees", "false"), ("compute_potentials_only", "true"),
+                     ("report_constraint_reactions", "true"), ("force_threshold", f"{force_threshold:g}")):
+        x = re.sub(rf"(<InducedAccelerations\b.*?<{tag}>)[^<]*(</{tag}>)", rf"\g<1>{val}\g<2>", x, count=1, flags=re.S)
+    open(setup_xml, "w", encoding="utf-8").write(x)
+
+    for f in os.listdir(raw):                                       # no stale coordinate files
+        if f.startswith("IAA_") and f.endswith(".sto"):
+            os.remove(os.path.join(raw, f))
+    log(f"[IAA] OpenSim InducedAccelerations {t0:.3f}-{t1:.3f} s, {constraint} contact on "
+        + ", ".join(f"{b}" for b in cons.values()) + f" (>{force_threshold:g} N), potentials x SO forces")
+    tool = osim.AnalyzeTool(setup_xml)
     try:
-        tool = create_iaa_tool(osim_modelPath, ik_output, grf_xml, setup_file_path, so_controls_file, actuators)
+        tool.getModel().set_assembly_accuracy(_assembly_accuracy())
+    except Exception:
+        pass
+    with _osim_quiet_ctx():
         tool.run()
-        utils.print_to_log("IAA run successfully.")
-    except Exception as e:
-        print(f"Error running IAA: {e}")
-        utils.print_to_log(f"Error running IAA: {e}")
+
+    try:
+        sto = sorted(f for f in os.listdir(raw) if f.startswith("IAA_IAA_") and f.endswith(".sto"))
+        tt = np.loadtxt(os.path.join(raw, sto[0]), skiprows=_sto_header_rows(os.path.join(raw, sto[0])))[:, 0]
+        meas = _piaa.measured(osim_modelPath, ik_output, grf_xml, t_eval=tt, log=log)
+    except Exception as e:                                           # noqa: BLE001
+        log(f"[IAA] measured accelerations not computed ({e}); the check column stays empty")
+        meas = None
+    # OpenSim 4.5 reports zero for non-muscle actuators (reserves / residuals): fill them from
+    # the pyosim solve of the same constrained equations (see iaa_files.from_opensim)
+    fill = None
+    try:
+        fill = _piaa.run(osim_modelPath, ik_output, muscle_force_path, grf_xml, results_dir,
+                         actuators=actuators, constraint=constraint, force_threshold=force_threshold,
+                         t_range=(t0, t1), log=lambda *a, **k: None, write=False)
+    except Exception as e:                                           # noqa: BLE001
+        log(f"[IAA] reserves/residuals not filled ({type(e).__name__}: {e}); they stay zero")
+    _iaf.from_opensim(raw, "IAA_IAA", muscle_force_path, results_dir, measured=meas,
+                      muscles=_mnames(osim_modelPath), constraints=cons, constraint=constraint,
+                      force_threshold=force_threshold, actuator_fill=fill, log=log)
+    return results_dir
+
+
+def _sto_header_rows(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if line.strip().lower() == "endheader":
+                return i + 2                                          # + the column-name row
+    return 0
+
 
 # --- Residual Reduction Algorithm (RRA) ---
 def run_rra(osim_modelPath=None, ik_output=None, grf_xml=None, actuators=None,

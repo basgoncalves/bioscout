@@ -9,6 +9,7 @@ Split out of the old ``bioscout/utils/openSim.py`` (docs/RESTRUCTURE_PLAN.md,
 stage 6) -- the code is unchanged, only its address.
 """
 import os
+import re
 import opensim as osim
 
 try:                                    # the project's settings.py, if it has one
@@ -458,9 +459,18 @@ def scale_model(generic_opensim_model_path, static_trc_path, scaled_model_path, 
     # of _temp_scaling (ScaleTool's own dump, the static-IK .mot) still goes.
     if _setup_out:
         try:
-            _keep = [p for p in (trc_for_scaling, generic_for_scaling,
-                                 marker_set_for_scaling)
+            # Never the scale-ready MODEL: a copy of the generic model beside
+            # every scaled one is clutter. The setup is pointed back at the
+            # generic model instead (re-running it drops the same markers).
+            _keep = [p for p in (trc_for_scaling, marker_set_for_scaling)
                      if p and os.path.dirname(os.path.abspath(p)) == os.path.abspath(_tmp)]
+            if generic_for_scaling != generic_opensim_model_path:
+                _t = open(_setup_out, "rb").read().decode("utf-8", "surrogateescape")
+                _t = re.sub(r"<model_file>[^<]*" + re.escape(os.path.basename(generic_for_scaling))
+                            + r"</model_file>",
+                            "<model_file>" + os.path.abspath(generic_opensim_model_path)
+                            + "</model_file>", _t)
+                open(_setup_out, "wb").write(_t.encode("utf-8", "surrogateescape"))
             for _src in _keep:
                 _dst = os.path.join(_outdir, os.path.basename(_src))
                 if os.path.abspath(_src) != os.path.abspath(_dst):

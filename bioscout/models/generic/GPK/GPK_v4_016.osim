@@ -17197,18 +17197,6 @@
 					<!--The fixed location of the station expressed in its parent frame.-->
 					<location>-0.0068063899999999998 -0.079353199999999999 -0.063787099999999999</location>
 				</Marker>
-				<Marker name="BL">
-					<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
-					<socket_parent_frame>/ground</socket_parent_frame>
-					<!--The fixed location of the station expressed in its parent frame.-->
-					<location>0.11 -0.74378667016118172 -0.96480391663611431</location>
-				</Marker>
-				<Marker name="BR">
-					<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
-					<socket_parent_frame>/ground</socket_parent_frame>
-					<!--The fixed location of the station expressed in its parent frame.-->
-					<location>0.11 -0.74378699999999998 0.96480399999999999</location>
-				</Marker>
 				<Marker name="RKJCWK">
 					<!--Path to a Component that satisfies the Socket 'parent_frame' of type PhysicalFrame (description: The frame to which this station is fixed.).-->
 					<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>

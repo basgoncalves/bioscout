@@ -57,7 +57,7 @@ _LANDMARK_NAMES = [
 ]
 
 MODULE_DIR = os.path.dirname(__file__)
-MODELS_DIR = os.path.join(os.path.dirname(MODULE_DIR), 'models')
+MODELS_DIR = os.path.join(os.path.dirname(MODULE_DIR), 'models', 'generic')   # <Model>/<model>.osim
 # ======================================================================
 # Model configuration
 # ======================================================================
@@ -117,7 +117,7 @@ class MotModelConfig:
 # Coordinates: r_shoulder_elev, r_elbow_flex + 6 ball DOFs
 ARM26_BALL_CONFIG = MotModelConfig(
     name='arm26_ball',
-    osim_path=os.path.join(MODELS_DIR, 'arm26_ball.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'arm26_ball', 'arm26_ball.osim'),
     angle_columns=[
         # (col_name, lm_a, lm_vertex, lm_b, offset, clip_min, clip_max)
         ('r_shoulder_elev', 'right_hip',      'right_shoulder', 'right_elbow', 180, 0, 180),
@@ -140,7 +140,7 @@ ARM26_BALL_CONFIG = MotModelConfig(
 #   plus lumbar / cervical / thorax DOFs
 FULL_BODY_CONFIG = MotModelConfig(
     name='full_body_with_ball',
-    osim_path=os.path.join(MODELS_DIR, 'Full_Body_with_ball.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'Full_Body_with_ball', 'Full_Body_with_ball.osim'),
     angle_columns=[
         # ---------------- Right arm ----------------
         ('arm_flex_r',    'right_hip',      'right_shoulder', 'right_elbow',      180, -90, 180),
@@ -176,7 +176,7 @@ FULL_BODY_CONFIG = MotModelConfig(
 
 NECK_MODEL_CONFIG = MotModelConfig(
     name='Neck_model',
-    osim_path=os.path.join(MODELS_DIR, 'Neck_model.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'Neck_model', 'Neck_model.osim'),
     angle_columns=[
         # Head flexion/extension: nose relative to shoulders
         ('head_flexion',      'right_shoulder',  'nose',            'left_shoulder',   90, -45,  45),
@@ -203,7 +203,7 @@ NECK_MODEL_CONFIG = MotModelConfig(
 # Pelvis translations are approximated from pixel position scaled to metres.
 GPK_V4_CONFIG = MotModelConfig(
     name='GPK_v4_016',
-    osim_path=os.path.join(MODELS_DIR, 'GPK_v4_016.osim'),
+    osim_path=os.path.join(MODELS_DIR, 'GPK', 'GPK_v4_016.osim'),
     angle_columns=[
         # Pelvis orientation (3 DOF) — 2-D approximations from sagittal view
         # tilt  : forward tilt of trunk — shoulder-to-hip angle vs vertical
@@ -304,7 +304,10 @@ def discover_available_models():
 
     # Scan directory for .osim files
     try:
-        osim_files = [f for f in os.listdir(MODELS_DIR) if f.endswith('.osim')]
+        import glob as _glob
+        osim_paths = {os.path.basename(p): p for p in
+                      sorted(_glob.glob(os.path.join(MODELS_DIR, '*', '*.osim')))}
+        osim_files = list(osim_paths)
 
         for osim_file in osim_files:
             model_name = osim_file.replace('.osim', '')
@@ -317,7 +320,7 @@ def discover_available_models():
             # Basic arm angles work for most models
             generic_config = MotModelConfig(
                 name=model_name,
-                osim_path=os.path.join(MODELS_DIR, osim_file),
+                osim_path=osim_paths[osim_file],
                 angle_columns=[
                     # Right arm
                     ('r_shoulder_flex', 'right_hip',      'right_shoulder', 'right_elbow', 180, -90, 180),

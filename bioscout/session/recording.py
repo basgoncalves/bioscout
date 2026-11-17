@@ -8,6 +8,7 @@ session of every subject) live on :class:`bioscout.Project`.
 from __future__ import annotations
 
 import os
+from bioscout.utils.shared import quiet_run as _quiet_run
 import glob
 import shutil
 import time
@@ -113,7 +114,7 @@ class Session(SessionKeys):
         it.plot_summary(trials=["Walking_02"])
     """
 
-    def __init__(self, session_dir, *, project_dir=None, verbose=False,
+    def __init__(self, path, *, project_dir=None, verbose=False,
                  bootstrap=True):
         """Open a recording session by its FOLDER PATH — the directory holding
         ``session.yaml``, e.g. ``.../simulations/Athlete_03/25_03_31``.
@@ -126,20 +127,20 @@ class Session(SessionKeys):
         ``bootstrap=False`` to skip that (a bare config view: no logging, no
         project). Use ``.iteration(name)`` for a runnable :class:`Iteration`.
         """
-        self.session_dir = os.path.abspath(session_dir)
-        if not os.path.exists(os.path.join(self.session_dir, "session.yaml")):
+        self.path = os.path.abspath(path)   # the session folder (holds session.yaml)
+        if not os.path.exists(os.path.join(self.path, "session.yaml")):
             raise FileNotFoundError(
-                f"no session.yaml in {self.session_dir!r}. Pass the SESSION FOLDER "
+                f"no session.yaml in {self.path!r}. Pass the SESSION FOLDER "
                 f"path (the dir holding session.yaml), e.g. "
                 f".../simulations/Athlete_03/25_03_31.")
-        self.name = os.path.basename(self.session_dir)      # session id, e.g. "25_03_31"
+        self.name = os.path.basename(self.path)      # session id, e.g. "25_03_31"
         # project_dir= wins over session.yaml's project_dir (relative to this
         # folder), which wins over <project>/simulations/<subject>/<session>.
         self._project_dir_given = os.path.abspath(str(project_dir)) if project_dir else None
         # reading the file fills every session.<key> (config.SessionKeys)
-        self._cfg = Iteration._read_yaml(os.path.join(self.session_dir, "session.yaml"))
+        self._cfg = Iteration._read_yaml(os.path.join(self.path, "session.yaml"))
         if bootstrap:
-            _bootstrap_project(self.session_dir, self.name, self.project_dir, verbose)
+            _bootstrap_project(self.path, self.name, self.project_dir, verbose)
 
     # session-level folders that are NOT model iterations (shared inputs, raw c3d,
     # outputs, logs) -- never treated, anchored on, or run as a model.
@@ -161,8 +162,8 @@ class Session(SessionKeys):
             its = self.iterations
         except Exception:                                      # noqa: BLE001
             its = []
-        subj = os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
-        return (f"<Session {subj}/{os.path.basename(self.session_dir)}  "
+        subj = os.path.basename(os.path.dirname(os.path.abspath(self.path)))
+        return (f"<Session {subj}/{os.path.basename(self.path)}  "
                 f"trials={n_t}  iterations={its or '[]'}>")
 
     def describe(self, log=print, trials=True):
@@ -172,7 +173,7 @@ class Session(SessionKeys):
         scaling recipe, CEINMS, and which stage outputs each trial has).
         ``trials=False`` leaves out the per-trial stage tables."""
         cfg = self._cfg or {}
-        subj = os.path.basename(os.path.dirname(os.path.abspath(self.session_dir)))
+        subj = os.path.basename(os.path.dirname(os.path.abspath(self.path)))
         log(self.yaml_path)                                   # clickable: opens the file
         log(f"session {subj}/{self.name}")
         log(f"  {'project_dir':<18}: {cfg.get('project_dir') or '(not set: 3 folders up)'}"
@@ -205,7 +206,7 @@ class Session(SessionKeys):
             if name not in declared:
                 log(f"iteration {name!r}: folder on disk, NOT declared in session.yaml")
                 continue
-            it = Iteration(self.session_dir, name)
+            it = Iteration(self.path, name)
             it.describe(log=log, trials=None if trials else [])
         return None
 
@@ -215,7 +216,7 @@ class Session(SessionKeys):
         with any ``session.yaml`` ``iterations`` keys — excluding shared dirs
         (``experimental``, ``logs``) and dotfiles. ``session.yaml`` need not list
         every iteration; the folders do."""
-        root = _layout.iterations_root(self.session_dir)
+        root = _layout.iterations_root(self.path)
         # A session that has only just been ingested has no 3_iterations yet —
         # it is created when the first model is scaled. Listing it raised
         # FileNotFoundError and took export down with it, which is backwards:
@@ -236,9 +237,9 @@ class Session(SessionKeys):
         # so scanning its top level just collects whatever else is lying there.
         # It collected `_to_delete`, called it an iteration, and exported 11
         # trials into it.
-        if root != self.session_dir and not _layout.is_numbered_layout(self.session_dir):
-            on_disk |= {d for d in os.listdir(self.session_dir)
-                        if os.path.isdir(os.path.join(self.session_dir, d))
+        if root != self.path and not _layout.is_numbered_layout(self.path):
+            on_disk |= {d for d in os.listdir(self.path)
+                        if os.path.isdir(os.path.join(self.path, d))
                         and d not in self._NON_ITERATION_DIRS
                         and not d.startswith(".") and not d.startswith("_")
                         and "_backup_" not in d}
@@ -260,19 +261,19 @@ class Session(SessionKeys):
         the very name you had just declared as "available". A name that is not
         declared still raises, so a typo is still an error.
         """
-        _p = _layout.iteration_path(self.session_dir, name)
+        _p = _layout.iteration_path(self.path, name)
         if not os.path.isdir(_p):
             _declared = (self._cfg.get("iterations") or {})
             if name in _declared:
                 os.makedirs(_p, exist_ok=True)
                 print(f"[Session] {self.name}: created iteration folder "
-                      f"{os.path.relpath(_p, self.session_dir)} "
+                      f"{os.path.relpath(_p, self.path)} "
                       f"(declared in session.yaml)")
             else:
                 raise FileNotFoundError(
-                    f"iteration {name!r} not found under {self.session_dir} and "
+                    f"iteration {name!r} not found under {self.path} and "
                     f"not declared in session.yaml. available: {self.iterations}")
-        return Iteration(self.session_dir, name)
+        return Iteration(self.path, name)
 
     def add_iteration(self, name, copy_from=None, **overrides):
         """Declare a new model iteration in session.yaml, copied from an existing one.
@@ -311,7 +312,7 @@ class Session(SessionKeys):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
             raise ValueError(f"iteration name {name!r}: use letters, digits, '_', '-', '.' "
                              f"(it becomes a folder name)")
-        ypath = os.path.join(self.session_dir, "session.yaml")
+        ypath = os.path.join(self.path, "session.yaml")
         cfg = load_session_yaml(ypath) or {}
         its = cfg.get("iterations")
         if its is None and copy_from is None:
@@ -326,9 +327,9 @@ class Session(SessionKeys):
             raise ValueError(f"iteration {name!r} already exists in {ypath}")
 
         if copy_from is None:
-            _itdir = _layout.iteration_path(self.session_dir, name)
+            _itdir = _layout.iteration_path(self.path, name)
             # where scale_model writes it (Iteration.models_dir)
-            _m = os.path.join(Iteration(self.session_dir, name).models_dir(create=False),
+            _m = os.path.join(Iteration(self.path, name).models_dir(create=False),
                               f"{name}_scaled.osim")
             block = {"model_scaled": os.path.relpath(_m, _itdir).replace(os.sep, "/"),
                      "label": name}
@@ -415,7 +416,7 @@ class Session(SessionKeys):
         """
         import difflib
         import re
-        ypath = os.path.join(self.session_dir, "session.yaml")
+        ypath = os.path.join(self.path, "session.yaml")
         with open(ypath, "rb") as fh:
             raw = fh.read().decode("utf-8")
         nl = "\r\n" if "\r\n" in raw else "\n"
@@ -424,7 +425,7 @@ class Session(SessionKeys):
         # new blocks, from the normalised config, files resolved and re-relativised
         new_blocks = {}
         for name in (self._cfg.get("iterations") or {}):
-            it = Iteration(self.session_dir, name)
+            it = Iteration(self.path, name)
             # no makedirs here: the folder is made when a stage first writes to
             # it -- declaring an iteration must not leave empty folders behind
             cfg = dict(it.config)
@@ -442,7 +443,7 @@ class Session(SessionKeys):
             del lines[top_ms]
         # top level: project_dir after `session:` (or first line)
         if not any(re.match(r"project_dir\s*:", ln) for ln in lines):
-            rel = os.path.relpath(self.project_dir, self.session_dir).replace(os.sep, "/")
+            rel = os.path.relpath(self.project_dir, self.path).replace(os.sep, "/")
             at = next((i + 1 for i, ln in enumerate(lines) if re.match(r"session\s*:", ln)), 0)
             lines.insert(at, f"project_dir: {rel}")
 
@@ -455,6 +456,10 @@ class Session(SessionKeys):
             lines[start:end] = ([lines[start]]
                                 + [" " * (ind + inner) + b for b in body])
         text = nl.join(lines)
+        # gait events: a list of {name, time} -> one named line per event
+        from .gait_events import migrate_text as _migrate_events
+        from .gait_events import migrate_scale_measurements as _migrate_sm
+        text = _migrate_sm(_migrate_events(text))      # one line per event / measurement
 
         check = normalise_iterations(yaml.safe_load(text) or {}, warn=lambda m: None)
         if (check.get("iterations") or {}) != new_blocks:
@@ -479,6 +484,7 @@ class Session(SessionKeys):
                                                            if backup else ""))
         return text
 
+    @_quiet_run("session.run")
     def run(self, iterations=None, *, do_scale=False, **kw):
         """Run several iterations with the same stage flags. ``iterations``
         defaults to every iteration present on disk. ``do_scale`` builds each
@@ -516,12 +522,12 @@ class Session(SessionKeys):
             # owns. The Iteration object is only being borrowed for its file
             # plumbing, so borrow a scratch one rather than refusing to run.
             _scratch = "_export"
-            _p = _layout.iteration_path(self.session_dir, _scratch)
+            _p = _layout.iteration_path(self.path, _scratch)
             os.makedirs(_p, exist_ok=True)
             print(f"[Session] {self.name}: no model iterations yet — exporting "
                   f"the raw trials anyway (they are model-independent).")
             try:
-                return Iteration(self.session_dir, _scratch).export_trials(
+                return Iteration(self.path, _scratch).export_trials(
                     trials=trials, export_src=export_src, replace=replace,
                     normalise=normalise, detect=detect)
             finally:
@@ -557,6 +563,19 @@ class Session(SessionKeys):
             out[name] = self.iteration(name).scale_model(**kw)
         return out
 
+    def events(self, trial):
+        """Gait events of one trial as a DataFrame (name, event, n, side, time,
+        source, on_plate, at_record_edge)::
+
+            sess.events("Walking_01")
+            sess.events("Walking_01").set_index("name").time["foot_contact_1_r"]
+        """
+        from .gait_events import table
+        trials = self._cfg.get("trials") or {}
+        if trial not in trials:
+            raise KeyError(f"no trial {trial!r} in {self.yaml_path}. Have: {', '.join(trials)}")
+        return table((trials[trial] or {}).get("events"))
+
     @property
     def results(self) -> "Results":
         """This session's results -- call it to load, nothing is read before::
@@ -567,23 +586,13 @@ class Session(SessionKeys):
 
         See :mod:`bioscout.results`."""
         from bioscout.results import for_session
-        return for_session(self.session_dir)
-
-    @property
-    def results_dir(self):
-        """Flat output folder for cross-model summaries:
-        ``<project>/results/<subject>/<session>`` (no subfolders)."""
-        from bioscout import utils as _u
-        subject = os.path.basename(os.path.dirname(self.session_dir))
-        proj = str(getattr(_u, "PROJECT_DIR", None)
-                   or os.path.dirname(os.path.dirname(os.path.dirname(self.session_dir))))
-        return os.path.join(proj, "results", subject, self.name)
+        return for_session(self.path)
 
     def summarise(self, trials=None, iterations=None, out_dir=None,
                   figures=("kinematics", "moments", "jcf"), leg="r"):
         """Cross-model comparison figures for this session: overlay EVERY model
         iteration (cateli/gpk/gpk_mri/...) on the same axes, one figure per trial
-        TYPE, written FLAT into ``results_dir`` (``<project>/results/<subject>/
+        TYPE, written FLAT into ``out_dir`` (default ``<project>/results/<subject>/
         <session>``). Reuses each iteration's on-disk kinematics / ID moments /
         JRA (no re-solve). Colours/labels come from ``session.yaml`` iterations;
         SO = solid, CEINMS = dashed.
@@ -601,7 +610,7 @@ class Session(SessionKeys):
                             ["hip_flexion_r", "knee_angle_r", "ankle_angle_r"]) if d.endswith("_" + leg) or d.startswith("pelvis")]
         joints = list(getattr(ss, "joints", None) or ["hip", "knee", "ankle"])
         iters = [m for m in (iterations or self.iterations)
-                 if os.path.isdir(_layout.iteration_path(self.session_dir, m))]
+                 if os.path.isdir(_layout.iteration_path(self.path, m))]
         # FAIS patch 2026-08-12: `_trial_names` lives on Iteration, not Session,
         # so summarise() without an explicit `trials=` always raised
         # AttributeError. Take the session.yaml trial list directly, minus the
@@ -619,7 +628,10 @@ class Session(SessionKeys):
         label = {m: (icfg.get(m, {}) or {}).get("label", m) for m in iters}
         bm = self._cfg.get("body_mass")
         bw = float(bm) * 9.81 if bm else None
-        out = out_dir or self.results_dir
+        if out_dir is None:
+            proj = str(getattr(_u, "PROJECT_DIR", None) or self.project_dir)
+            out_dir = os.path.join(proj, "results", self.subject, self.name)
+        out = out_dir
         os.makedirs(out, exist_ok=True)
 
         # group trials by TYPE (strip trailing _NN):  Walking, Squat_BW, ...
@@ -633,7 +645,7 @@ class Session(SessionKeys):
             return ceinms_for(self._cfg, model)
 
         def _load(model, trial, rel):
-            p = os.path.join(_layout.iteration_path(self.session_dir, model), trial, rel)
+            p = os.path.join(_layout.iteration_path(self.path, model), trial, rel)
             try:
                 return _u.load_any_data_file(p) if os.path.exists(p) else None
             except Exception:
@@ -1039,9 +1051,9 @@ class Session(SessionKeys):
         info = {"timestamp": ts, "backup": None, "trials_reset": 0, "removed": 0}
 
         if backup and not dry_run:
-            dst = f"{self.session_dir}_backup_{ts}"
+            dst = f"{self.path}_backup_{ts}"
             log(f"[reset] backup {self.name} -> {os.path.basename(dst)} (can take a while)")
-            shutil.copytree(self.session_dir, dst)
+            shutil.copytree(self.path, dst)
             info["backup"] = dst
         elif backup:
             log(f"[reset] (dry-run) would back up {self.name} with ts={ts}")
@@ -1049,7 +1061,7 @@ class Session(SessionKeys):
         def _remove(p):
             info["removed"] += 1
             if dry_run:
-                log(f"    would remove {os.path.relpath(p, self.session_dir)}")
+                log(f"    would remove {os.path.relpath(p, self.path)}")
                 return
             try:
                 shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
@@ -1060,8 +1072,8 @@ class Session(SessionKeys):
         # session dir itself (legacy flat layout). De-dup by absolute path.
         it_scope = iterations if iterations is not None else self.iterations
         it_scope = [it_scope] if isinstance(it_scope, str) else list(it_scope)
-        scopes = [os.path.join(self.session_dir, it) for it in it_scope]
-        scopes.append(self.session_dir)
+        scopes = [os.path.join(self.path, it) for it in it_scope]
+        scopes.append(self.path)
         seen = set()
         for scope in scopes:
             if not os.path.isdir(scope):
@@ -1092,7 +1104,7 @@ class Session(SessionKeys):
                             if item not in self._RAW_INPUTS:
                                 _remove(os.path.join(inp, item))
                 info["trials_reset"] += 1
-                log(f"[reset] {os.path.relpath(p, self.session_dir)}: kept {kept} input(s)"
+                log(f"[reset] {os.path.relpath(p, self.path)}: kept {kept} input(s)"
                     f"{' (raw c3d only)' if raw_inputs else ''}")
         log(f"[reset] {'DRY-RUN ' if dry_run else ''}{self.name}: "
             f"{info['trials_reset']} trials reset, {info['removed']} item(s) "

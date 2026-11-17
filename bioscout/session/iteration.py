@@ -9,6 +9,7 @@ calibration, plots.
 from __future__ import annotations
 
 import os
+from bioscout.utils.shared import quiet_run as _quiet_run
 import glob
 import shutil
 import time
@@ -95,6 +96,7 @@ STEP_LOGS = {
     "cmc": ("CMC + JRA", "forward_simulation/cmc/out.log"),
     "forward": ("forward simulation", "forward_simulation/out.log"),
     "rra": ("RRA", "residual_reduction/out.log"),
+    "iaa": ("IAA", "induced_accelerations/out.log"),
 }
 
 
@@ -685,6 +687,10 @@ class Iteration(IterationKeys):
         ``mvic_factor``; built from ``model_scaled`` here if it is missing.
         None when the iteration names no model."""
         m = self.model_scaled
+        if not m:                              # scaled earlier in this kernel by scale_model()
+            _d = self._default_model_scaled()
+            if os.path.exists(_d):
+                self.__dict__["model_scaled"] = m = _d
         if not m:
             print(f"[Session] {self.tag}: [warn] no model_scaled in session.yaml "
                   f"(iterations.{self.iteration}) for {trial or force_type}")
@@ -1169,6 +1175,10 @@ class Iteration(IterationKeys):
         """This session's id — the session folder itself."""
         return os.path.basename(os.path.abspath(self.session_dir))
 
+    def _default_model_scaled(self):
+        """Where scale_model() writes when session.yaml names no model_scaled."""
+        return os.path.join(self.models_dir(), f"{self.iteration}_scaled.osim")
+
     def models_dir(self, create=False):
         """Where THIS session's personalised models are written and read:
         ``<project>/models/personalised/<subject>/<session>/``.
@@ -1289,6 +1299,7 @@ class Iteration(IterationKeys):
                   f'    mklink /J "{dst}" "{src_geo}"')
             return None
 
+    @_quiet_run("iteration.scale_model")
     def scale_model(self, static_trial=None, n_eval=None,
                     mass=None, replace=True, muscle_opt=None, marker_placer=None,
                     linear_scaling=None):
@@ -1455,8 +1466,9 @@ class Iteration(IterationKeys):
         if not target:
             target = os.path.join(_mdir, f"{self.iteration}_scaled.osim")
             print(f"[Session] {self.tag}: no model_scaled in session.yaml -- writing "
-                  f"{target}. Add under iterations.{self.iteration}:\n"
-                  f"    model_scaled: {self.relpath(target, 'model_scaled')}")
+                  f"{target} (used by this iteration from now on). To name it in the file:\n"
+                  f"    session.set('iterations.{self.iteration}.model_scaled', "
+                  f"'{self.relpath(target, 'model_scaled')}'); session.save()")
         _stem, _ext = os.path.splitext(target)
         so_path = target if mvic_factor == 1.0 else f"{_stem}_mvicx{mvic_factor:.2f}{_ext}"
         if os.path.exists(target) and os.path.exists(so_path) and not replace:
@@ -1840,6 +1852,7 @@ class Iteration(IterationKeys):
             except Exception as e:                                   # noqa: BLE001
                 log(f"  [CEINMS pyosim ERROR] {tn}: {type(e).__name__}: {e}")
 
+    @_quiet_run("iteration.run")
     def run(self, trials=None,
             export=False, export_src=None, *,
             detect=True,
@@ -1853,6 +1866,7 @@ class Iteration(IterationKeys):
             cmc_duration=None,
             do_mew=False,
             do_ceinms=False,
+            do_iaa=False, iaa_opts=None,
             calibrate=False, calibration_trials=None,
             replace=False,
             mew_opts=None,
@@ -1892,6 +1906,14 @@ class Iteration(IterationKeys):
                         :func:`bioscout.simulate.mew.analyse_trial` (``tier``,
                         ``smoothing``, ``filter_hz``, ``jcf``, ``plot``).
           do_ceinms   : CEINMS calibration (once) + per-trial execution -> JRA.
+          do_iaa      : induced acceleration analysis on the SO forces (each
+                        muscle's / actuator's / gravity's / velocity's share of
+                        every coordinate's acceleration, the COM acceleration
+                        and each foot's GRF) -> ``<trial>/induced_accelerations/``.
+                        Needs SO (filled if missing). ``iaa_opts`` goes to
+                        Trial.run_iaa: ``engine`` ("opensim" | "pyosim" | "both"),
+                        ``constraint`` ("rolling" | "point" | "weld"),
+                        ``force_threshold`` (N).
           do_contrib  : after each trial's SO JRA, also the muscle-group
                         contributions to the JCF (run_jra_contributions ->
                         joint_contact_forces/contributions_so.*). Default: the
@@ -1927,7 +1949,7 @@ class Iteration(IterationKeys):
         _bad = sorted(k for k in _ignored if k.startswith("do_"))
         if _bad:
             log(f"  [run] WARNING: unknown stage flag(s) {_bad} IGNORED -- stages are "
-                f"do_exbiomec, do_muscle_analysis, do_so, do_rra, do_forward, do_mew, do_ceinms "
+                f"do_exbiomec, do_muscle_analysis, do_so, do_iaa, do_rra, do_forward, do_mew, do_ceinms "
                 f"(plus export, do_scale)")
         if "skip_done" in _ignored:
             _ignored.pop("skip_done")
@@ -1953,11 +1975,11 @@ class Iteration(IterationKeys):
         names = ([trials] if isinstance(trials, str)
                  else list(trials)) if trials else self._trial_names()
         res = {"export": [], "exbiomec": [], "muscle_analysis": [], "so": [],
-               "rra": [], "cmc": [], "forward": [], "mew": [], "ceinms": [], "skipped": []}
+               "rra": [], "cmc": [], "forward": [], "mew": [], "ceinms": [], "iaa": [], "skipped": []}
         # only the stages that will run (2026-10-19: was every flag, mostly False)
         _on = [k for k, v in (("export", export), ("ID", do_exbiomec), ("MA", do_muscle_analysis),
                               ("SO", do_so), ("RRA", do_rra), ("CMC", do_cmc), ("forward", do_forward),
-                              ("MEW", do_mew), ("CEINMS", do_ceinms)) if v]
+                              ("MEW", do_mew), ("CEINMS", do_ceinms), ("IAA", do_iaa)) if v]
         log(f"=== {self.tag}  trials: {', '.join(names)}  stages: {' + '.join(_on) or 'none'}"
             f"{'  (replace)' if replace else ''} ===")
 
@@ -2246,6 +2268,27 @@ class Iteration(IterationKeys):
                     _close_figs()
                 except Exception as e:
                     log(f"  [SO ERROR] {tn}: {e}")
+
+        if do_iaa:
+            _stage("Induced acceleration analysis (IAA on the SO forces)", trials=names,
+                   model=_model_disp("SO"),
+                   output=os.path.join(os.path.abspath(self.path), "<trial>", "induced_accelerations"),
+                   banner="IAA")
+            for tn in names:
+                try:
+                    log("")
+                    t = self.trial(tn)
+                    if not do_so and not os.path.isfile(os.path.join(t.path, t.so_forces)):
+                        log(f"[IAA] {tn}: no SO forces yet -- running SO first")
+                        _exbio(t, force=False)
+                        _timed(t, "ma", t.run_ma, replace=False)
+                        _timed(t, "so", t.run_so, replace=False)
+                    _o = _timed(t, "iaa", t.run_iaa, replace=replace, **(iaa_opts or {}))
+                    res["iaa"].append(tn)
+                    log(f"  [IAA ok] {tn} -> " + ", ".join(f"{k}: {v}" for k, v in (_o or {}).items()))
+                    _close_figs()
+                except Exception as e:
+                    log(f"  [IAA ERROR] {tn}: {type(e).__name__}: {e}")
 
         if do_rra:
             _stage("Residual Reduction Algorithm (RRA)", trials=names,

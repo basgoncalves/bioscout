@@ -1,0 +1,80 @@
+# session.yaml -- one recording session (this one is a working example).
+# The template: OrthoLoad subject H1L, a static trial and one level-walking trial
+# with markers, force plates and the MEASURED hip contact force (invivo_jcf.mot);
+# see SOURCE.md for the source and how to cite it.
+#
+# Start your own session: copy this folder to simulations/<subject>/<session>/
+# (no leading "_" -- that hides it from bioscout), put your .c3d files in
+# 1_c3dfiles/, delete 2_experimental/, and edit the fields below -- or let
+# `bioscout session new <session folder>` write a session.yaml from the c3d files.
+#
+# Try the pipeline on the template itself (it is hidden from PROJECT.sessions()):
+#   s = bs.Session(r"<project>/simulations/_template/session_01")
+#   s.iteration("gpk").scale_model(); s.iteration("gpk").run(do_so=True)
+project_dir: ../../..                # relative to this file
+body_mass: 77.498
+implanted_side: l
+instrumented_joint: hip
+static_trial: Static_01
+emg_map: {}
+# Scaling measurements for the OrthoLoad marker set (marker pairs present both
+# in the static trial and in setup_files/markers_orthoload.xml; bioscout's
+# default spec expects Vicon PiG names and joint-centre markers this set lacks).
+scale_measurements:
+  pelvis_width: {pairs: [[LASIS, RASIS]], bodies: {pelvis: Z}}
+  pelvis_depth: {pairs: [[LPSIS, LASIS], [RPSIS, RASIS]], bodies: {pelvis: XY}}
+  femur_r: {pairs: [[RGTR, RLCO]], bodies: {femur_r: XYZ, patella_r: XYZ, femoral_cond_r: XYZ, med_cond_r: XYZ, lat_cond_r: XYZ, sagittal_articulation_frame_r: XYZ}}
+  femur_l: {pairs: [[LGTR, LLCO]], bodies: {femur_l: XYZ, patella_l: XYZ, femoral_cond_l: XYZ, med_cond_l: XYZ, lat_cond_l: XYZ, sagittal_articulation_frame_l: XYZ}}
+  tibia_r: {pairs: [[RLCO, RLMA]], bodies: {tibia_r: XYZ, tibial_plat_r: XYZ}}
+  tibia_l: {pairs: [[LLCO, LLMA]], bodies: {tibia_l: XYZ, tibial_plat_l: XYZ}}
+  foot_r: {pairs: [[RHEEL, RTOE]], bodies: {talus_r: XYZ, calcn_r: XYZ, toes_r: XYZ}}
+  foot_l: {pairs: [[LHEEL, LTOE]], bodies: {talus_l: XYZ, calcn_l: XYZ, toes_l: XYZ}}
+  torso: {pairs: [[L5, C7]], bodies: {torso: XYZ}}
+trials:
+  Static_01:
+    calibration: false
+    emg_normalisation: false
+    type: static
+    side: both
+    time_range:
+    - 0.0
+    - 0.492
+  Walking_01:
+    calibration: false
+    emg_normalisation: false
+    type: walking
+    side: both
+    time_range:
+    - 5.32
+    - 7.079
+    source: h1l_060511_1_47_mov.csv
+    events:
+      foot_contact_1_l: {time: 5.3203, source: markers, at_record_edge: true}
+      foot_off_1_l: {time: 5.4703, source: markers}
+      foot_contact_1_r: {time: 5.5703, source: grf, on_plate: true}
+      foot_contact_2_l: {time: 6.162, source: grf, on_plate: true}
+      foot_off_1_r: {time: 6.2703, source: grf, on_plate: true}
+      foot_contact_2_r: {time: 6.712, source: markers}
+      foot_off_2_l: {time: 6.8286, source: grf, on_plate: true}
+      foot_off_2_r: {time: 7.0786, source: markers, at_record_edge: true}
+    events_source: 'grf where a plate saw the foot, heel markers (on_plate: false) for contacts no plate recorded'
+iterations:
+  gpk:
+    # files: relative to this iteration's folder (3_iterations/gpk)
+    model_generic: ../../../../../models/generic/GPK/GPK_v4_016.osim
+    markerset: ../../../../../setup_files/markers_orthoload.xml
+    linear_scaling: true
+    marker_placer: true
+    muscle_opt: false
+    mvic_factor: 1.0
+    label: Scaled (GPK)
+    color: firebrick
+    engine: opensim         # opensim | pyosim
+data_source:
+  source: OrthoLoad
+  patient: H1L
+  database: https://orthoload.com/database/?implantId=2355&activityId=2820&activityIndentationLevel=2&parameterId=1&parameterIndentationLevel=-1&patientId=h1l&fileId=h1l_060511_1_47_mov&fileType=a
+  mov_csv: https://orthoload.com/wp-content/files/add_file/h1l_060511_1_47_mov.csv
+  raw_zip: https://orthoload.com/wp-content/files/add_file/raw/h1l_060511_1_47_level_walking_mov.zip
+  akf: https://orthoload.com/wp-content/files/file/result/h1l_060511_1_47.akf
+  screen_video: https://orthoload.com/wp-content/files/add_video/mp4/h1l_060511_1_47_mov.mp4

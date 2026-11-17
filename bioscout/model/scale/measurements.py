@@ -378,11 +378,15 @@ _AXIS = {"X": 0, "Y": 1, "Z": 2}
 def spec_from_config(items):
     """A measurement spec from session.yaml's ``scale_measurements`` list.
 
-    Each item is ``{name: str, pairs: [[a, b], ...], bodies: {body: axes}}``,
-    ``axes`` any of ``"X"``, ``"XY"``, ``"XYZ"`` ... . Returns the tuple form
-    :func:`build_measurement_set` takes. Marker aliases still apply on top.
+    A mapping ``{name: {pairs: [[a, b], ...], bodies: {body: axes}}}`` (one
+    line per measurement -- folds in an editor) or the older list of
+    ``{name, pairs, bodies}``. ``axes`` any of ``"X"``, ``"XY"``, ``"XYZ"`` ...
+    Returns the tuple form :func:`build_measurement_set` takes. Marker aliases
+    still apply on top.
     """
     spec = []
+    if isinstance(items, dict):
+        items = [{"name": k, **(v or {})} for k, v in items.items()]
     for it in items or []:
         name = str(it["name"])
         pairs = [(str(a), str(b)) for a, b in (it.get("pairs") or [])]

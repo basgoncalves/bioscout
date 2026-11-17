@@ -394,42 +394,6 @@ def _pid_alive(pid):
         return False
 
 
-_LIVE_SLOT = None          # k of the run log's live_<k>.log, when it has one
-
-
-def _live_log_alias(path, max_slots=8):
-    """Hard-link the run log as ``<log dir>/live_<k>.log`` in the first slot no
-    RUNNING process owns, and return that alias (or None).
-
-    The editor is pointed at the alias, so successive runs reuse the same tab
-    (VS Code reloads the file when the link is re-pointed) and the open tabs
-    never outnumber the runs going at once. The timestamped bioscout_<time>.log
-    stays the record; the alias is the same file under a second name."""
-    d = os.path.dirname(os.path.abspath(path))
-    for k in range(1, max_slots + 1):
-        alias = os.path.join(d, f"live_{k}.log")
-        owner = alias + ".pid"
-        try:
-            with open(owner, encoding="utf-8") as fh:
-                pid = fh.read().strip()
-        except Exception:
-            pid = ""
-        if pid and pid != str(os.getpid()) and _pid_alive(pid):
-            continue                                        # slot busy: another live run
-        try:
-            if os.path.lexists(alias):
-                os.remove(alias)
-            os.link(path, alias)
-            with open(owner, "w", encoding="utf-8") as fh:
-                fh.write(str(os.getpid()))
-            global _LIVE_SLOT
-            _LIVE_SLOT = k
-            return alias
-        except Exception:
-            return None                                     # no hard links here: per-run tab
-    return None
-
-
 def _open_log_viewer(path):
     """Open the run log in the user's text editor as soon as it exists.
 
@@ -441,10 +405,9 @@ def _open_log_viewer(path):
          so the tab follows the run as bioscout writes it.
       3. The system default app for ``.log`` files.
 
-    Every ``Session(...)`` starts a new ``bioscout_<time>.log``; the editor is
-    pointed at a reusable hard link ``live_<k>.log`` to it (see _live_log_alias),
-    so finished runs do not pile up tabs (BIOSCOUT_LOG_TABS=per-run: one tab per log).
-    Off with ``BIOSCOUT_OPEN_LOG=0``. Never in a notebook, a test run or a
+    Every ``Session(...)`` starts a new ``bioscout_<time>.log`` and that file is
+    what opens (no second name for it). Each step's own log is named in the run
+    log, one line per step. Off with ``BIOSCOUT_OPEN_LOG=0``. Never in a notebook, a test run or a
     child process (multiprocessing workers start logs of their own).
     """
     try:
@@ -459,11 +422,6 @@ def _open_log_viewer(path):
         import shlex
         import shutil
         import subprocess
-        # one reusable tab per concurrently running bioscout, not one per run
-        # (VS Code cannot close a tab from its CLI). BIOSCOUT_LOG_TABS=per-run
-        # restores a new tab for every log.
-        if os.environ.get("BIOSCOUT_LOG_TABS", "reuse").strip().lower() != "per-run":
-            path = _live_log_alias(path) or path
         _open_in_editor(path)
     except Exception:
         pass
@@ -1011,16 +969,13 @@ def step_log(path, label=""):
     except Exception:
         pass
     fh.flush()
-    # say where the details go BEFORE the step runs, in the run log, and show the step
-    # log live: logs/live_<k>_step.log is re-pointed at each step's log (one editor tab
-    # that follows the run step by step; opened with the first step)
+    # say where the details go BEFORE the step runs, in the run log
     try:
         _who, _, _what = label.partition(": ")
         _head = f"  [{_who}] {_what:<27}" if _what else f"  {label:<38}"
         print(f"{_head} running ...    -> {os.path.abspath(path)}", file=old[0], flush=True)
     except Exception:
         pass
-    _live_step_alias(path)
     streams = (fh,) if QUIET_CONSOLE else (console_stream(), fh)
     sys.stdout = _Tee(*streams, raw=True)
     sys.stderr = _Tee(*streams, raw=True)
@@ -1049,30 +1004,6 @@ def step_log(path, label=""):
             pass
 
 
-_STEP_ALIAS_OPENED = False
-
-
-def _live_step_alias(path):
-    global _STEP_ALIAS_OPENED
-    if _LOG_PATH is None or os.environ.get("BIOSCOUT_OPEN_LOG", "1").strip().lower() in ("0", "false", "off", "no"):
-        return
-    try:
-        alias = os.path.join(os.path.dirname(_LOG_PATH), f"live_{_LIVE_SLOT or 1}_step.log")
-        if os.path.lexists(alias):
-            os.remove(alias)
-        os.link(os.path.abspath(path), alias)
-    except Exception:
-        return
-    if not _STEP_ALIAS_OPENED:
-        _STEP_ALIAS_OPENED = True
-        try:
-            import multiprocessing as _mp
-            if _mp.parent_process() is None and not in_notebook() and "pytest" not in sys.modules:
-                _open_in_editor(alias)
-        except Exception:
-            pass
-
-
 def _command_tag():
     """'simulate_cmc_gpkv4' from `bioscout simulate cmc <session> --iteration gpkv4 ...`, so
     the run log says which command it is; '' when not run from the bioscout CLI."""
@@ -1085,3 +1016,83 @@ def _command_tag():
             words.append(a[a.index(flag) + 1].replace(",", "+")[:40])
     tag = "_".join(words)
     return re.sub(r"[^\w+-]", "", tag)[:80]
+
+
+# ---------------------------------------------------------------------------
+# Notebook / script runs honour ~/.bioscout/settings.yaml `log_terminal`
+# ---------------------------------------------------------------------------
+class _ImportantOnly:
+    """Console side of a quiet run: only lines that look like a warning or an
+    error pass; everything else goes to the log only."""
+    _RX = re.compile(r"error|warn|traceback|exception|fail|refus|\bdone\b", re.I)
+
+    def __init__(self, stream):
+        self.stream = stream
+        self._buf = ""
+
+    def write(self, s):
+        self._buf += str(s)
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if self._RX.search(line):
+                self.stream.write(line + "\n")
+        return len(s)
+
+    def flush(self):
+        try:
+            self.stream.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self.__dict__["stream"], name)
+
+
+def _log_terminal() -> bool:
+    try:
+        from bioscout import user_settings as _us
+        return bool(_us.load().get("log_terminal"))
+    except Exception:
+        return True
+
+
+def quiet_run(label):
+    """Decorator for the long bioscout calls (scale_model, run): in a notebook
+    or script, with ``log_terminal: false`` (``bioscout settings``), the call's
+    output goes to the run log and the cell shows only the log path, warnings
+    and errors. The streams are swapped only for the duration of the call, in
+    the cell that makes it, and always restored. The CLI and nested calls are
+    left alone; ``log_terminal: true`` prints everything as before."""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            global _SAVED_STREAMS
+            if _console_owned() or _SAVED_STREAMS is not None or _log_terminal():
+                return fn(*a, **k)
+            f = _LOG_HANDLE if _LOG_STARTED else ensure_logging(name=label)
+            if f is None:
+                return fn(*a, **k)
+            out, err = sys.stdout, sys.stderr
+            print(f"[bioscout] {label}: details -> {_LOG_PATH}  "
+                  f"(log_terminal: true in ~/.bioscout/settings.yaml prints them here)",
+                  file=out)
+            con_out, con_err = _ImportantOnly(out), _ImportantOnly(err)
+            _SAVED_STREAMS = (out, err)
+            sys.stdout = _Tee(con_out, f, raw=True)
+            sys.stderr = _Tee(con_err, f, raw=True)
+            try:
+                return fn(*a, **k)
+            finally:
+                for s in (sys.stdout, sys.stderr):
+                    try:
+                        s.flush()
+                    except Exception:
+                        pass
+                sys.stdout, sys.stderr = out, err
+                _SAVED_STREAMS = None
+        return wrapper
+    return deco

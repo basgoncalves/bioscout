@@ -139,8 +139,9 @@ def _geometry_dirs(model_path, extra=None) -> list:
             os.path.join(os.path.dirname(here), "Geometry")]
     try:                                    # the bundled generic geometry
         import bioscout
-        out.append(os.path.join(os.path.dirname(os.path.abspath(bioscout.__file__)),
-                                "models", "Geometry"))
+        import glob as _glob
+        out += sorted(_glob.glob(os.path.join(os.path.dirname(os.path.abspath(
+            bioscout.__file__)), "models", "generic", "*", "Geometry")))
     except Exception:
         # standalone copy with no bioscout installed: walk up looking for a
         # checkout, so a sibling clone still works
@@ -609,7 +610,7 @@ def compare_models(models, out: Optional[str] = None,
               "generic geometry has to be reachable. Either:\n"
               "                 - copy the model family's Geometry/ folder in "
               "beside the models (bioscout ships one at "
-              "bioscout/models/Geometry), or\n"
+              "bioscout/models/generic/<Model>/Geometry), or\n"
               "                 - pass --geometry <that folder> / "
               "geometry='<that folder>'.")
 

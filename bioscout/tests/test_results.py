@@ -144,6 +144,21 @@ class TestResults(unittest.TestCase):
         self.assertIsInstance(self.res(["ik"]).doubled(), R.ResultSets)
         del R.ACTIONS["doubled"]
 
+    def test_several_files_layouts_and_order(self):
+        r = self.res(["so_forces", "ik"], iteration="gpkv4", trial="Gehen_01")
+        self.assertEqual(list(r), ["muscle_forces_so", "joint_angles"])     # asked order
+        import matplotlib.pyplot as plt
+        figs = r.plot(layout="figures")
+        self.assertEqual(len(figs), 2)
+        p = r.plot(layout="rows")
+        self.assertEqual(len(p.fig.axes), 2 * len(set(r["muscle_forces_so"].vars)
+                                                  | set(r["joint_angles"].vars)))
+        p2 = r.plot(var="vasmed_r", layout="overlay")
+        self.assertEqual(len([a for a in p2.fig.axes if a.get_visible()]), 1)
+        with self.assertRaises(ValueError):
+            r.plot(layout="nope")
+        plt.close("all")
+
     def test_unknown_file_lists_what_exists(self):
         with self.assertRaises(LookupError) as cm:
             self.res("nope")

@@ -1,24 +1,23 @@
-OpenSim model templates
-========================
-Place generic .osim model files here. They will be copied to
-<project>/Models/ when you run:
+Bundled OpenSim models
+======================
 
-    python -m bioscout --init <project_path>
+    generic/<Model>/<model>.osim        one folder per generic model
+    generic/<Model>/Geometry/           only the meshes that model uses
 
-Expected models
----------------
-  GPK_v4_016.osim      — full-body GPK model (default assigned to new subjects)
+`bioscout init` (and `bioscout.Project(path)` on a new folder) copies generic/ into
+<project>/models/generic/ and creates <project>/models/personalised/ for the scaled
+models (personalised/<subject>/<session>/).
 
-GPK_v4_016 replaced the older GPK_v3 / GPK_generic_modWO template on
-2026-09-02. Its provenance (what was edited relative to GPK_v4_015, and why)
-is in GPK_v4_016.provenance.json beside it. Nothing in the package refers to
-GPK_v3 as a file any more; the remaining mentions in docstrings and the
-CHANGELOG are historical notes about where a measurement came from.
+    generic/GPK/                  GPK_v4_016 -- default lower-body model (+ provenance.json:
+                                  what changed relative to GPK_v4_015, and why)
+    generic/Rajagopal2015/        Rajagopal 2015 full body (no meshes bundled)
+    generic/Full_Body_with_ball/  full body + ball (video tools)
+    generic/Digital_Athlete/      GPK lower limb + Full_Body upper body
+                                  (build_digital_athlete.py rebuilds it)
+    generic/arm26_ball/, generic/Neck_model/   video tools; no meshes bundled
 
-Geometry folders (mesh files) are gitignored via *Geometry/ in .gitignore.
-Add any Geometry/ subfolder alongside its .osim file; it will be copied on
---init even though it is not tracked in git.
+Geometry folders are gitignored (*Geometry/); keep each model's meshes in its own
+generic/<Model>/Geometry/ so a copied model folder is complete on its own.
 
-Each subject's generic_model field in subjects.json resolves relative to the
-project root, e.g.:
-  "generic_model": "Models/GPK_v4_016.osim"
+The .py / .pkl / FORCE_MODEL.md files here are the joint-force regression
+(force_model.py), not OpenSim models, and are not copied into projects.

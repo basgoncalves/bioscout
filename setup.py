@@ -55,6 +55,7 @@ setup(
         "plotly",
         "Pillow",
         "pyyaml",
+        "ruamel.yaml",   # session.save(): edits session.yaml keeping comments
         "c3d",
         "packaging",
         "pyperclip",
@@ -76,11 +77,15 @@ setup(
         'bioscout': [
             '*.yaml', '*.xml', '*.json', '*.txt', '*.bat',
             '*.jpg', '*.png',
+            # the example session every new project gets (simulations/_template)
+            'templates/session_01/*.yaml', 'templates/session_01/*.md',
+            'templates/session_01/2_experimental/*/*',
         ],
         'bioscout.config': ['*.yaml', '*.xml'],
         # the task-event definitions the figures read (editable defaults)
         'bioscout.session': ['*.yaml'],
-        'bioscout.models': ['*.osim', '*.txt'],
+        'bioscout.models': ['*.txt', 'generic/*/*.osim', 'generic/*/*.json',
+                            'generic/*/*.md', 'generic/*/Geometry/*'],
         'bioscout.setup_files': ['*.xml', '*.txt'],
         'bioscout.model.mri2msk': ['templates/*.xml', 'assets/*.png', 'assets/*.ico', '*.md'],
         'bioscout.tests': ['*.xml'],

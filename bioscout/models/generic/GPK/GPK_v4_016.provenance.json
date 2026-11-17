@@ -16,5 +16,12 @@
     "Gmax2_at_pelvis_l      translation -0.080000000000000002 -0.083000000 -> -0.075768070330086576 -0.078752632",
     "Gmax3_at_pelvis_r      translation -0.083000000000000004 -0.087999999 -> -0.085661913651536289 -0.073550582",
     "Gmax3_at_pelvis_l      translation -0.083000000000000004 -0.087999999 -> -0.085661913651536289 -0.073550582"
+  ],
+  "changes_after_release": [
+    {
+      "date": "2026-11-06",
+      "change": "removed markers BL and BR (barbell, fixed to ground; powerlifting leftovers)",
+      "why": "ScaleTool cannot place ground-fixed markers, so every scaling wrote a GPK_v4_016_scaleready.osim copy without them"
+    }
   ]
 }

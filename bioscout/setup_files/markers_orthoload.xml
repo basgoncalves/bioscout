@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<OpenSimDocument Version="40000">
+	<MarkerSet name="orthoload">
+		<objects>
+			<Marker name="C7">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.050000 0.440000 0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="Th12">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.100000 0.200000 0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="L5">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.090000 0.030000 0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHO">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.020000 0.400000 0.190000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHO">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.020000 0.400000 -0.190000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RASIS">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.006400 0.005200 0.128000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LASIS">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.006400 0.005200 -0.128000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RPSIS">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.151500 0.016200 0.038000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LPSIS">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.151500 0.016200 -0.038000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RPELV01">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.050000 0.060000 0.100000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LPELV01">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.050000 0.060000 -0.100000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RPELV02">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.100000 0.050000 0.090000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LPELV02">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.100000 0.050000 -0.090000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RGTR">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.000000 -0.050000 0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LGTR">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.000000 -0.050000 -0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI01">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.020000 -0.120000 0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI01">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.020000 -0.120000 -0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI02">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.020000 -0.180000 0.075000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI02">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.020000 -0.180000 -0.075000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI03">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.000000 -0.240000 0.080000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI03">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.000000 -0.240000 -0.080000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI04">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>-0.020000 -0.200000 0.075000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI04">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>-0.020000 -0.200000 -0.075000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI05">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>-0.020000 -0.280000 0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI05">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>-0.020000 -0.280000 -0.070000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI06">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.000000 -0.320000 0.060000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI06">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.000000 -0.320000 -0.060000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RLCO">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.000000 -0.395800 0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LLCO">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.000000 -0.395800 -0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMCO">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.000000 -0.397900 -0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMCO">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.000000 -0.397900 0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RCAFI">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>-0.006800 -0.079400 0.063800</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LCAFI">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>-0.006800 -0.079400 -0.063800</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTUTI">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.030000 -0.060000 0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTUTI">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.030000 -0.060000 -0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA01">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.010000 -0.100000 0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA01">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.010000 -0.100000 -0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA02">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.000000 -0.150000 0.055000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA02">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.000000 -0.150000 -0.055000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA03">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>-0.010000 -0.200000 0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA03">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>-0.010000 -0.200000 -0.050000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA04">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.020000 -0.130000 0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA04">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.020000 -0.130000 -0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA05">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.000000 -0.250000 0.045000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA05">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.000000 -0.250000 -0.045000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHA06">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>-0.020000 -0.280000 0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHA06">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>-0.020000 -0.280000 -0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RLMA">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>-0.005000 -0.410000 0.053000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LLMA">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>-0.005000 -0.410000 -0.053000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMMA">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.006000 -0.388800 -0.038000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMMA">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.006000 -0.388800 0.038000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RHEEL">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>-0.020000 0.020000 0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LHEEL">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>-0.020000 0.020000 -0.000000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMET05">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.135800 0.011800 0.060000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMET05">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.135800 0.011800 -0.060000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMET01">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.150000 0.020000 -0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMET01">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.150000 0.020000 0.040000</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTOE">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.189700 0.020700 -0.048900</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTOE">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.189700 0.020700 0.048900</location>
+				<fixed>false</fixed>
+			</Marker>
+		</objects>
+		<groups/>
+	</MarkerSet>
+</OpenSimDocument>

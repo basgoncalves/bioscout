@@ -148,9 +148,15 @@ class ResultSet:
     # -- built-in actions (typed so editors autocomplete them; the code lives
     #    in actions.py and can be replaced through the ACTIONS registry) ----
     def plot(self, var=None, *, by="iteration", mean=True, ncols=3, title=None,
-             save=None, **where):
+             save=None, layout=None, group=True, top=8, bw=None, **where):
         """One subplot per channel, one line per ``by`` group (mean +- SD on
-        normalised data). Returns a Plot (``.savefig``, ``.axes``, ``.fig``)."""
+        normalised data). Returns a Plot (``.savefig``, ``.axes``, ``.fig``).
+        ``layout="stack"``: the channels stacked in one axes (IAA contributions)."""
+        if layout == "stack":
+            from .plotting import plot_stack
+            rs = self.where(**where) if where else self
+            return plot_stack({self.variable: rs}, var, group=group, top=top, ncols=ncols,
+                              title=title, save=save, bw=bw)
         return ACTIONS["plot"](self, var, by=by, mean=mean, ncols=ncols, title=title,
                                save=save, **where)
 
@@ -203,6 +209,24 @@ class ResultSets(dict):
 
     def __dir__(self):
         return sorted(set(super().__dir__()) | set(ACTIONS))
+
+    def plot(self, var=None, *, layout="figures", by="iteration", mean=True, ncols=3,
+             title=None, save=None, group=True, top=8, bw=None, **where):
+        """All files at once. ``layout``: "figures" (one per file), "rows" (one
+        figure, a row per file) or "overlay" (one axes per channel, a colour per
+        file; a different unit gets a second y axis)::
+
+            r = sess.results(["so_forces", "so_activations"], trial="Walking_01")
+            r.plot(var="vasmed*", layout="overlay")
+
+            iaa = sess.results("iaa_opensim/*_Y", trial="Walking_01")
+            iaa.plot(layout="stack")              # IAA: contributions stacked per target
+        """
+        from .plotting import plot_resultsets
+        rss = ResultSets({v: (rs.where(**where) if where else rs) for v, rs in self.items()})
+        kw = dict(group=group, top=top, bw=bw) if layout == "stack" else {}
+        return plot_resultsets(rss, var, layout=layout, by=by, mean=mean, ncols=ncols,
+                               title=title, save=save, **kw)
 
     def __repr__(self):
         return "\n".join(rs._summary() for rs in self.values()) or "ResultSets {}"

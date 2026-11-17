@@ -87,11 +87,21 @@ def load(infos, file, *, iteration=None, trial=None, var=None, window="trial",
     sources = scan(infos, iteration, trial, file, experimental)
     if not sources:
         have = sorted({s.variable for s in scan(infos, iteration, trial, None, experimental)})
-        raise LookupError(f"no {file!r} files for iteration={iteration!r} trial={trial!r}. "
-                          f"Found: {', '.join(have) or 'nothing'}")
+        hint = _files.suggest(file, have) if isinstance(file, str) else []
+        raise LookupError(f"no {file!r} files for iteration={iteration!r} trial={trial!r}."
+                          + (f" Did you mean: {', '.join(hint)}?" if hint else "")
+                          + f"\nFound: {', '.join(have) or 'nothing'}"
+                          + "\n(session.results() shows what exists per trial; "
+                            "session.results.files lists names and aliases)")
     by_var = {}
     for s in sources:
         by_var.setdefault(s.variable, []).append(s)
+    if not isinstance(file, str):                     # keep the order the files were asked in
+        import fnmatch as _fn
+        order = [_files.canonical(f) for f in file]
+        rank = lambda v: next((i for i, o in enumerate(order)
+                               if v == o or v.startswith(o + "/") or _fn.fnmatchcase(v, o)), len(order))
+        by_var = dict(sorted(by_var.items(), key=lambda kv: rank(kv[0])))
     out = ResultSets()
     for v, srcs in by_var.items():
         parts, idx, errors = read_parts(srcs, var=var, window=window, points=points,

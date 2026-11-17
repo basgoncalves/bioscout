@@ -108,6 +108,59 @@ class Results:
                      window=window, points=points, normalise=normalise, tasks=tasks,
                      experimental=experimental, jobs=jobs)
 
+    def plot_iaa(self, trial=None, iteration=None, *, side="r", engine="opensim", group=True,
+                 top=8, bw=None, window="trial", title=None, save=None, **kw):
+        """The IAA summary, 3 x 3, contributions stacked (positive up, negative down;
+        black = sum, dashed = measured):
+
+          row 1  centre-of-mass acceleration  X, Y, Z            (IAA)
+          row 2  ground reaction force under the ``side`` foot  X, Y, Z   (IAA)
+          row 3  sagittal hip / knee / ankle moments on ``side``: each muscle's SO
+                 force x moment arm (muscle_moments_so), dashed = inverse dynamics
+
+        ``engine`` "opensim" | "pyosim"; ``bw`` body weight in N (GRF in BW, moments in
+        N*m/kg); ``group`` muscles into groups (False: individual muscles)."""
+        from .plotting import _stack_grid, _stack_frame, _xlabel
+        from bioscout.simulate import iaa_files as _iaf
+        load = lambda f, **k: self(f, trial=trial, iteration=iteration, window=window, **k, **kw)
+
+        def panel(f, title, measured=None, k=None, unit=None):
+            try:
+                rs = load(f)
+            except LookupError as e:
+                print(f"[results] {f}: {str(e).splitlines()[0]}")
+                return None
+            fr = _stack_frame(rs, None, group)
+            if measured is not None:
+                fr = fr.drop(columns=[c for c in ("total", "measured") if c in fr])
+                fr["total"] = fr.sum(1)
+                try:
+                    m = _stack_frame(measured[0], [measured[1]], False)[measured[1]]
+                    fr["measured"] = m.reindex(fr.index, method="nearest")
+                except Exception:                                    # noqa: BLE001
+                    pass
+            kk, uu = _iaf._unit(f.split("/", 1)[-1])
+            return dict(title=title, frame=fr, k=k if k is not None else kk,
+                        unit=unit or uu, xlabel=_xlabel(rs))
+
+        e = f"iaa_{engine}"
+        panels = [panel(f"{e}/center_of_mass_{a}", f"COM {a}") for a in "XYZ"]
+        gk, gu = (1.0 / bw, "BW") if bw else (1.0, "N")
+        panels += [panel(f"{e}/grf_calcn_{side}_{a}", f"GRF {side.upper()} {a}", k=gk, unit=gu) for a in "XYZ"]
+        try:
+            idrs = load("joint_moments")
+        except LookupError:
+            idrs = None
+        mk, mu = (9.81 / bw, "N·m/kg") if bw else (1.0, "N·m")
+        for j, lab in (("hip_flexion", "hip flexion"), ("knee_angle", "knee flexion"), ("ankle_angle", "ankle dorsiflexion")):
+            c = f"{j}_{side}"
+            panels.append(panel(f"muscle_moments_so/{c}", f"{lab} {side.upper()} moment",
+                                measured=(idrs, f"{c}_moment") if idrs is not None else (None, None),
+                                k=mk, unit=mu))
+        return _stack_grid(panels, ncols=3, top=top, save=save,
+                           row_labels=["COM acceleration", "GRF", "joint moments"],
+                           title=title or f"Contributions ({engine} IAA; moments: SO force x moment arm), {side.upper()} side")
+
     @property
     def files(self):
         return describe()

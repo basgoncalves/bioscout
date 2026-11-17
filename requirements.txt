@@ -35,3 +35,4 @@ imageio-ffmpeg   # bundles ffmpeg: recordings are saved as browser-playable H.26
 # NOTE: opensim must be installed separately — it is not on PyPI.
 # Install via conda:  conda install -c opensim-org opensim
 # or download the Python bindings from https://simtk.org/projects/opensim
+ruamel.yaml

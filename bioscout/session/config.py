@@ -495,7 +495,178 @@ def session_measured_side(session_dir) -> str:
         return "both"
 
 
-class SessionKeys:
+class _YamlEdit:
+    """show / get / set / save / open on session.yaml for a Session (the whole
+    file). An Iteration gets the read-only part on its ``iterations.<name>``
+    block -- edits go through the session::
+
+        sess.show(); sess.set("body_mass", 78.2); sess.save(); sess.open()
+        it.show();   it.get("mvic_factor");       it.open("label")
+        sess.set("iterations.gpk.mvic_factor", 2.0); sess.save()
+    """
+
+    # -- read / edit / save --------------------------------------------------
+    #   sess.show()                                   the whole file
+    #   sess.show("trials.Walking_01")                one part of it
+    #   sess.get("iterations.gpk.mvic_factor")
+    #   sess.set("body_mass", 78.2)                   in memory (sess.body_mass follows)
+    #   sess.set("trials.Walking_01.time_range", [5.3, 7.0])
+    #   sess.save()                                   to session.yaml, comments kept
+    def _full(self, key=None):
+        """Dotted key -> key in the whole file (an iteration prefixes its block)."""
+        scope = self._edit_scope()
+        return ".".join(x for x in (scope, None if key is None else str(key)) if x)
+
+    def _edit_scope(self) -> str:
+        return ""
+
+    def get(self, key, default=None):
+        """Value at a dotted key (``"trials.Walking_01.type"``), or ``default``."""
+        node = self._cfg
+        for part in self._full(key).split("."):
+            if not isinstance(node, dict) or part not in node:
+                return default
+            node = node[part]
+        return node
+
+    def set(self, key, value, save=False):
+        """Set a dotted key in memory (missing levels are created). Attributes
+        such as ``session.body_mass`` follow at once; ``save()`` (or
+        ``save=True``) writes the file. Gait events are normalised to the
+        one-line-per-event format."""
+        import copy
+        parts = self._full(key).split(".")
+        if parts[-1] == "events":
+            from .gait_events import normalise
+            value = normalise(value)
+        cfg = copy.deepcopy(self._cfg)
+        node = cfg
+        for part in parts[:-1]:
+            if not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+        node[parts[-1]] = value
+        self._cfg = cfg
+        self.__dict__.setdefault("_edits", []).append((parts, value))
+        if save:
+            self.save()
+        return self
+
+    @property
+    def unsaved(self) -> list:
+        """Dotted keys set since the last save."""
+        return [".".join(p) for p, _ in self.__dict__.get("_edits", [])]
+
+    def save(self, backup=True):
+        """Write the ``set()`` edits into session.yaml. Only those keys change:
+        comments, key order and every other line stay as they are
+        (``session.yaml.bak`` keeps the previous file)."""
+        edits = self.__dict__.get("_edits") or []
+        if not edits:
+            print(f"[session] {self.yaml_path}: nothing to save")
+            return self.yaml_path
+        try:
+            from ruamel.yaml import YAML
+            from ruamel.yaml.comments import CommentedMap
+        except ImportError:
+            raise ImportError("session.save() needs ruamel.yaml (it keeps the file's comments): "
+                              "pip install ruamel.yaml  -- then restart the kernel") from None
+        ry = YAML()
+        ry.preserve_quotes = True
+        ry.width = 4096
+        ry.indent(mapping=2, sequence=2, offset=0)     # PyYAML's list style
+        with open(self.yaml_path, encoding="utf-8") as fh:
+            raw = fh.read()
+        doc = ry.load(raw) or CommentedMap()
+
+        def _plain(v, parts):
+            if parts[-1] == "events" and isinstance(v, dict):      # one line per event
+                out = CommentedMap()
+                for k, ev in v.items():
+                    m = CommentedMap(ev)
+                    m.fa.set_flow_style()
+                    out[k] = m
+                return out
+            if parts[-1] == "scale_measurements" and v:          # one line per measurement
+                from .gait_events import _scale_measurements_items
+                out = CommentedMap()
+                for k, m in _scale_measurements_items(v):
+                    cm = CommentedMap(m)
+                    cm.fa.set_flow_style()
+                    out[k] = cm
+                return out
+            if parts[-1] == "time_range" and isinstance(v, (list, tuple)):
+                from ruamel.yaml.comments import CommentedSeq
+                sq = CommentedSeq([float(x) for x in v])
+                sq.fa.set_flow_style()
+                return sq
+            return v
+
+        for parts, value in edits:
+            node = doc
+            for part in parts[:-1]:
+                if not isinstance(node.get(part), dict):
+                    node[part] = CommentedMap()
+                node = node[part]
+            node[parts[-1]] = _plain(value, parts)
+        import io
+        buf = io.StringIO()
+        ry.dump(doc, buf)
+        if backup:
+            with open(self.yaml_path + ".bak", "w", encoding="utf-8") as fh:
+                fh.write(raw)
+        tmp = self.yaml_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
+        os.replace(tmp, self.yaml_path)
+        self.__dict__["_edits"] = []
+        from bioscout.session.iteration import Iteration as _It
+        self._cfg = _It._read_yaml(self.yaml_path)
+        print(f"[session] saved {len(edits)} change(s) -> {self.yaml_path}")
+        return self.yaml_path
+
+    def open(self, key=None):
+        """Open session.yaml in an editor: VS Code when its ``code`` command is on
+        PATH (at the line of ``key``, e.g. ``"trials.Walking_01"``), otherwise the
+        system's default app for .yaml files."""
+        import shutil
+        import subprocess
+        import sys as _sys
+        path = self.yaml_path
+        code = shutil.which("code")
+        if code:
+            full = self._full(key)
+            line = yaml_key_line(path, full) if full else None
+            target = f"{path}:{line}" if line else path        # <path>:<line>
+            subprocess.Popen([code, "-g", target], shell=_sys.platform == "win32")
+        elif _sys.platform == "win32":
+            os.startfile(path)                                  # noqa: S606
+        else:
+            subprocess.Popen(["open" if _sys.platform == "darwin" else "xdg-open", path])
+        return path
+
+    def show(self, key=None):
+        """Print session.yaml (or the part at a dotted key) as YAML."""
+        if key is None and not self._edit_scope():
+            with open(self.yaml_path, encoding="utf-8") as fh:
+                print(fh.read().rstrip())
+        else:
+            v = self.get(key) if key is not None else self.get(None)
+            if v is None:
+                raise KeyError(f"{key!r} is not in {self.yaml_path}")
+            from .gait_events import FlowMap
+            key = self._full(key)
+            if key.split(".")[-1] == "events":
+                from .gait_events import for_yaml
+                v = for_yaml(v)
+            print(f"{key}:\n" + "\n".join("  " + l for l in yaml.safe_dump(
+                v, sort_keys=False, allow_unicode=True, width=4096).rstrip().split("\n"))
+                  if isinstance(v, (dict, list)) else f"{key}: {v}")
+        if self.unsaved:
+            print(f"# unsaved: {', '.join(self.unsaved)}  (session.save() writes them)")
+
+
+class SessionKeys(_YamlEdit):
     """session.yaml, top level. ``session.<key>``; any other key in the file
     works too (``session.implanted_side``), just not autocompleted."""
 
@@ -535,7 +706,7 @@ class SessionKeys:
 
     def _fill_keys(self):
         cfg, d = self._cfg, self.__dict__
-        sdir = os.path.abspath(str(self.session_dir))
+        sdir = os.path.abspath(str(self.path))
         for k in SESSION_KEYS:
             v = cfg.get(k)
             d[k] = dict(v or {}) if isinstance(getattr(type(self), k), dict) else v
@@ -560,14 +731,14 @@ class SessionKeys:
             return cfg[name]
         raise AttributeError(
             f"{type(self).__name__!r} has no attribute {name!r}, and session.yaml has no "
-            f"top-level key {name!r}" + (f" ({self.yaml_path})" if "session_dir" in self.__dict__
+            f"top-level key {name!r}" + (f" ({self.yaml_path})" if "path" in self.__dict__
                                           else ""))
 
     # -- the file ------------------------------------------------------------
     @property
     def yaml_path(self):
         """This session's session.yaml."""
-        return os.path.join(self.session_dir, "session.yaml")
+        return os.path.join(self.path, "session.yaml")
 
     @property
     def config(self) -> dict:
@@ -582,7 +753,8 @@ class SessionKeys:
         return f"{self.yaml_path}:{line}" if line else self.yaml_path
 
 
-class IterationKeys:
+
+class IterationKeys(_YamlEdit):
     """session.yaml, ``iterations.<name>:``. ``it.<key>``. File keys come back as
     absolute paths. They are written relative to the session's ``models_dir``
     (model_generic, model_scaled) or ``setup_dir`` (markerset, so_actuators)
@@ -634,6 +806,25 @@ class IterationKeys:
     group: Optional[str] = None
 
     # -- filled from the file ------------------------------------------------
+    # read-only here: edits go through the session, so there is one set of
+    # unsaved changes -- sess.set("iterations.gpk.mvic_factor", 2.0); sess.save()
+    def set(self, key, value, save=False):
+        raise AttributeError(
+            f"edit through the session: session.set('iterations.{self.iteration}.{key}', ...) "
+            f"then session.save()")
+
+    save = property(lambda self: (_ for _ in ()).throw(AttributeError(
+        "save through the session: session.save()")))
+    unsaved = property(lambda self: [])
+
+    def _edit_scope(self) -> str:
+        return f"iterations.{self.iteration}"
+
+    @property
+    def yaml_path(self):
+        """The session.yaml this iteration is declared in."""
+        return os.path.join(self.session_dir, "session.yaml")
+
     @property
     def _cfg(self) -> dict:
         return self.__dict__.get("_cfg_data") or {}
@@ -663,8 +854,8 @@ class IterationKeys:
                                **(block.get("marker_aliases") or {})}
         # The iteration's own measurement list REPLACES the session's (a spec is
         # a whole protocol, so merging two half-protocols would be meaningless).
-        d["scale_measurements"] = list(block.get("scale_measurements")
-                                       or self._cfg.get("scale_measurements") or [])
+        _sm = block.get("scale_measurements") or self._cfg.get("scale_measurements") or []
+        d["scale_measurements"] = dict(_sm) if isinstance(_sm, dict) else list(_sm)
         d["calibrated"] = iteration_is_calibrated(self._cfg, self.iteration)
         try:
             d["emg_map"] = emg_map_name_for(self._cfg, self.iteration)
@@ -677,6 +868,17 @@ class IterationKeys:
             d["calibration"] = None
 
     # -- the file ------------------------------------------------------------
+        # scale_model() writes <models>/<iteration>_scaled.osim when session.yaml
+        # names no model_scaled: use it, rather than letting every stage fall
+        # back to whatever .osim it finds first (it found the scale-ready copy).
+        if not d.get("model_scaled") and hasattr(self, "_default_model_scaled"):
+            try:
+                _p = self._default_model_scaled()
+                if os.path.exists(_p):
+                    d["model_scaled"] = _p
+            except Exception:
+                pass
+
     @property
     def config(self) -> dict:
         """This iteration's block from session.yaml (key names normalised)."""
@@ -1591,7 +1793,8 @@ def read_session_yaml(path) -> SessionSpec:
         if entry.get("time_range") is not None:
             out["time_range"] = [float(x) for x in entry["time_range"]]
         if entry.get("events") is not None:
-            out["events"] = [float(x) for x in entry["events"]]
+            from .gait_events import normalise as _ev_norm
+            out["events"] = _ev_norm(entry["events"])
         # Per-trial role flags — carried through so a round-trip does not
         # quietly drop them back onto the legacy lists.
         for _role in TRIAL_ROLE_KEYS:
@@ -1637,7 +1840,9 @@ def _spec_to_dict(spec: SessionSpec) -> dict:
             e = {}
             if entry.get("type"):       e["type"] = entry["type"]
             if entry.get("time_range"): e["time_range"] = list(entry["time_range"])
-            if entry.get("events"):     e["events"] = list(entry["events"])
+            if entry.get("events"):
+                from .gait_events import for_yaml as _ev_yaml
+                e["events"] = _ev_yaml(entry["events"])
             d["trials"][tname] = e
     if spec.models:
         d["iterations"] = {}
@@ -1682,6 +1887,9 @@ def _yamlable(v):
     the yaml library, which is what it was.
     """
     import pathlib
+    from .gait_events import FlowMap
+    if isinstance(v, FlowMap):                    # gait events: keep one-line style
+        return FlowMap({str(k): _yamlable(x) for k, x in v.items()})
     if isinstance(v, pathlib.PurePath):
         return str(v)
     if isinstance(v, dict):

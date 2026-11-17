@@ -768,9 +768,11 @@ def _shorten_window(proj, session, trial, seconds):
     tr = cfg["trials"][trial]
     t0, t1 = (float(x) for x in tr["time_range"])
     from bioscout.session.config import measured_side_of as _ms
-    side = {"l": "Left", "r": "Right"}.get(_ms(cfg))
-    start = next((float(e["time"]) for e in tr.get("events") or []
-                  if side and e.get("name") == f"{side} Foot Contact" and e.get("on_plate")), t0)
+    from bioscout.session.gait_events import normalise as _ev
+    side = _ms(cfg) if _ms(cfg) in ("l", "r") else None
+    start = next((e["time"] for k, e in _ev(tr.get("events")).items()
+                  if side and k.startswith("foot_contact_") and k.endswith("_" + side)
+                  and e.get("on_plate")), t0)
     start = min(max(start, t0), max(t0, t1 - seconds))
     tr["time_range"] = [round(start, 4), round(min(t1, start + seconds), 4)]
     with open(path, "w", encoding="utf-8") as f:

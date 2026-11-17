@@ -66,7 +66,8 @@ def _fallback(name, pattern, **kw):
 
 
 # ---------------------------------------------------------------- built-ins --- #
-for _p in (r"(^|/)_ik_", r"(^|/)setup_", r"\.trc$", r"(^|/)ceinms_calibration/"):
+for _p in (r"(^|/)_ik_", r"(^|/)setup_", r"\.trc$", r"(^|/)ceinms_calibration/",
+           r"(^|/)_[^/]*/"):                     # working folders (_contrib_work_so/, _temp_scaling/)
     register_file(None, _p)
 
 # experimental (model-independent; iteration is "")
@@ -104,6 +105,15 @@ register_file("muscle_moments_ceinms/{1}", r"_MuscleMoments_(\w+)_ceinms\.sto$",
               description="muscle moments from CEINMS forces, one file per coordinate")
 register_file("muscle_tendon_lengths", r"_MuscleAnalysis_Length\.sto$", unit="m",
               aliases=("lengths",), description="musculotendon lengths")
+# induced acceleration analysis (one file per target: coordinate, center_of_mass_X/Y/Z,
+# grf_<foot>_X/Y/Z; columns = contributors + total + measured; OpenSim's raw/ output is not a result)
+register_file(None, r"induced_accelerations/[^/]+/raw/")
+register_file("iaa_opensim/{1}", r"induced_accelerations/opensim/IAA_(\w+)\.sto$", unit="rad/s², m/s², N",
+              aliases=("iaa", "induced_accelerations"),
+              description="induced accelerations (OpenSim), one file per coordinate / COM axis / foot GRF axis")
+register_file("iaa_pyosim/{1}", r"induced_accelerations/pyosim/IAA_(\w+)\.sto$", unit="rad/s², m/s², N",
+              aliases=("iaa_py",),
+              description="induced accelerations (pyosim), one file per coordinate / COM axis / foot GRF axis")
 # CEINMS (the newest Execution_* only -- see scan._newest_execution)
 register_file("muscle_forces_ceinms", r"ceinms/.*MuscleForces\.sto$", unit="N",
               aliases=("ceinms_forces",), description="CEINMS muscle forces")
@@ -169,17 +179,33 @@ def resolve(requested) -> Optional[List[str]]:
         return None
     if isinstance(requested, str):
         requested = [r.strip() for r in requested.split(",") if r.strip()]
-    al = _alias_map()
     out = []
     for r in requested:
-        r = al.get(r, r)
+        r = canonical(r)
         out += [r, r + "/*"]                    # a group selects all its members
     return out
 
 
 def canonical(name: str) -> str:
-    """'so_forces' -> 'muscle_forces_so'; unknown names come back unchanged."""
-    return _alias_map().get(name, name)
+    """'so_forces' / 'so_force' / 'SO_Forces' -> 'muscle_forces_so'; unknown
+    names come back unchanged (they may still be a group or a glob)."""
+    al = _alias_map()
+    n = str(name).strip().lower()
+    for cand in (n, n + "s", n[:-1] if n.endswith("s") else None):
+        if cand and cand in al:
+            return al[cand]
+    names = {k.name.replace("{1}", "").rstrip("_/") for k in FILES if k.name}
+    for cand in (n + "s", n[:-1] if n.endswith("s") else None):
+        if cand and cand in names:
+            return cand
+    return n if any(ch in n for ch in "*?[") or n in names else str(name).strip()
+
+
+def suggest(name: str, have) -> list:
+    """Close names (aliases included) for an error message."""
+    import difflib
+    pool = sorted(set(have) | set(_alias_map()))
+    return difflib.get_close_matches(str(name).lower(), pool, n=4, cutoff=0.5)
 
 
 def wanted(var: str, patterns: Optional[List[str]]) -> bool:

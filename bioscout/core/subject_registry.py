@@ -66,7 +66,7 @@ _DEFAULTS: dict[str, Any] = {
     "static_trial":  "static1",
     # Path to the generic (unscaled) OpenSim model, relative to project root.
     # Scaled model will be written alongside it as <id>_scaled.osim.
-    "generic_model": "Models/GPK_v4_016.osim",
+    "generic_model": "models/generic/GPK/GPK_v4_016.osim",
     "notes":         "",
     "extra":         {},
     # Training-load tracking (load_tracking module). Holds per-subject cloud

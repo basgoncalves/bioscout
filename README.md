@@ -4,7 +4,7 @@
 
 <h1 align="center">BioScout</h1>
 
-<p align="center">v3.1.1 &nbsp;·&nbsp; <em>beta — the API may still move</em></p>
+<p align="center">v3.2.0 &nbsp;·&nbsp; <em>beta — the API may still move</em></p>
 
 <p align="center"><strong>A Python toolbox for musculoskeletal modelling.</strong></p>
 
@@ -112,7 +112,7 @@ pip install bioscout
 
 > **2.x is a beta line.** It is a normal release — no `--pre` needed — but it is
 > marked *Development Status :: 4 - Beta* on PyPI because the session/iteration
-> API is still settling. Pin it (`bioscout==3.1.1`) if you need a run to stay
+> API is still settling. Pin it (`bioscout==3.2.0`) if you need a run to stay
 > reproducible. Coming from 1.x, see
 > [Migration from msk_modelling_python](#migration-from-msk_modelling_python);
 > note 2.x requires Python 3.9–3.11 and OpenSim.
@@ -250,6 +250,30 @@ Anything but `local` warns; `--strict` makes it a failure. The same check runs a
 warn level every time a model is loaded during a run.
 
 ---
+
+## Engines: OpenSim vs pyosim
+
+Each iteration picks its engine in `session.yaml` (`iterations.<name>.engine: opensim | pyosim`,
+default `opensim`). `pyosim` (`bioscout/pyosim`) is a pure numpy/scipy re-implementation that
+also runs in the browser (BioScout Web, via Pyodide). It reads the same setup files and writes
+the same output files in the same folders, so plots, comparisons and JCF contributions work
+unchanged. A pyosim iteration **never** falls back to OpenSim: a step it does not implement
+raises `NotImplementedError` before writing anything.
+
+| Step | OpenSim engine | pyosim engine | Same | Different |
+|---|---|---|---|---|
+| Scale | `ScaleTool` (ModelScaler + MarkerPlacer) | `pyosim/scale.py` | Same `setup_scale.xml`, measurement-based segment scaling + marker placement; writes an `.osim` | Edits the generic model's XML (untouched parts stay byte-identical); `muscle_opt` (Modenese 2015) and `fmax_scaling` are refused |
+| Inverse kinematics | `InverseKinematicsTool` | `pyosim/ik.py` | Same task set / setup, weighted least squares on markers frame by frame; writes `ik.mot` + `_ik_marker_errors.sto` | Solved with scipy `least_squares` (bounded trust-region) on pyosim's own forward kinematics |
+| Inverse dynamics | `InverseDynamicsTool` | `pyosim/id.py` | Same ExternalLoads `.xml` + `.mot`, same coordinate low-pass (pad + IIR, 6 Hz default); writes `inverse_dynamics.sto` | Body Jacobians by finite differences of the forward kinematics (couplers honoured) instead of Simbody's multibody solver |
+| Muscle analysis | `MuscleAnalysis` | `pyosim/ma.py` + `muscles.py` | Same `_MuscleAnalysis_*.sto` files (lengths, moment arms, moments with SO forces) | Paths = via points + cylinder/sphere wrapping only (tori not wrapped); checked against OpenSim: lengths ~0.5 mm, moment arms ~1 mm median |
+| Static optimisation | `StaticOptimization` (use_muscle_physiology) | `pyosim/so.py` | Minimises sum a² + sum u², muscles + reserve/residual actuators reproduce the ID moments; writes `StaticOptimization_force/_activation.sto` | **Rigid tendon**; Millard curves where the model has them, Thelen-type otherwise; fibre stretch capped at 1.4 x optimal; passive force optional; SLSQP per frame (slow for many frames) |
+| Joint reaction analysis | `JointReaction` | `pyosim/jra.py` | Force/moment each joint applies to its child body, in the child frame, OpenSim's column layout; reserves left out | Muscle forces applied along the straight path segments (wrap-surface line-of-action change not modelled) |
+| Residual reduction (RRA) | `RRATool` | — | | **Not implemented** (raises) |
+| CMC / forward simulation | `CMCTool` | `pyosim/cmc.py` | Thelen & Anderson 2006 scheme: PD-tracked accelerations, SO per window, forward integration | Rigid tendon; geometry/fl/fv held over each window; pelvis residuals as generalised forces; semi-implicit Euler |
+| Induced accelerations | `InducedAccelerations` | `pyosim/iaa.py` | Contributions of muscles, actuators, gravity and velocity terms to accelerations, COM and GRF; feet as kinematic constraints | Constrained equations solved directly; written to `induced_accelerations/pyosim/` (`engine: both` runs and compares the two) |
+| CEINMS calibration | CEINMS.exe | `pyosim/ceinms.py` (**not** CEINMS.exe) | Strength factor per muscle group + EMG shape factor A; writes a calibrated model + `calibration.json`; uses the session's `emg_map` | Rigid-tendon Hill model, first-order activation dynamics; bounded linear fits over a grid of A; numbers will differ from CEINMS.exe |
+| CEINMS execution | CEINMS.exe | `pyosim/ceinms.py` | alpha (moment) / beta (effort) / gamma (EMG) objective, hybrid / EMG-informed / EMG-driven presets; execution, loop and optimise modes | One bounded linear least squares per frame; `loop` keeps each run + the median; `optimise` sweeps gamma for the largest within the moment tolerance |
+| Energetics, other OpenSim-only tools | OpenSim | — | | **Not implemented** (raises) |
 
 ## Project structure
 

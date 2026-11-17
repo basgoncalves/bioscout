@@ -192,11 +192,11 @@ def _resolve_generic(session, it, iteration):
     from bioscout.session.iteration import Iteration
     from bioscout.session.layout import resolve_generic
 
-    resolved = Iteration(str(session.session_dir), iteration).model_generic
+    resolved = Iteration(str(getattr(session, "path", session)), iteration).model_generic
     if resolved and os.path.exists(resolved):
         return resolved
     project_dir = os.path.abspath(
-        os.path.join(str(session.session_dir), os.pardir, os.pardir, os.pardir)
+        os.path.join(str(getattr(session, "path", session)), os.pardir, os.pardir, os.pardir)
     )
     return resolve_generic(generic, project_dir)
 
@@ -204,10 +204,12 @@ def _resolve_generic(session, it, iteration):
 def _default_template_source(session_dir: Path) -> Optional[Path]:
     """Locate the model the bundled template's frames were authored in."""
     for base in (session_dir, *session_dir.parents):
-        cand = base / "generic models" / DEFAULT_TEMPLATE_SOURCE
-        if cand.exists():
-            return cand
-    return None
+        for cand in (base / "models" / "generic" / "GPK" / "GPK_v4_016.osim",
+                     base / "generic models" / DEFAULT_TEMPLATE_SOURCE):
+            if cand.exists():
+                return cand
+    cand = Path(__file__).resolve().parents[2] / "models" / "generic" / "GPK" / "GPK_v4_016.osim"
+    return cand if cand.exists() else None
 
 
 def inspect_model(model_path, *, coords=None, muscle_filter=None, n=None,

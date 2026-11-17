@@ -28,6 +28,7 @@ SETUP_DIR), which ``bioscout.Project`` points at the
 project folder.
 """
 import os
+from bioscout.utils.shared import quiet_run as _quiet_run
 import sys
 import json
 import shutil
@@ -1073,30 +1074,30 @@ class Project:
                       overlaid on top either way)
     """
 
-    @classmethod
-    def init(cls, project_dir, force=False, verbose=True, **kw) -> "Project":
-        """Create a project folder (same as ``bioscout init <path>``) and open it::
-
-            PROJECT = bs.Project.init(r"C:/.../test_project")
-
-        Makes simulations/, models/, setup_files/, logs/, results/ and a starter
-        project.yaml; copies the bundled templates. Never overwrites a file, so
-        it is safe on an existing project. ``force=True`` also scaffolds when
-        non-bioscout models/ or setup_files/ already exist (nothing overwritten).
-        """
-        from bioscout.core.scaffold import scaffold_project
+    def _init_folder(self, verbose=True):
+        """A folder that is not a project yet becomes one -- the same scaffold as
+        ``bioscout init``: simulations/, models/, setup_files/, logs/, results/,
+        the bundled templates and a starter project.yaml. Never overwrites a
+        file; when foreign non-empty folders would be mixed with bioscout's
+        templates, nothing is created and the folder is opened as it is."""
         import contextlib, io
+        from bioscout.core.scaffold import scaffold_project
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf if not verbose else sys.stdout):
-            rc = scaffold_project(project_dir, force=force)
-        if rc != 0:
-            raise RuntimeError(f"bioscout init failed for {project_dir}:\n{buf.getvalue()}"
-                               if not verbose else f"bioscout init failed for {project_dir} (see above)")
-        return cls(project_dir, verbose=verbose, **kw)
+        with contextlib.redirect_stdout(buf):
+            rc = scaffold_project(self.dir)
+        if rc == 0:
+            if verbose:
+                print(f"[bioscout] new project: {self.dir} (folders, templates, project.yaml)")
+        else:
+            print(f"[bioscout] {self.dir} is not a bioscout project and was NOT set up:\n"
+                  + "\n".join(l for l in buf.getvalue().splitlines() if l.strip()))
 
     def __init__(self, project_dir=None, verbose=True, setup_editor=True,
                  scaffold_settings=False):
         self.dir = _find_project_root(project_dir)
+        if project_dir and not ((self.dir / "project.yaml").is_file()
+                                or (self.dir / "settings.py").is_file()):
+            self._init_folder(verbose)
         sys.path.insert(0, str(self.dir))
         os.chdir(self.dir)   # reset cwd (Analyse() chdir's into trial folders)
 
@@ -1291,6 +1292,8 @@ class Project:
         out = []
         for y in sorted(_glob.glob(os.path.join(sim, "*", "*", "session.yaml"))):
             d = os.path.dirname(y)
+            if os.path.basename(os.path.dirname(d)).startswith(("_", ".")):
+                continue                          # _template and other hidden subjects
             if subj_f is not None and os.path.basename(os.path.dirname(d)) not in subj_f:
                 continue
             if sess_f is not None and os.path.basename(d) not in sess_f:
@@ -1302,12 +1305,20 @@ class Project:
         """One recording session by folder names::
 
             sess = PROJECT.session("K2L", "11_03_24")
+            tpl  = PROJECT.session("_template", "session_01")   # hidden subjects too
         """
-        hit = self.sessions(subjects=subject, sessions=session)
+        from bioscout.session.recording import Session
+        from bioscout import utils as _u
+        sim = str(getattr(_u, "SIMULATIONS_DIR", None) or self.dir / "simulations")
+        d = os.path.join(sim, str(subject), str(session))
+        # opened by exact name, so hidden subjects (_template) work too
+        hit = [Session(d, project_dir=self.dir, bootstrap=False)] \
+            if os.path.isfile(os.path.join(d, "session.yaml")) else []
         if not hit:
-            have = [f"{os.path.basename(os.path.dirname(s.session_dir))}/{s.name}"
+            have = [f"{s.subject}/{s.name}"
                     for s in self.sessions()]
-            raise KeyError(f"no session {subject}/{session}. Have: {', '.join(have) or 'none'}")
+            raise KeyError(f"no session.yaml in {d}. Sessions in this project: "
+                           f"{', '.join(have) or 'none'}")
         return hit[0]
 
     @property
@@ -1322,6 +1333,7 @@ class Project:
         sim = getattr(_u, "SIMULATIONS_DIR", None)
         return for_project(str(sim) if sim else str(self.dir))
 
+    @_quiet_run("project.run")
     def run(self, subjects=None, sessions=None, *, verbose=True, **run_kw):
         """Run the pipeline over :meth:`sessions`. ``run_kw`` goes to
         :meth:`bioscout.Session.run` -- ``iterations=``, ``trials=``, the stage
@@ -1332,7 +1344,7 @@ class Project:
         log = print if verbose else (lambda *a, **k: None)
         out = {}
         for s in self.sessions(subjects, sessions):
-            subj = os.path.basename(os.path.dirname(s.session_dir))
+            subj = s.subject
             log(f"\n=== {subj}/{s.name} ===")
             try:
                 res = s.run(**run_kw)
@@ -1350,7 +1362,7 @@ class Project:
         log = print if verbose else (lambda *a, **k: None)
         out = {}
         for s in self.sessions(subjects, sessions):
-            subj = os.path.basename(os.path.dirname(s.session_dir))
+            subj = s.subject
             try:
                 res = s.reset(trials=trials, backup=backup, dry_run=dry_run, verbose=verbose)
             except Exception as e:
@@ -1366,7 +1378,7 @@ class Project:
         (default) only prints the diffs. Returns ``{subject: {session: ok}}``."""
         out = {}
         for s in self.sessions(subjects, sessions):
-            subj = os.path.basename(os.path.dirname(s.session_dir))
+            subj = s.subject
             try:
                 s.migrate(dry_run=dry_run)
                 ok = True
@@ -5074,6 +5086,57 @@ class Analyse:
             self._log(self.so_result_summary(), terminal=True)
         except Exception as e:
             self._log(f'[Warning] SO summary failed: {e}')
+
+    def run_iaa(self, engine=None, replace=None, constraint="rolling", force_threshold=20.0,
+                plot=True):
+        """Induced acceleration analysis on the SO forces -> <trial>/induced_accelerations/<engine>/.
+
+        engine: "opensim" (InducedAccelerations, potentials x SO forces), "pyosim" (the same
+        constrained equations in numpy) or "both" (+ iaa_opensim_vs_pyosim.png). Default: the
+        iteration's engine. Needs IK, the GRF xml and the SO force file (run do_so first).
+        Layout and columns: bioscout.simulate.iaa_files."""
+        from bioscout.simulate import iaa_files as _iaf
+        self._set_replace(replace)
+        engine = engine or ("pyosim" if self._is_pyosim() else "opensim")
+        engines = ["opensim", "pyosim"] if engine == "both" else [engine]
+        root = os.path.join(self.path, "induced_accelerations")
+        so = os.path.join(self.path, self.so_forces)
+        if not os.path.isfile(so):
+            raise FileNotFoundError(f"IAA needs the SO forces first ({so}): run with do_so=True")
+        act = os.path.join(self.path, self.actuators_so)
+        act = [os.path.abspath(act)] if os.path.isfile(act) else None
+        ik = os.path.abspath(os.path.join(self.path, self.ik))
+        grf = os.path.abspath(os.path.join(self.path, self.setup_grf))
+        out = {}
+        for eng in engines:
+            d = os.path.join(root, eng)
+            if os.path.isfile(os.path.join(d, "iaa_info.json")) and not self.replace:
+                self._log(f'[IAA] {eng} kept (already on disk; pass replace to redo) -> {d}', terminal=True)
+                out[eng] = d
+                continue
+            log = lambda m: self._log(m, terminal=True)
+            if eng == "opensim":
+                from bioscout.simulate import opensim as _osm
+                _osm.run_iaa(self.model_dir, ik, grf, actuators=act, muscle_force_path=so, results_dir=d,
+                             constraint=constraint, force_threshold=force_threshold, log=log)
+            elif eng == "pyosim":
+                from bioscout.pyosim import iaa as _piaa
+                _piaa.run(self.model_dir, ik, so, grf, d, actuators=act, constraint=constraint,
+                          force_threshold=force_threshold, log=log)
+            else:
+                raise ValueError(f"engine must be opensim, pyosim or both, not {eng!r}")
+            if plot:
+                try:
+                    self._log(f'[IAA] figure -> {_iaf.plot(d)}', terminal=True)
+                except Exception as e:                               # noqa: BLE001
+                    self._log(f'[IAA] [Warning] figure failed: {e}')
+            out[eng] = d
+        if plot and len(out) == 2:
+            try:
+                _iaf.compare(out["opensim"], out["pyosim"], os.path.join(root, "iaa_opensim_vs_pyosim.png"))
+            except Exception as e:                                   # noqa: BLE001
+                self._log(f'[IAA] [Warning] comparison figure failed: {e}')
+        return out
 
     def so_result_summary(self):
         """One-line SO result summary for the log: peak |resultant| joint reaction

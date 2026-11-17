@@ -27,9 +27,9 @@ import os
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.dirname(HERE)
-GPK_PATH = os.path.join(MODELS_DIR, "GPK_v4_016.osim")
-FB_PATH = os.path.join(MODELS_DIR, "Full_Body_with_ball.osim")
+GENERIC = os.path.dirname(HERE)                       # bioscout/models/generic
+GPK_PATH = os.path.join(GENERIC, "GPK", "GPK_v4_016.osim")
+FB_PATH = os.path.join(GENERIC, "Full_Body_with_ball", "Full_Body_with_ball.osim")
 OUT_PATH = os.path.join(HERE, "Digital_Athlete.osim")
 
 BODY_TAG = "Body"

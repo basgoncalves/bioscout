@@ -18,8 +18,6 @@ SETTINGS = {
                            "print everything live in the terminal too (same as --verbose)"),
     "open_log":           (True, "BIOSCOUT_OPEN_LOG",
                            "open the run log (and the running step's log) in your editor"),
-    "log_tabs":           ("reuse", "BIOSCOUT_LOG_TABS",
-                           "reuse: one editor tab follows the runs (live_<k>.log) | per-run: a tab per log"),
     "step_logs":          (True, "BIOSCOUT_STEP_LOGS",
                            "each step's details in its own log beside its results; the run log keeps one line per step"),
     "log_viewer":         ("", "BIOSCOUT_LOG_VIEWER",
@@ -82,8 +80,6 @@ def apply():
             continue
         if isinstance(v, bool):
             v = "1" if v else "0"
-        if k == "log_tabs":
-            v = str(v).strip().lower()
         os.environ.setdefault(env, str(v))
     return vals
 

@@ -1,9 +1,9 @@
-"""Create a BioScout project folder -- ``bioscout init`` and ``Project.init``."""
+"""Create a BioScout project folder -- `bioscout init`, and `Project(path)` on a new folder."""
 from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = ["scaffold_project"]
+__all__ = ["scaffold_project", "write_template_subject"]
 
 _PKG = Path(__file__).resolve().parents[1]      # the bioscout package (templates live here)
 
@@ -32,7 +32,8 @@ def scaffold_project(project_path, force: bool = False) -> int:
     import shutil
 
     project = Path(project_path).resolve()
-    standard_dirs = ['simulations', 'models', 'setup_files', 'logs', 'results']
+    standard_dirs = ['simulations', 'models', 'models/generic', 'models/personalised',
+                     'setup_files', 'logs', 'results']
 
     # Refuse to scaffold over folders that are not ours. A first init (no
     # project.yaml yet) into a folder that already has a non-empty models/,
@@ -138,12 +139,18 @@ def scaffold_project(project_path, force: bool = False) -> int:
               f"bundled defaults until project.yaml says otherwise.")
 
     # ---------------------------------------------------------------------- #
+    # 3b. A template subject/session to copy from
+    # ---------------------------------------------------------------------- #
+    _t = write_template_subject(project)
+    print(f"\n  [template] {_t}  (copy it to simulations/<subject>/<session>)")
+
+    # ---------------------------------------------------------------------- #
     # 4. List existing simulation folders, if any
     # ---------------------------------------------------------------------- #
     sims_dir = project / 'simulations'
     if sims_dir.exists():
         sim_folders = sorted(
-            d.name for d in sims_dir.iterdir() if d.is_dir()
+            d.name for d in sims_dir.iterdir() if d.is_dir() and not d.name.startswith(("_", "."))
         )
         if sim_folders:
             print(f"\n  Simulation folders found: {sim_folders}")
@@ -152,10 +159,36 @@ def scaffold_project(project_path, force: bool = False) -> int:
 
     print(f"\n{'='*60}")
     print(f"Project ready. Next steps:")
-    print(f"  1. Drop captures into simulations/<subject>/... and set up each session.yaml")
+    print(f"  1. Copy simulations/_template/session_01 to simulations/<subject>/<session>,")
+    print(f"     drop the .c3d files into its 1_c3dfiles/ and fill in session.yaml")
     print(f"     (session.yaml is the source of truth for that session).")
     print(f"  2. Edit {yaml_dest} only for lab facts that differ from bioscout's defaults")
     print(f"     (marker conventions, GRF axes, EMG rig, sampling rate, ...).")
     print(f"  3. Python:  PROJECT = bioscout.Project(r\"{project}\")")
     print(f"{'='*60}\n")
     return 0
+
+
+#: simulations/<TEMPLATE_SUBJECT>/<TEMPLATE_SESSION> -- the leading "_" keeps it out of
+#: subject discovery, PROJECT.sessions(), PROJECT.run() and results.
+TEMPLATE_SUBJECT = "_template"
+TEMPLATE_SESSION = "session_01"
+
+#: the bundled example session copied into every new project
+TEMPLATE_DIR = _PKG / "templates" / "session_01"
+
+
+def write_template_subject(project) -> Path:
+    """simulations/_template/session_01/: the bundled example session (OrthoLoad
+    H1L -- static + level walking with measured hip contact force, see its
+    SOURCE.md) with an empty 1_c3dfiles/. Never overwrites a file."""
+    import shutil
+    d = Path(project) / "simulations" / TEMPLATE_SUBJECT / TEMPLATE_SESSION
+    (d / "1_c3dfiles").mkdir(parents=True, exist_ok=True)
+    for src in sorted(TEMPLATE_DIR.rglob("*")):
+        if src.is_file() and "__pycache__" not in src.parts:
+            dst = d / src.relative_to(TEMPLATE_DIR)
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+    return d

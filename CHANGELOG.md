@@ -15,9 +15,15 @@ All notable changes to BioScout are documented here.
 
 
 
-## Unreleased
+## 3.2.0 — 2026-11-17
 
 ### Added
+- **`bs.model(path)` — edit an .osim as an object** (the `bioscout.model` package is callable; no separate Model name) (`bioscout/model/osim_model.py`,
+  plain XML, no OpenSim). `m.marker("RASIS").move([0, -20, 0], unit="mm")`,
+  `m.move_markers("*ASIS", ...)`, `m.muscle("psoas_r").max_isometric_force *= 0.8`,
+  `m.wrap(...).radius = ...`, `m.scale(prop, factor, glob)`, `get`/`set` on any named
+  component, `m.apply(<model.edit op>, ...)` for wrap_add / mvic / ma_target etc.,
+  `m.changes`, `m.save()` (never over the input). Tests: `tests/test_osim_model.py`.
 - `bioscout.results` package: load simulation results straight into Python.
   `session.results(...)`, `iteration.results(...)` and `project.results(...)` are
   the same call: `sess.results("so_forces", trial="Gehen*", iteration="gpkv4",
@@ -29,18 +35,86 @@ All notable changes to BioScout are documented here.
   `to_bw`, `peak`, `at`, `stats`; add your own with `@bioscout.results.action`,
   new file kinds with `bioscout.results.register_file`.
 - `Project.session(subject, session)`.
-- `Project.init(path)`: create a project from Python, same as `bioscout init`
-  (both call `bioscout.core.scaffold.scaffold_project`), then open it.
+- Several files at once: `sess.results(["so_forces", "so_activations"]).plot(
+  layout=...)` -- "figures" (one per file, default), "rows" (one figure, a row
+  per file) or "overlay" (one axes per channel, a colour per file, a second y
+  axis for a second unit). Files come back in the order they were asked for.
+- `session.results(name)`: names are case- and singular/plural-insensitive
+  (`so_activation` = `so_activations` = `muscle_activations_so`), a wrong name
+  gets "did you mean", and working folders starting with `_` (e.g.
+  `_contrib_work_so/`) are no longer listed as results.
+- `Project(path)` on a folder with no project.yaml / settings.py sets it up
+  first (same scaffold as `bioscout init`; never overwrites, never mixes into
+  foreign non-empty models/ or setup_files/).
+- `bioscout init` (and a new `Project(path)`) also writes
+  `simulations/_template/session_01/`: a working example session bundled in
+  `bioscout/templates/session_01` (OrthoLoad H1L -- static + level walking with
+  markers, force plates and the measured hip contact force, ~0.6 MB; see its
+  SOURCE.md), a filled `session.yaml` pointing at the bundled GPK model and the
+  new `setup_files/markers_orthoload.xml`, and an empty `1_c3dfiles/`. The
+  leading `_` keeps it out of subjects, `PROJECT.sessions()`, `PROJECT.run()`.
+  It carries its own `scale_measurements` (OrthoLoad marker pairs), so
+  `it.scale_model()` scales it -- the original example had an empty
+  MeasurementSet (every scale factor 1.0).
+
+- Edit session.yaml from Python, comments and key order kept:
+  `sess.show()` / `sess.show("trials.Walking_01")`, `sess.get("iterations.gpk.mvic_factor")`,
+  `sess.set("body_mass", 78.2)` (attributes follow at once; `sess.unsaved` lists
+  pending keys), `sess.save()` (writes only the edited keys; `.bak` kept).
+  New dependency: `ruamel.yaml`.
+- `sess.events("Walking_01")`: a trial's gait events as a DataFrame.
+- Notebooks/scripts honour `log_terminal` (~/.bioscout/settings.yaml):
+  with `false`, `it.scale_model()`, `it.run()`, `session.run()` and
+  `PROJECT.run()` write their output to the run log and the cell shows only the
+  log path, warnings and errors (streams swapped for the call only).
+- An iteration without `model_scaled` in session.yaml uses
+  `<models>/personalised/<subject>/<session>/<iteration>_scaled.osim` when
+  scale_model() wrote it -- the run used to fall back to the first .osim in
+  that folder (the `_scaleready` copy, generic markers, 2 of 43 tracked).
+- Scaling no longer leaves `<generic>_scaleready.osim` beside the scaled model:
+  scale_setup.xml points back at the generic model instead. The bundled
+  GPK_v4_016 lost its ground-fixed barbell markers BL/BR (powerlifting
+  leftovers; recorded in its provenance.json), so it needs no scale-ready copy.
+- `sess.open()` / `sess.open("trials.Walking_01")`: session.yaml in VS Code
+  (at that key's line), else the system's default editor.
+- `it.show()`, `it.get("mvic_factor")`, `it.open("label")` on an iteration,
+  scoped to its `iterations.<name>` block (read-only: edit through the
+  session, `sess.set("iterations.gpk.mvic_factor", 2.0); sess.save()`).
 
 ### Changed (breaking)
+- Bundled models now follow the project layout: `bioscout/models/generic/<Model>/
+  <model>.osim` with only that model's meshes in `generic/<Model>/Geometry/`
+  (GPK, Rajagopal2015, Full_Body_with_ball, Digital_Athlete, arm26_ball,
+  Neck_model). `init` copies them to `<project>/models/generic/` and creates
+  `<project>/models/personalised/`. The template session points at
+  `models/generic/GPK/GPK_v4_016.osim`; video tools, mesh search (model.report)
+  and the TPS template lookup follow the new paths.
+- Gait events in session.yaml are a mapping with one unique name per event,
+  one line each (`foot_contact_1_r: {time: 5.5703, source: grf, on_plate: true}`;
+  `<event>_<n>_<side>`), so they fold in editors and can be addressed by name.
+  One reader/writer: `bioscout.session.gait_events`. Old lists of
+  `{name: "Right Foot Contact", time}` (or bare times) are still read;
+  `sess.migrate()` rewrites them. Fixes the session.yaml reader, which treated
+  events as a list of floats and failed on the dict form.
+- `scale_measurements` is a mapping too, one line per measurement
+  (`pelvis_width: {pairs: [[LASIS, RASIS]], bodies: {pelvis: Z}}`); the old
+  list of `{name, pairs, bodies}` is still read, `sess.migrate()` rewrites it.
+- `Session.session_dir` is now `Session.path` (the session folder; the
+  constructor argument is `path` too). `Iteration.path` stays the iteration
+  folder and `Iteration.session_dir` its session's folder.
+- `Session.results_dir` removed: `summarise(out_dir=None)` still defaults to
+  `<project>/results/<subject>/<session>`.
 - `bioscout.session.results` is gone; the CSV export is
   `bioscout.results.export_results` (same output, byte-identical; the
   `bioscout project results` command is unchanged).
 - `bioscout.init_project()` removed: use `bs.Project(path)` to open a project
-  and `bs.Project.init(path)` to create one.
+  and `bs.Project(path)` also creates one.
 - `bioscout.init.project_config` moved to `bioscout.project_config` (the
-  `bioscout/init/` folder is gone, so `bs.init` no longer shows up next to
-  `Project.init`).
+  `bioscout/init/` folder is gone, so `bs.init` no longer shows up).
+
+### Fixed
+- `bs.utils.write_mot` no longer fails (`TypeError: unsupported format string passed to Series.__format__`) when the labels already contain `time`, e.g. `labels=df.columns.tolist()`.
+- `bs.utils` resolves in editors (go-to-definition / Ctrl+click) after `import bioscout as bs`.
 
 ## 3.1.1 — 2026-10-15
 

@@ -38,3 +38,23 @@ __all__ = [
     "ModelReport", "TreeReport", "verify_model", "verify_tree", "find_models",
     "format_text",
 ]
+
+
+
+# ---------------------------------------------------------------------------
+# bs.model("x.osim") -- the package itself opens a model for editing
+# (bioscout/model/osim_model.py; plain XML, no OpenSim). One name for everything
+# model-related: bs.model(path) to edit, bs.model.<function> for the rest.
+import sys as _sys
+import types as _types
+
+
+class _ModelPackage(_types.ModuleType):
+    def __call__(self, path):
+        """Open an .osim to edit: ``m = bs.model("gpkv4_scaled.osim")``.
+        See bioscout/model/osim_model.py for what ``m`` can do."""
+        from .osim_model import Model
+        return Model(path)
+
+
+_sys.modules[__name__].__class__ = _ModelPackage

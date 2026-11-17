@@ -203,7 +203,7 @@ class PersonalisationConfig:
         Mirrors BioScout conventions::
 
             <project_root>/players.json
-            <project_root>/Models/GPK_v4_016.osim
+            <project_root>/models/generic/GPK/GPK_v4_016.osim
             <project_root>/Models/Geometry/
             <project_root>/setup_files/markers_and_bone_markers_in_bodies.xml
             <project_root>/simulations/<player_id>/mri/landmarks.mrk.json
@@ -232,7 +232,7 @@ class PersonalisationConfig:
         defaults = dict(
             subject=subject,
             project_root=project_root,
-            generic_model=project_root / "Models" / "GPK_v4_016.osim",
+            generic_model=project_root / "models" / "generic" / "GPK" / "GPK_v4_016.osim",
             scaled_model=trial_dir / "scaled_model.osim",
             mri_landmarks=sim_dir / "mri" / "landmarks.mrk.json",
             bone_marker_template=project_root / "setup_files"
